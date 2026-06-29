@@ -606,6 +606,7 @@ button, input, select, textarea {
 .camera-preview-wrapper {
   position: relative;
   width: 100%;
+  flex-shrink: 0; /* Prevent flex layout squishing */
   background: #000;
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -615,7 +616,8 @@ button, input, select, textarea {
 
 .camera-video {
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: cover; /* Stretch to fill matched aspect ratio wrapper perfectly */
   display: block;
 }
 

@@ -16,6 +16,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [bulkMode, setBulkMode] = useState(false);
   const [guideScale, setGuideScale] = useState(0.70);
   const [showSettings, setShowSettings] = useState(false);
+  const [videoRatio, setVideoRatio] = useState(null);
   
   // Scanned card text review overrides
   const [scannedName, setScannedName] = useState('');
@@ -101,6 +102,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setDebugNumLeftImg('');
     setDebugNumRightImg('');
     setShowSettings(false);
+    setVideoRatio(null);
     try {
       const constraints = {
         video: {
@@ -134,6 +136,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setDebugNumLeftImg('');
     setDebugNumRightImg('');
     setShowSettings(false);
+    setVideoRatio(null);
   };
 
   const handleManualSearch = async (e) => {
@@ -618,13 +621,27 @@ function CameraScanner({ onAddSuccess, showToast }) {
         </div>
       ) : (
         <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div className="camera-preview-wrapper">
+          <div 
+            className="camera-preview-wrapper"
+            style={videoRatio ? { aspectRatio: `${videoRatio}` } : {}}
+          >
             <video 
               ref={videoRef} 
               autoPlay 
               playsInline 
               muted 
               className="camera-video"
+              onLoadedMetadata={() => {
+                const video = videoRef.current;
+                if (video) {
+                  const isRotated = video.videoWidth > video.videoHeight && video.clientHeight > video.clientWidth;
+                  if (isRotated) {
+                    setVideoRatio(video.videoHeight / video.videoWidth);
+                  } else {
+                    setVideoRatio(video.videoWidth / video.videoHeight);
+                  }
+                }
+              }}
             />
             {/* Outline Box Guides */}
             <div className="camera-overlay">
