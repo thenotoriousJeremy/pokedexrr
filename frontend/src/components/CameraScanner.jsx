@@ -22,7 +22,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
   
   // OCR Binarization debug images
   const [debugNameImg, setDebugNameImg] = useState('');
-  const [debugNumImg, setDebugNumImg] = useState('');
+  const [debugNumLeftImg, setDebugNumLeftImg] = useState('');
+  const [debugNumRightImg, setDebugNumRightImg] = useState('');
   
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -96,7 +97,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setScannedName('');
     setScannedNumber('');
     setDebugNameImg('');
-    setDebugNumImg('');
+    setDebugNumLeftImg('');
+    setDebugNumRightImg('');
     try {
       const constraints = {
         video: {
@@ -127,7 +129,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setScannedName('');
     setScannedNumber('');
     setDebugNameImg('');
-    setDebugNumImg('');
+    setDebugNumLeftImg('');
+    setDebugNumRightImg('');
   };
 
   const handleManualSearch = async (e) => {
@@ -295,29 +298,39 @@ function CameraScanner({ onAddSuccess, showToast }) {
       guideTop = (videoHeight - guideHeight) / 2;
     }
 
-    // Name Crop: Top ~3% to 9.5% of the card's boundary
+    // Name Crop: Top-Left of the card's boundary (excludes HP & Type symbols on right)
     const nameCrop = {
-      x: Math.round(guideLeft + guideWidth * 0.05),
-      y: Math.round(guideTop + guideHeight * 0.03),
-      w: Math.round(guideWidth * 0.90),
-      h: Math.round(guideHeight * 0.065)
+      x: Math.round(guideLeft + guideWidth * 0.04),
+      y: Math.round(guideTop + guideHeight * 0.035),
+      w: Math.round(guideWidth * 0.55),
+      h: Math.round(guideHeight * 0.06)
     };
 
-    // Number Crop: Bottom ~93.5% to 99% of the card's boundary (full width bottom border margin)
-    const numCrop = {
-      x: Math.round(guideLeft + guideWidth * 0.05),
+    // Number Crop (Left - Modern): Bottom-Left margin
+    const numLeftCrop = {
+      x: Math.round(guideLeft + guideWidth * 0.04),
       y: Math.round(guideTop + guideHeight * 0.935),
-      w: Math.round(guideWidth * 0.90),
-      h: Math.round(guideHeight * 0.055)
+      w: Math.round(guideWidth * 0.28),
+      h: Math.round(guideHeight * 0.05)
+    };
+
+    // Number Crop (Right - Vintage): Bottom-Right margin
+    const numRightCrop = {
+      x: Math.round(guideLeft + guideWidth * 0.68),
+      y: Math.round(guideTop + guideHeight * 0.935),
+      w: Math.round(guideWidth * 0.28),
+      h: Math.round(guideHeight * 0.05)
     };
 
     try {
       // 1. Process images
       const nameDataUrl = getProcessedDataUrl(video, nameCrop.x, nameCrop.y, nameCrop.w, nameCrop.h);
-      const numDataUrl = getProcessedDataUrl(video, numCrop.x, numCrop.y, numCrop.w, numCrop.h);
+      const numLeftDataUrl = getProcessedDataUrl(video, numLeftCrop.x, numLeftCrop.y, numLeftCrop.w, numLeftCrop.h);
+      const numRightDataUrl = getProcessedDataUrl(video, numRightCrop.x, numRightCrop.y, numRightCrop.w, numRightCrop.h);
 
       setDebugNameImg(nameDataUrl);
-      setDebugNumImg(numDataUrl);
+      setDebugNumLeftImg(numLeftDataUrl);
+      setDebugNumRightImg(numRightDataUrl);
 
       // 2. Perform OCR on Card Name
       setScanStatus('Reading Card Name...');
@@ -335,32 +348,49 @@ function CameraScanner({ onAddSuccess, showToast }) {
       });
       const detectedName = filteredNameParts.slice(0, 3).join(' ').trim(); // Take first 3 valid words (e.g. "Charizard", "Dark Raichu", "Mewtwo EX")
 
-      // 3. Perform OCR on Card Number
+      // 3. Perform OCR on Card Number (Left & Right margins in parallel)
       setScanStatus('Reading Card Number...');
-      const numResult = await Tesseract.recognize(numDataUrl, 'eng');
-      const numRaw = numResult.data.text.trim();
-      
-      // Match numerator (card number) from "numerator/denominator" or just a standalone alphanumeric code
-      let detectedNumber = '';
-      const slashMatch = numRaw.match(/([a-zA-Z0-9\-]+)\s*\/\s*([a-zA-Z0-9\-]+)/);
-      if (slashMatch) {
-        detectedNumber = slashMatch[1].trim(); // Extract numerator
-      } else {
-        const standAloneMatch = numRaw.match(/([a-zA-Z0-9\-]+)/);
-        if (standAloneMatch) {
-          detectedNumber = standAloneMatch[0].trim();
-        }
-      }
+      const [numLeftResult, numRightResult] = await Promise.all([
+        Tesseract.recognize(numLeftDataUrl, 'eng'),
+        Tesseract.recognize(numRightDataUrl, 'eng')
+      ]);
 
-      // Safeguard: Card numbers are never exceptionally long (usually 1-5 chars, e.g. 58, 058, TG12, GG60).
-      // If OCR detects garbage text block, discard it.
-      if (detectedNumber.length > 8) {
-        detectedNumber = '';
+      const numLeftRaw = numLeftResult.data.text.trim();
+      const numRightRaw = numRightResult.data.text.trim();
+      
+      // Helper to extract numerator (card number) from "numerator/denominator" or stand-alone code
+      const extractNumber = (raw) => {
+        const slashMatch = raw.match(/([a-zA-Z0-9\-]+)\s*\/\s*([a-zA-Z0-9\-]+)/);
+        if (slashMatch) return slashMatch[1].trim();
+        
+        const standAloneMatch = raw.match(/([a-zA-Z0-9\-]+)/);
+        if (standAloneMatch) return standAloneMatch[0].trim();
+        
+        return '';
+      };
+
+      let detectedNumberLeft = extractNumber(numLeftRaw);
+      let detectedNumberRight = extractNumber(numRightRaw);
+
+      // Discard long garbage blocks
+      if (detectedNumberLeft.length > 8) detectedNumberLeft = '';
+      if (detectedNumberRight.length > 8) detectedNumberRight = '';
+
+      // Determine best match: Prioritize the box containing actual digits, falling back to either non-empty read
+      let detectedNumber = '';
+      if (/\d+/.test(detectedNumberRight)) {
+        detectedNumber = detectedNumberRight;
+      } else if (/\d+/.test(detectedNumberLeft)) {
+        detectedNumber = detectedNumberLeft;
+      } else {
+        detectedNumber = detectedNumberRight || detectedNumberLeft;
       }
 
       console.log(`OCR Raw Name Text: "${nameRaw}"`);
       console.log(`OCR Cleaned Name: "${detectedName}"`);
-      console.log(`OCR Detected Number: "${detectedNumber}"`);
+      console.log(`OCR Left Number Read: "${detectedNumberLeft}" (raw: "${numLeftRaw}")`);
+      console.log(`OCR Right Number Read: "${detectedNumberRight}" (raw: "${numRightRaw}")`);
+      console.log(`OCR Selected Number: "${detectedNumber}"`);
 
       // Update input preview values for manual correction overrides
       setScannedName(detectedName);
@@ -538,7 +568,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
             <div className="camera-overlay">
               <div className="scan-card-guide" style={{ width: `${guideScale * 100}%` }}>
                 <div className="scan-region-title"></div>
-                <div className="scan-region-number"></div>
+                <div className="scan-region-number-left"></div>
+                <div className="scan-region-number-right"></div>
                 {loading && <div className="scan-line"></div>}
               </div>
             </div>
@@ -656,18 +687,24 @@ function CameraScanner({ onAddSuccess, showToast }) {
             </form>
 
             {/* Show cropped OCR feeds for alignment debugging */}
-            {(debugNameImg || debugNumImg) && (
+            {(debugNameImg || debugNumLeftImg || debugNumRightImg) && (
               <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>
                 {debugNameImg && (
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Name Crop Feed (Binarized)</span>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Name Crop Feed</span>
                     <img src={debugNameImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Name Crop" />
                   </div>
                 )}
-                {debugNumImg && (
+                {debugNumLeftImg && (
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Number Crop Feed (Binarized)</span>
-                    <img src={debugNumImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Number Crop" />
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Modern No. Crop</span>
+                    <img src={debugNumLeftImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Modern Number Crop" />
+                  </div>
+                )}
+                {debugNumRightImg && (
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Vintage No. Crop</span>
+                    <img src={debugNumRightImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Vintage Number Crop" />
                   </div>
                 )}
               </div>

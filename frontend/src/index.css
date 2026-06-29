@@ -654,42 +654,63 @@ button, input, select, textarea {
 /* Highlighting crop zones for user guidance */
 .scan-region-title {
   position: absolute;
-  top: 3%;
-  left: 5%;
-  right: 5%;
-  height: 6.5%;
+  top: 3.5%;
+  left: 4%;
+  width: 55%;
+  height: 6%;
   border: 1.5px solid var(--accent-blue);
   background: rgba(59, 130, 246, 0.15);
   border-radius: 4px;
 }
 
 .scan-region-title::after {
-  content: 'ALIGN CARD NAME';
+  content: 'NAME';
   position: absolute;
-  top: -16px;
+  top: -14px;
   left: 2px;
-  font-size: 7px;
+  font-size: 6.5px;
   color: var(--accent-blue);
   font-weight: 800;
 }
 
-.scan-region-number {
+.scan-region-number-left {
   position: absolute;
-  bottom: 1%;
-  left: 5%;
-  right: 5%;
-  height: 5.5%;
+  bottom: 1.5%;
+  left: 4%;
+  width: 28%;
+  height: 5%;
   border: 1.5px solid var(--accent-yellow);
   background: rgba(234, 179, 8, 0.15);
   border-radius: 4px;
 }
 
-.scan-region-number::after {
-  content: 'ALIGN COLLECTOR NUMBER (e.g. 58/102)';
+.scan-region-number-left::after {
+  content: 'MODERN NO.';
   position: absolute;
-  bottom: -14px;
+  bottom: -12px;
   left: 2px;
-  font-size: 7px;
+  font-size: 6px;
+  color: var(--accent-yellow);
+  font-weight: 800;
+}
+
+.scan-region-number-right {
+  position: absolute;
+  bottom: 1.5%;
+  right: 4%;
+  width: 28%;
+  height: 5%;
+  border: 1.5px solid var(--accent-yellow);
+  background: rgba(234, 179, 8, 0.15);
+  border-radius: 4px;
+}
+
+.scan-region-number-right::after {
+  content: 'VINTAGE NO.';
+  position: absolute;
+  bottom: -12px;
+  right: 2px;
+  font-size: 6px;
   color: var(--accent-yellow);
   font-weight: 800;
 }
