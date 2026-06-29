@@ -14,6 +14,10 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [hasCameraError, setHasCameraError] = useState(false);
   const [autoScan, setAutoScan] = useState(false);
   
+  // Scanned card text review overrides
+  const [scannedName, setScannedName] = useState('');
+  const [scannedNumber, setScannedNumber] = useState('');
+  
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
 
@@ -83,6 +87,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setHasCameraError(false);
     setScanMatches([]);
     setScanStatus('');
+    setScannedName('');
+    setScannedNumber('');
     try {
       const constraints = {
         video: {
@@ -110,6 +116,45 @@ function CameraScanner({ onAddSuccess, showToast }) {
     }
     setCameraActive(false);
     setAutoScan(false); // Reset autoScan on camera stop
+    setScannedName('');
+    setScannedNumber('');
+  };
+
+  const handleManualSearch = async (e) => {
+    if (e) e.preventDefault();
+    if (!scannedName && !scannedNumber) return;
+    
+    setLoading(true);
+    setScanMatches([]);
+    setScanStatus(`Searching database for: ${scannedName} ${scannedNumber}...`);
+    
+    try {
+      const params = new URLSearchParams();
+      if (scannedName) params.append('name', scannedName);
+      if (scannedNumber) params.append('number', scannedNumber);
+      
+      const response = await fetch(`/api/search?${params.toString()}`);
+      if (response.ok) {
+        const matches = await response.json();
+        setScanMatches(matches);
+        if (matches.length === 0) {
+          setScanStatus(`Could not find cards matching "${scannedName}" (${scannedNumber}). Try again.`);
+        } else {
+          setScanStatus(`Found ${matches.length} matching card(s)!`);
+          if (matches.length === 1) {
+            stopCamera();
+            openQuickAdd(matches[0]);
+          }
+        }
+      } else {
+        setScanStatus('Search failed. Server error.');
+      }
+    } catch (err) {
+      console.error(err);
+      setScanStatus('Search failed.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Preprocess cropped canvas for higher OCR accuracy (Greyscale + High Contrast)
@@ -160,20 +205,20 @@ function CameraScanner({ onAddSuccess, showToast }) {
       guideTop = (videoHeight - guideHeight) / 2;
     }
 
-    // Name Crop: Top ~4% to 12% of the card's boundary
+    // Name Crop: Top ~3% to 9.5% of the card's boundary
     const nameCrop = {
       x: Math.round(guideLeft + guideWidth * 0.05),
-      y: Math.round(guideTop + guideHeight * 0.04),
+      y: Math.round(guideTop + guideHeight * 0.03),
       w: Math.round(guideWidth * 0.90),
-      h: Math.round(guideHeight * 0.08)
+      h: Math.round(guideHeight * 0.065)
     };
 
-    // Number Crop: Bottom ~88% to 96% of the card's boundary (full width)
+    // Number Crop: Bottom ~93.5% to 99% of the card's boundary (full width bottom border margin)
     const numCrop = {
       x: Math.round(guideLeft + guideWidth * 0.05),
-      y: Math.round(guideTop + guideHeight * 0.88),
+      y: Math.round(guideTop + guideHeight * 0.935),
       w: Math.round(guideWidth * 0.90),
-      h: Math.round(guideHeight * 0.08)
+      h: Math.round(guideHeight * 0.055)
     };
 
     try {
@@ -223,6 +268,10 @@ function CameraScanner({ onAddSuccess, showToast }) {
       console.log(`OCR Raw Name Text: "${nameRaw}"`);
       console.log(`OCR Cleaned Name: "${detectedName}"`);
       console.log(`OCR Detected Number: "${detectedNumber}"`);
+
+      // Update input preview values for manual correction overrides
+      setScannedName(detectedName);
+      setScannedNumber(detectedNumber);
 
       if (!detectedName && !detectedNumber) {
         setScanStatus('OCR failed. Could not read card. Please align card clearly in the guide boxes.');
@@ -407,6 +456,45 @@ function CameraScanner({ onAddSuccess, showToast }) {
             >
               {autoScan ? 'ENABLED' : 'DISABLED'}
             </button>
+          </div>
+
+          {/* Manual OCR Correction panel */}
+          <div className="glass-panel" style={{ width: '100%', padding: '0.75rem 1rem', background: 'rgba(0,0,0,0.3)', border: '1px dashed var(--border-glass-hover)', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.25rem' }}>
+            <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Scanned Card Text Review
+            </div>
+            <form onSubmit={handleManualSearch} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
+              <div style={{ flex: 2, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Name</span>
+                <input 
+                  type="text" 
+                  className="input-control" 
+                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }} 
+                  value={scannedName}
+                  onChange={(e) => setScannedName(e.target.value)}
+                  placeholder="Scanned name..."
+                />
+              </div>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Number</span>
+                <input 
+                  type="text" 
+                  className="input-control" 
+                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }} 
+                  value={scannedNumber}
+                  onChange={(e) => setScannedNumber(e.target.value)}
+                  placeholder="Scanned number..."
+                />
+              </div>
+              <button 
+                type="submit" 
+                className="btn btn-secondary" 
+                style={{ padding: '0.35rem 1rem', fontSize: '0.85rem', whiteSpace: 'nowrap' }}
+                disabled={loading}
+              >
+                Search
+              </button>
+            </form>
           </div>
 
           <div style={{ display: 'flex', gap: '0.75rem' }}>

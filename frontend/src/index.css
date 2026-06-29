@@ -654,10 +654,10 @@ button, input, select, textarea {
 /* Highlighting crop zones for user guidance */
 .scan-region-title {
   position: absolute;
-  top: 6%;
+  top: 3%;
   left: 5%;
   right: 5%;
-  height: 10%;
+  height: 6.5%;
   border: 1.5px solid var(--accent-blue);
   background: rgba(59, 130, 246, 0.15);
   border-radius: 4px;
@@ -675,10 +675,10 @@ button, input, select, textarea {
 
 .scan-region-number {
   position: absolute;
-  bottom: 6%;
+  bottom: 1%;
   left: 5%;
   right: 5%;
-  height: 8%;
+  height: 5.5%;
   border: 1.5px solid var(--accent-yellow);
   background: rgba(234, 179, 8, 0.15);
   border-radius: 4px;
