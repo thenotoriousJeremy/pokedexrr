@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, RefreshCw, AlertTriangle, Plus, X, Search, Sparkles } from 'lucide-react';
+import { Camera, RefreshCw, AlertTriangle, Plus, X, Search, Sparkles, Settings } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import confetti from 'canvas-confetti';
 
