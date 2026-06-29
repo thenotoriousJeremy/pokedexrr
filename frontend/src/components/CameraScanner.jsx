@@ -218,38 +218,9 @@ function CameraScanner({ onAddSuccess, showToast }) {
     }
   };
 
-  // Resolves the landscape-to-portrait camera stream rotation bug on mobile browsers.
-  // It creates a canvas matching the visual orientation on the user's screen.
-  const getOrientedVideoCanvas = (video) => {
-    const videoWidth = video.videoWidth;
-    const videoHeight = video.videoHeight;
-    const canvas = document.createElement('canvas');
-    
-    // Detect if browser displays stream rotated relative to raw texture resolution
-    const isRotated = videoWidth > videoHeight && video.clientHeight > video.clientWidth;
-    
-    if (isRotated) {
-      canvas.width = videoHeight; // e.g. 720
-      canvas.height = videoWidth; // e.g. 1280
-      const ctx = canvas.getContext('2d');
-      
-      // Rotate 90 degrees clockwise around center
-      ctx.translate(canvas.width / 2, canvas.height / 2);
-      ctx.rotate(90 * Math.PI / 180);
-      ctx.drawImage(video, -videoWidth / 2, -videoHeight / 2, videoWidth, videoHeight);
-    } else {
-      canvas.width = videoWidth;
-      canvas.height = videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
-    }
-    
-    return canvas;
-  };
-
   // Preprocess cropped canvas for higher OCR accuracy (Binarization / Thresholding)
   // Bypasses browser-incompatible canvas context filters to run natively on mobile devices.
-  const getProcessedDataUrl = (sourceCanvas, sourceX, sourceY, sourceW, sourceH) => {
+  const getProcessedDataUrl = (video, sourceX, sourceY, sourceW, sourceH) => {
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = sourceW * 2; // Upscale for clearer OCR text
     tempCanvas.height = sourceH * 2;
@@ -257,7 +228,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
     
     // Draw raw cropped frame first
     tempCtx.drawImage(
-      sourceCanvas,
+      video,
       sourceX, sourceY, sourceW, sourceH,
       0, 0, tempCanvas.width, tempCanvas.height
     );
@@ -311,15 +282,14 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setScanStatus('Initializing OCR scanner...');
 
     const video = videoRef.current;
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
     const clientWidth = video.clientWidth;
     const clientHeight = video.clientHeight;
 
-    // 1. Capture and correctly orient the video frame onto a canvas
-    const orientedCanvas = getOrientedVideoCanvas(video);
-    
-    // Scaling factors to map screen positions (clientWidth/clientHeight) to the oriented canvas width/height
-    const scaleX = orientedCanvas.width / clientWidth;
-    const scaleY = orientedCanvas.height / clientHeight;
+    // Scaling factors to translate CSS screen coordinates to raw video stream resolution coordinates
+    const scaleX = videoWidth / clientWidth;
+    const scaleY = videoHeight / clientHeight;
 
     // Pokemon card physical aspect ratio is 2.5 : 3.5 (0.7143)
     const cardAspectRatio = 2.5 / 3.5;
@@ -388,10 +358,10 @@ function CameraScanner({ onAddSuccess, showToast }) {
     };
 
     try {
-      // 2. Process crop images using the oriented canvas
-      const nameDataUrl = getProcessedDataUrl(orientedCanvas, nameCrop.x, nameCrop.y, nameCrop.w, nameCrop.h);
-      const numLeftDataUrl = getProcessedDataUrl(orientedCanvas, numLeftCrop.x, numLeftCrop.y, numLeftCrop.w, numLeftCrop.h);
-      const numRightDataUrl = getProcessedDataUrl(orientedCanvas, numRightCrop.x, numRightCrop.y, numRightCrop.w, numRightCrop.h);
+      // 2. Process crop images directly from the video stream
+      const nameDataUrl = getProcessedDataUrl(video, nameCrop.x, nameCrop.y, nameCrop.w, nameCrop.h);
+      const numLeftDataUrl = getProcessedDataUrl(video, numLeftCrop.x, numLeftCrop.y, numLeftCrop.w, numLeftCrop.h);
+      const numRightDataUrl = getProcessedDataUrl(video, numRightCrop.x, numRightCrop.y, numRightCrop.w, numRightCrop.h);
 
       setDebugNameImg(nameDataUrl);
       setDebugNumLeftImg(numLeftDataUrl);
