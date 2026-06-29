@@ -1,0 +1,49 @@
+# =========================================
+# Stage 1: Build Frontend Assets
+# =========================================
+FROM node:20-alpine AS frontend-builder
+WORKDIR /app/frontend
+
+# Copy frontend packages and lockfiles
+COPY frontend/package*.json ./
+RUN npm ci
+
+# Copy frontend source files
+COPY frontend/ ./
+# Build production bundles
+RUN npm run build
+
+# =========================================
+# Stage 2: Set up Production Server
+# =========================================
+FROM node:20-alpine AS production
+WORKDIR /app
+
+# Install native compilation dependencies for SQLite3 (alpine needs build tools)
+RUN apk add --no-cache python3 make g++ 
+
+# Set environment to production
+ENV NODE_ENV=production
+ENV PORT=3001
+ENV DB_PATH=/app/database/pokemon_cards.db
+
+# Create database volume mount target directory
+RUN mkdir -p /app/database
+
+# Copy backend configuration
+COPY backend/package*.json ./backend/
+WORKDIR /app/backend
+# Install production backend dependencies (compiling sqlite3 on alpine)
+RUN npm ci --omit=dev
+
+# Copy backend source files
+COPY backend/src/ ./src/
+
+# Copy compiled frontend assets from Stage 1 into the backend public folder
+COPY --from=frontend-builder /app/frontend/dist ./dist
+
+# Expose port
+EXPOSE 3001
+
+# Command to start Express server
+CMD ["node", "src/server.js"]

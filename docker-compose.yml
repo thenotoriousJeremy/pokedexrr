@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  pokekeep:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pokekeep
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - DB_PATH=/app/database/pokemon_cards.db
+      - POKEMON_TCG_API_KEY= # Optional: Add your Pokemon TCG API Key here to increase rate limits
+    volumes:
+      - pokekeep-data:/app/database
+
+volumes:
+  pokekeep-data:
+    driver: local
