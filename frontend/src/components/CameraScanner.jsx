@@ -225,8 +225,13 @@ function CameraScanner({ onAddSuccess, showToast }) {
     const videoHeight = video.videoHeight;
     const canvas = document.createElement('canvas');
     
+    const videoRect = video.getBoundingClientRect();
+    const streamRatio = videoWidth / videoHeight;
+    const visualRatio = videoRect.width / videoRect.height;
+    
     // Detect if browser displays stream rotated relative to raw texture resolution
-    const isRotated = videoWidth > videoHeight && video.clientHeight > video.clientWidth;
+    // (If stream is landscape but display container is portrait, or vice versa)
+    const isRotated = (streamRatio > 1.0 && visualRatio < 1.0) || (streamRatio < 1.0 && visualRatio > 1.0);
     
     if (isRotated) {
       canvas.width = videoHeight; // e.g. 720
@@ -315,58 +320,46 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setScanStatus('Initializing OCR scanner...');
 
     const video = videoRef.current;
-    const clientWidth = video.clientWidth;
-    const clientHeight = video.clientHeight;
+    const videoRect = video.getBoundingClientRect();
+    
+    const guideElement = document.querySelector('.scan-card-guide');
+    if (!guideElement) {
+      setLoading(false);
+      setScanStatus('Error: Guide box overlay not found.');
+      return;
+    }
+    const guideRect = guideElement.getBoundingClientRect();
 
     // 1. Capture and correctly orient the video frame onto a canvas
     const orientedCanvas = getOrientedVideoCanvas(video);
     
-    // Scaling factors to translate CSS screen coordinates to the actual oriented canvas dimensions
-    const scaleX = orientedCanvas.width / clientWidth;
-    const scaleY = orientedCanvas.height / clientHeight;
+    // Scaling factors to translate actual screen bounds to oriented canvas bounds
+    const scaleX = orientedCanvas.width / videoRect.width;
+    const scaleY = orientedCanvas.height / videoRect.height;
 
-    // Pokemon card physical aspect ratio is 2.5 : 3.5 (0.7143)
-    const cardAspectRatio = 2.5 / 3.5;
-    let guideWidth, guideHeight, guideLeft, guideTop;
-
-    // Determine layout mode based on visual display orientation (matches CSS rendering exactly)
-    if (clientHeight > clientWidth) {
-      // Visual Portrait (typical mobile screen)
-      guideWidth = clientWidth * guideScale;
-      guideHeight = guideWidth / cardAspectRatio; // guideWidth * 1.4
-      guideLeft = (clientWidth - guideWidth) / 2;
-      guideTop = (clientHeight - guideHeight) / 2;
-    } else {
-      // Visual Landscape (typical desktop screen)
-      guideHeight = clientHeight * guideScale * 1.07;
-      guideWidth = guideHeight * cardAspectRatio;
-      guideLeft = (clientWidth - guideWidth) / 2;
-      guideTop = (clientHeight - guideHeight) / 2;
-    }
-
-    // Define crops in screen coordinates matching the CSS guide layout (with a slightly larger height window for tolerance)
-    // Name: top 3% of card, left 4% of card, width 55% of card, height 7% of card
+    // Define crops in screen coordinates relative to the video element wrapper:
+    // Name: top 3% of card guide, left 4% of card guide, width 55% of card guide, height 7% of card guide
     const nameCropScreen = {
-      x: guideLeft + guideWidth * 0.04,
-      y: guideTop + guideHeight * 0.03,
-      w: guideWidth * 0.55,
-      h: guideHeight * 0.07
+      x: (guideRect.left - videoRect.left) + guideRect.width * 0.04,
+      y: (guideRect.top - videoRect.top) + guideRect.height * 0.03,
+      w: guideRect.width * 0.55,
+      h: guideRect.height * 0.07
     };
 
-    // Modern Number (Left): bottom 1%, left 4%, width 28%, height 6.5% of card (taller for smaller numbers)
+    // Modern Number (Left): bottom 1% of card guide, left 4% of card guide, width 28% of card guide, height 6.5% of card guide
     const numLeftCropScreen = {
-      x: guideLeft + guideWidth * 0.04,
-      y: guideTop + guideHeight * 0.925,
-      w: guideWidth * 0.28,
-      h: guideHeight * 0.065
+      x: (guideRect.left - videoRect.left) + guideRect.width * 0.04,
+      y: (guideRect.top - videoRect.top) + guideRect.height * 0.925,
+      w: guideRect.width * 0.28,
+      h: guideRect.height * 0.065
     };
 
-    // Vintage Number (Right): bottom 1%, right 4%, width 28%, height 6.5% of card (taller for smaller numbers)
+    // Vintage Number (Right): bottom 1% of card guide, right 4% of card guide, width 28% of card guide, height 6.5% of card guide
     const numRightCropScreen = {
-      x: guideLeft + guideWidth * (1.0 - 0.04 - 0.28), // 68%
-      y: guideTop + guideHeight * 0.925,
-      w: guideWidth * 0.28,
-      h: guideHeight * 0.065
+      x: (guideRect.left - videoRect.left) + guideRect.width * (1.0 - 0.04 - 0.28), // 68%
+      y: (guideRect.top - videoRect.top) + guideRect.height * 0.925,
+      w: guideRect.width * 0.28,
+      h: guideRect.height * 0.065
     };
 
     // Scale screen coordinates to the oriented canvas coordinates
