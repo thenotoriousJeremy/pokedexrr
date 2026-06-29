@@ -14,7 +14,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
   const [hasCameraError, setHasCameraError] = useState(false);
   const [autoScan, setAutoScan] = useState(false);
   const [bulkMode, setBulkMode] = useState(false);
-  const [guideScale, setGuideScale] = useState(0.70);
+  const guideScale = 0.70; // Fixed guide box scale to ensure overlay matches scans perfectly
   const [showSettings, setShowSettings] = useState(false);
   const [videoRatio, setVideoRatio] = useState(null);
   
@@ -218,9 +218,38 @@ function CameraScanner({ onAddSuccess, showToast }) {
     }
   };
 
+  // Resolves the landscape-to-portrait camera stream rotation bug on mobile devices.
+  // It creates a canvas matching the visual orientation on the user's screen.
+  const getOrientedVideoCanvas = (video) => {
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
+    const canvas = document.createElement('canvas');
+    
+    // Detect if browser displays stream rotated relative to raw texture resolution
+    const isRotated = videoWidth > videoHeight && video.clientHeight > video.clientWidth;
+    
+    if (isRotated) {
+      canvas.width = videoHeight; // e.g. 720
+      canvas.height = videoWidth; // e.g. 1280
+      const ctx = canvas.getContext('2d');
+      
+      // Rotate 90 degrees clockwise around center
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(90 * Math.PI / 180);
+      ctx.drawImage(video, -videoWidth / 2, -videoHeight / 2, videoWidth, videoHeight);
+    } else {
+      canvas.width = videoWidth;
+      canvas.height = videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
+    }
+    
+    return canvas;
+  };
+
   // Preprocess cropped canvas for higher OCR accuracy (Binarization / Thresholding)
   // Bypasses browser-incompatible canvas context filters to run natively on mobile devices.
-  const getProcessedDataUrl = (video, sourceX, sourceY, sourceW, sourceH) => {
+  const getProcessedDataUrl = (sourceCanvas, sourceX, sourceY, sourceW, sourceH) => {
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = sourceW * 2; // Upscale for clearer OCR text
     tempCanvas.height = sourceH * 2;
@@ -228,7 +257,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
     
     // Draw raw cropped frame first
     tempCtx.drawImage(
-      video,
+      sourceCanvas,
       sourceX, sourceY, sourceW, sourceH,
       0, 0, tempCanvas.width, tempCanvas.height
     );
@@ -282,19 +311,15 @@ function CameraScanner({ onAddSuccess, showToast }) {
     setScanStatus('Initializing OCR scanner...');
 
     const video = videoRef.current;
-    const videoWidth = video.videoWidth;
-    const videoHeight = video.videoHeight;
     const clientWidth = video.clientWidth;
     const clientHeight = video.clientHeight;
 
-    // Detect if the browser auto-rotates the landscape video stream to portrait for display
-    const isRotated = videoWidth > videoHeight && clientHeight > clientWidth;
-    const actualStreamWidth = isRotated ? videoHeight : videoWidth;
-    const actualStreamHeight = isRotated ? videoWidth : videoHeight;
-
-    // Scaling factors to translate CSS screen coordinates to the actual drawn stream dimensions
-    const scaleX = actualStreamWidth / clientWidth;
-    const scaleY = actualStreamHeight / clientHeight;
+    // 1. Capture and correctly orient the video frame onto a canvas
+    const orientedCanvas = getOrientedVideoCanvas(video);
+    
+    // Scaling factors to translate CSS screen coordinates to the actual oriented canvas dimensions
+    const scaleX = orientedCanvas.width / clientWidth;
+    const scaleY = orientedCanvas.height / clientHeight;
 
     // Pokemon card physical aspect ratio is 2.5 : 3.5 (0.7143)
     const cardAspectRatio = 2.5 / 3.5;
@@ -363,36 +388,42 @@ function CameraScanner({ onAddSuccess, showToast }) {
     };
 
     try {
-      // 2. Process crop images directly from the video stream
-      const nameDataUrl = getProcessedDataUrl(video, nameCrop.x, nameCrop.y, nameCrop.w, nameCrop.h);
-      const numLeftDataUrl = getProcessedDataUrl(video, numLeftCrop.x, numLeftCrop.y, numLeftCrop.w, numLeftCrop.h);
-      const numRightDataUrl = getProcessedDataUrl(video, numRightCrop.x, numRightCrop.y, numRightCrop.w, numRightCrop.h);
+      // 2. Process crop images using the oriented canvas
+      const nameDataUrl = getProcessedDataUrl(orientedCanvas, nameCrop.x, nameCrop.y, nameCrop.w, nameCrop.h);
+      const numLeftDataUrl = getProcessedDataUrl(orientedCanvas, numLeftCrop.x, numLeftCrop.y, numLeftCrop.w, numLeftCrop.h);
+      const numRightDataUrl = getProcessedDataUrl(orientedCanvas, numRightCrop.x, numRightCrop.y, numRightCrop.w, numRightCrop.h);
 
       setDebugNameImg(nameDataUrl);
       setDebugNumLeftImg(numLeftDataUrl);
       setDebugNumRightImg(numRightDataUrl);
 
-      // 2. Perform OCR on Card Name
+      // 3. Perform OCR on Card Name
       setScanStatus('Reading Card Name...');
       const nameResult = await Tesseract.recognize(nameDataUrl, 'eng');
       const nameRaw = nameResult.data.text.trim();
       
       // Clean name (strip extra characters and common template tags like 'HP' or 'Stage')
       const cleanNameParts = nameRaw.replace(/[^a-zA-Z0-9\s\-]/g, ' ').replace(/\s+/g, ' ').trim().split(' ');
-      const stopwords = ['HP', 'STAGE', 'BASIC', 'EVOLVES', 'FROM', 'LV', 'LEVEL', 'NO', 'PROMO', 'TRAINER', 'ENERGY', 'ITEM', 'STADIUM', 'SUPPORTER'];
+      const stopwords = ['HP', 'STAGE', 'BASIC', 'EVOLVES', 'FROM', 'LV', 'LEVEL', 'NO', 'PROMO', 'TRAINER', 'ENERGY', 'ITEM', 'STADIUM', 'SUPPORTER', 'POKEMON', 'POKÉMON', 'STAGE1', 'STAGE2', 'MEGA', 'VMAX', 'VSTAR'];
       const filteredNameParts = cleanNameParts.filter(w => {
         const upper = w.toUpperCase();
         if (stopwords.includes(upper)) return false;
         if (/^\d+$/.test(w)) return false; // skip pure numbers like HP values (e.g. 120)
+        // Skip single-letter words unless it's 'V'
+        if (w.length === 1 && upper !== 'V') return false;
         return true;
       });
       const detectedName = filteredNameParts.slice(0, 3).join(' ').trim(); // Take first 3 valid words (e.g. "Charizard", "Dark Raichu", "Mewtwo EX")
 
-      // 3. Perform OCR on Card Number (Left & Right margins in parallel)
+      // 4. Perform OCR on Card Number (Left & Right margins in parallel, whitelisting digits and slashes only)
       setScanStatus('Reading Card Number...');
       const [numLeftResult, numRightResult] = await Promise.all([
-        Tesseract.recognize(numLeftDataUrl, 'eng'),
-        Tesseract.recognize(numRightDataUrl, 'eng')
+        Tesseract.recognize(numLeftDataUrl, 'eng', {
+          tessedit_char_whitelist: '0123456789/'
+        }),
+        Tesseract.recognize(numRightDataUrl, 'eng', {
+          tessedit_char_whitelist: '0123456789/'
+        })
       ]);
 
       const numLeftRaw = numLeftResult.data.text.trim();
@@ -678,22 +709,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 </div>
               </div>
 
-              {/* Guide Scale Slider */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                  <span>Guide Box Sizing (Scale)</span>
-                  <span style={{ color: 'var(--accent-yellow)' }}>{Math.round(guideScale * 100)}%</span>
-                </div>
-                <input 
-                  type="range" 
-                  min="0.45" 
-                  max="0.95" 
-                  step="0.01" 
-                  value={guideScale}
-                  onChange={(e) => setGuideScale(parseFloat(e.target.value))}
-                  style={{ width: '100%', height: '4px', background: 'var(--bg-primary)', borderRadius: '2px', cursor: 'pointer', accentColor: 'var(--accent-red)' }}
-                />
-              </div>
+
 
               {/* Destination Container Selector */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>

@@ -62,6 +62,39 @@ async function cacheCards(cards) {
   }
 }
 
+// Helper: Levenshtein distance similarity (0.0 to 1.0)
+function getLevenshteinDistance(a, b) {
+  const tmp = [];
+  let i, j, val;
+  for (i = 0; i <= a.length; i++) {
+    tmp.push([i]);
+  }
+  for (j = 0; j <= b.length; j++) {
+    tmp[0][j] = j;
+  }
+  for (i = 1; i <= a.length; i++) {
+    for (j = 1; j <= b.length; j++) {
+      val = a[i - 1] === b[j - 1] ? 0 : 1;
+      tmp[i][j] = Math.min(
+        tmp[i - 1][j] + 1, // deletion
+        tmp[i][j - 1] + 1, // insertion
+        tmp[i - 1][j - 1] + val // substitution
+      );
+    }
+  }
+  return tmp[a.length][b.length];
+}
+
+function getStringSimilarity(str1, str2) {
+  const s1 = (str1 || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const s2 = (str2 || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!s1 && !s2) return 1.0;
+  if (!s1 || !s2) return 0.0;
+  const distance = getLevenshteinDistance(s1, s2);
+  const maxLength = Math.max(s1.length, s2.length);
+  return 1.0 - distance / maxLength;
+}
+
 // Search cards locally first, then hit API if not found or empty
 async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
   // Sanitize name query by removing short noise words (like single-letter OCR errors)
@@ -185,8 +218,19 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
       await cacheCards(cards);
     }
 
+    // Fuzzy rank cards by similarity to name and number
+    const scoredCards = cards.map(c => {
+      const nameSim = getStringSimilarity(c.name, cleanName);
+      const numberSim = getStringSimilarity(c.number, numberQuery);
+      // Prioritize name match, but give number some weight too
+      const score = nameSim * 0.75 + numberSim * 0.25;
+      return { card: c, score };
+    });
+    scoredCards.sort((a, b) => b.score - a.score);
+    const sortedCards = scoredCards.map(sc => sc.card);
+
     // Return the fetched cards formatted
-    return cards.map(c => ({
+    return sortedCards.map(c => ({
       id: c.id,
       name: c.name,
       supertype: c.supertype,
