@@ -287,9 +287,14 @@ function CameraScanner({ onAddSuccess, showToast }) {
     const clientWidth = video.clientWidth;
     const clientHeight = video.clientHeight;
 
-    // Scaling factors to translate CSS screen coordinates to raw video stream resolution coordinates
-    const scaleX = videoWidth / clientWidth;
-    const scaleY = videoHeight / clientHeight;
+    // Detect if the browser auto-rotates the landscape video stream to portrait for display
+    const isRotated = videoWidth > videoHeight && clientHeight > clientWidth;
+    const actualStreamWidth = isRotated ? videoHeight : videoWidth;
+    const actualStreamHeight = isRotated ? videoWidth : videoHeight;
+
+    // Scaling factors to translate CSS screen coordinates to the actual drawn stream dimensions
+    const scaleX = actualStreamWidth / clientWidth;
+    const scaleY = actualStreamHeight / clientHeight;
 
     // Pokemon card physical aspect ratio is 2.5 : 3.5 (0.7143)
     const cardAspectRatio = 2.5 / 3.5;
