@@ -54,6 +54,17 @@ function CameraScanner({ onAddSuccess, showToast }) {
     }
   };
 
+  // Bind the camera stream to the video element when both are ready
+  useEffect(() => {
+    if (cameraActive && stream && videoRef.current) {
+      videoRef.current.srcObject = stream;
+      // Explicitly call play to ensure the stream plays on all mobile browsers
+      videoRef.current.play().catch(err => {
+        console.error('Error playing video stream:', err);
+      });
+    }
+  }, [cameraActive, stream]);
+
   const startCamera = async () => {
     setHasCameraError(false);
     setScanMatches([]);
@@ -71,10 +82,6 @@ function CameraScanner({ onAddSuccess, showToast }) {
       const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
       setStream(mediaStream);
       setCameraActive(true);
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-      }
     } catch (err) {
       console.error('Error opening camera:', err);
       setHasCameraError(true);
