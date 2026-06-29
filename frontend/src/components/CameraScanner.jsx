@@ -329,29 +329,29 @@ function CameraScanner({ onAddSuccess, showToast }) {
     const scaleX = orientedCanvas.width / videoRect.width;
     const scaleY = orientedCanvas.height / videoRect.height;
 
-    // Define crops in screen coordinates relative to the video element wrapper:
-    // Name: top 3% of card guide, left 4% of card guide, width 55% of card guide, height 7% of card guide
+    // Define crops in screen coordinates matching the CSS guide layout exactly:
+    // Name: top 3.5% of card guide, left 4% of card guide, width 55% of card guide, height 6% of card guide
     const nameCropScreen = {
       x: (guideRect.left - videoRect.left) + guideRect.width * 0.04,
-      y: (guideRect.top - videoRect.top) + guideRect.height * 0.03,
+      y: (guideRect.top - videoRect.top) + guideRect.height * 0.035,
       w: guideRect.width * 0.55,
-      h: guideRect.height * 0.07
+      h: guideRect.height * 0.06
     };
 
-    // Modern Number (Left): bottom 1% of card guide, left 4% of card guide, width 28% of card guide, height 6.5% of card guide
+    // Modern Number (Left): bottom 1.5% of card guide, left 4% of card guide, width 28% of card guide, height 5% of card guide
     const numLeftCropScreen = {
       x: (guideRect.left - videoRect.left) + guideRect.width * 0.04,
-      y: (guideRect.top - videoRect.top) + guideRect.height * 0.925,
+      y: (guideRect.top - videoRect.top) + guideRect.height * (1.0 - 0.015 - 0.05), // 93.5%
       w: guideRect.width * 0.28,
-      h: guideRect.height * 0.065
+      h: guideRect.height * 0.05
     };
 
-    // Vintage Number (Right): bottom 1% of card guide, right 4% of card guide, width 28% of card guide, height 6.5% of card guide
+    // Vintage Number (Right): bottom 1.5% of card guide, right 4% of card guide, width 28% of card guide, height 5% of card guide
     const numRightCropScreen = {
       x: (guideRect.left - videoRect.left) + guideRect.width * (1.0 - 0.04 - 0.28), // 68%
-      y: (guideRect.top - videoRect.top) + guideRect.height * 0.925,
+      y: (guideRect.top - videoRect.top) + guideRect.height * (1.0 - 0.015 - 0.05), // 93.5%
       w: guideRect.width * 0.28,
-      h: guideRect.height * 0.065
+      h: guideRect.height * 0.05
     };
 
     // Scale screen coordinates to the oriented canvas coordinates

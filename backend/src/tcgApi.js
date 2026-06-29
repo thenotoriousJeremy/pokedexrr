@@ -195,24 +195,39 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '') {
       }
     }
 
-    // Fallback 2: If query still empty, retry search with first word of card name (strip typos/noise)
+    // Fallback 2: If query still empty, retry online search for each word of the card name individually
+    // (This prevents garbage OCR words at the start like 'asicadiy' from blocking the actual card name 'Numel' later in the string)
     if (cards.length === 0 && cleanName) {
-      const firstWord = cleanName.split(' ')[0];
-      if (firstWord && firstWord.length > 2) {
-        const fallbackQ = `name:"*${firstWord}*"`;
-        console.log(`No results. Retrying fallback search: ${fallbackQ}`);
-        try {
-          const fallbackResponse = await tcgClient.get('/cards', {
-            params: {
-              q: fallbackQ,
-              pageSize: 50,
-              orderBy: 'releaseDate'
-            }
-          });
-          cards = fallbackResponse.data.data || [];
-        } catch (err) {
-          console.error('Fallback 2 query failed:', err.message);
+      const words = cleanName.split(/\s+/).filter(w => w.length > 2);
+      console.log(`No results. Retrying word-level fallback searches:`, words);
+      
+      try {
+        const promises = words.map(async (word) => {
+          try {
+            const queryStr = `name:"*${word}*" ${cleanNumber ? `number:"${cleanNumber}"` : ''}`.trim();
+            const fallbackResponse = await tcgClient.get('/cards', {
+              params: {
+                q: queryStr,
+                pageSize: 20
+              }
+            });
+            return fallbackResponse.data.data || [];
+          } catch (err) {
+            console.error(`Word fallback failed for '${word}':`, err.message);
+            return [];
+          }
+        });
+        
+        const resultsLists = await Promise.all(promises);
+        const mergedMap = new Map();
+        for (const list of resultsLists) {
+          for (const card of list) {
+            mergedMap.set(card.id, card);
+          }
         }
+        cards = Array.from(mergedMap.values());
+      } catch (err) {
+        console.error('Word-level fallback search failed:', err.message);
       }
     }
     
