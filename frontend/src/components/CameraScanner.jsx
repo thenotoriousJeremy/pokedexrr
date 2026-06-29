@@ -278,48 +278,77 @@ function CameraScanner({ onAddSuccess, showToast }) {
     const video = videoRef.current;
     const videoWidth = video.videoWidth;
     const videoHeight = video.videoHeight;
+    const clientWidth = video.clientWidth;
+    const clientHeight = video.clientHeight;
 
-    // Mathematically exact guide coordinate mapping
+    // Scaling factors to translate CSS screen coordinates to raw video stream resolution coordinates
+    const scaleX = videoWidth / clientWidth;
+    const scaleY = videoHeight / clientHeight;
+
     // Pokemon card physical aspect ratio is 2.5 : 3.5 (0.7143)
     const cardAspectRatio = 2.5 / 3.5;
     let guideWidth, guideHeight, guideLeft, guideTop;
 
-    if (videoHeight > videoWidth) {
-      // Portrait mode (typical phone)
-      guideWidth = videoWidth * guideScale; // Matches width dynamically
+    // Determine layout mode based on visual display orientation (matches CSS rendering exactly)
+    if (clientHeight > clientWidth) {
+      // Visual Portrait (typical mobile screen)
+      guideWidth = clientWidth * guideScale;
       guideHeight = guideWidth / cardAspectRatio; // guideWidth * 1.4
-      guideLeft = (videoWidth - guideWidth) / 2;
-      guideTop = (videoHeight - guideHeight) / 2;
+      guideLeft = (clientWidth - guideWidth) / 2;
+      guideTop = (clientHeight - guideHeight) / 2;
     } else {
-      // Landscape mode (typical desktop/webcam)
-      guideHeight = videoHeight * guideScale * 1.07; // scale height similarly
-      guideWidth = guideHeight * cardAspectRatio; // guideHeight * 0.7143
-      guideLeft = (videoWidth - guideWidth) / 2;
-      guideTop = (videoHeight - guideHeight) / 2;
+      // Visual Landscape (typical desktop screen)
+      guideHeight = clientHeight * guideScale * 1.07;
+      guideWidth = guideHeight * cardAspectRatio;
+      guideLeft = (clientWidth - guideWidth) / 2;
+      guideTop = (clientHeight - guideHeight) / 2;
     }
 
-    // Name Crop: Top-Left of the card's boundary (excludes HP & Type symbols on right)
+    // Define crops in screen coordinates matching the CSS guide layout exactly:
+    // Name: top 3.5% of card, left 4% of card, width 55% of card, height 6% of card
+    const nameCropScreen = {
+      x: guideLeft + guideWidth * 0.04,
+      y: guideTop + guideHeight * 0.035,
+      w: guideWidth * 0.55,
+      h: guideHeight * 0.06
+    };
+
+    // Modern Number (Left): bottom 1.5%, left 4%, width 28%, height 5% of card
+    const numLeftCropScreen = {
+      x: guideLeft + guideWidth * 0.04,
+      y: guideTop + guideHeight * (1.0 - 0.015 - 0.05), // 93.5%
+      w: guideWidth * 0.28,
+      h: guideHeight * 0.05
+    };
+
+    // Vintage Number (Right): bottom 1.5%, right 4%, width 28%, height 5% of card
+    const numRightCropScreen = {
+      x: guideLeft + guideWidth * (1.0 - 0.04 - 0.28), // 68%
+      y: guideTop + guideHeight * (1.0 - 0.015 - 0.05), // 93.5%
+      w: guideWidth * 0.28,
+      h: guideHeight * 0.05
+    };
+
+    // Scale to raw video coordinates
     const nameCrop = {
-      x: Math.round(guideLeft + guideWidth * 0.04),
-      y: Math.round(guideTop + guideHeight * 0.035),
-      w: Math.round(guideWidth * 0.55),
-      h: Math.round(guideHeight * 0.06)
+      x: Math.round(nameCropScreen.x * scaleX),
+      y: Math.round(nameCropScreen.y * scaleY),
+      w: Math.round(nameCropScreen.w * scaleX),
+      h: Math.round(nameCropScreen.h * scaleY)
     };
 
-    // Number Crop (Left - Modern): Bottom-Left margin
     const numLeftCrop = {
-      x: Math.round(guideLeft + guideWidth * 0.04),
-      y: Math.round(guideTop + guideHeight * 0.935),
-      w: Math.round(guideWidth * 0.28),
-      h: Math.round(guideHeight * 0.05)
+      x: Math.round(numLeftCropScreen.x * scaleX),
+      y: Math.round(numLeftCropScreen.y * scaleY),
+      w: Math.round(numLeftCropScreen.w * scaleX),
+      h: Math.round(numLeftCropScreen.h * scaleY)
     };
 
-    // Number Crop (Right - Vintage): Bottom-Right margin
     const numRightCrop = {
-      x: Math.round(guideLeft + guideWidth * 0.68),
-      y: Math.round(guideTop + guideHeight * 0.935),
-      w: Math.round(guideWidth * 0.28),
-      h: Math.round(guideHeight * 0.05)
+      x: Math.round(numRightCropScreen.x * scaleX),
+      y: Math.round(numRightCropScreen.y * scaleY),
+      w: Math.round(numRightCropScreen.w * scaleX),
+      h: Math.round(numRightCropScreen.h * scaleY)
     };
 
     try {
