@@ -606,7 +606,6 @@ button, input, select, textarea {
 .camera-preview-wrapper {
   position: relative;
   width: 100%;
-  aspect-ratio: 3/4;
   background: #000;
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -616,8 +615,8 @@ button, input, select, textarea {
 
 .camera-video {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  height: auto;
+  display: block;
 }
 
 /* Card Target Overlay overlay with visual crop zones */
@@ -638,7 +637,7 @@ button, input, select, textarea {
 .scan-card-guide {
   width: 75%;
   height: 80%;
-  border: 2px dashed rgba(255, 255, 255, 0.6);
+  border: 2px dashed rgba(255, 255, 255, 0.4);
   border-radius: var(--radius-md);
   position: relative;
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5); /* Dim outside scanner */
@@ -669,8 +668,8 @@ button, input, select, textarea {
 .scan-region-number {
   position: absolute;
   bottom: 6%;
+  left: 5%;
   right: 5%;
-  width: 35%;
   height: 8%;
   border: 1.5px solid var(--accent-yellow);
   background: rgba(234, 179, 8, 0.15);
@@ -678,10 +677,10 @@ button, input, select, textarea {
 }
 
 .scan-region-number::after {
-  content: 'CARD NUMBER (e.g. 58/102)';
+  content: 'ALIGN COLLECTOR NUMBER (e.g. 58/102)';
   position: absolute;
   bottom: -14px;
-  right: 2px;
+  left: 2px;
   font-size: 7px;
   color: var(--accent-yellow);
   font-weight: 800;

@@ -141,20 +141,22 @@ function CameraScanner({ onAddSuccess, showToast }) {
     const videoWidth = video.videoWidth;
     const videoHeight = video.videoHeight;
 
-    // Define crops based on typical card framing:
-    // Name: top region, Number: bottom region
+    // Define crops aligned exactly with the guide box percentages:
+    // Centered card guide is width 75%, height 80% (x offset 12.5%, y offset 10%)
+    // Name crop: top 6% of guide (y: 10% + 4.8% = 14.8%)
+    // Number crop: bottom 8% of guide (y: 10% + 68.8% = 78.8%)
     const nameCrop = {
-      x: Math.round(videoWidth * 0.18),
+      x: Math.round(videoWidth * 0.16),
       y: Math.round(videoHeight * 0.15),
-      w: Math.round(videoWidth * 0.55),
-      h: Math.round(videoHeight * 0.10)
+      w: Math.round(videoWidth * 0.68),
+      h: Math.round(videoHeight * 0.08)
     };
 
     const numCrop = {
-      x: Math.round(videoWidth * 0.18),
-      y: Math.round(videoHeight * 0.72),
-      w: Math.round(videoWidth * 0.65),
-      h: Math.round(videoHeight * 0.11)
+      x: Math.round(videoWidth * 0.16),
+      y: Math.round(videoHeight * 0.78),
+      w: Math.round(videoWidth * 0.68),
+      h: Math.round(videoHeight * 0.08)
     };
 
     try {
@@ -165,7 +167,18 @@ function CameraScanner({ onAddSuccess, showToast }) {
       // 2. Perform OCR on Card Name
       setScanStatus('Reading Card Name...');
       const nameResult = await Tesseract.recognize(nameDataUrl, 'eng');
-      const detectedName = nameResult.data.text.trim().replace(/[^a-zA-Z0-9\s\-]/g, '').trim();
+      const nameRaw = nameResult.data.text.trim();
+      
+      // Clean name (strip extra characters and common template tags like 'HP' or 'Stage')
+      const cleanNameParts = nameRaw.replace(/[^a-zA-Z0-9\s\-]/g, ' ').replace(/\s+/g, ' ').trim().split(' ');
+      const stopwords = ['HP', 'STAGE', 'BASIC', 'EVOLVES', 'FROM', 'LV', 'LEVEL', 'NO', 'PROMO', 'TRAINER', 'ENERGY', 'ITEM', 'STADIUM', 'SUPPORTER'];
+      const filteredNameParts = cleanNameParts.filter(w => {
+        const upper = w.toUpperCase();
+        if (stopwords.includes(upper)) return false;
+        if (/^\d+$/.test(w)) return false; // skip pure numbers like HP values (e.g. 120)
+        return true;
+      });
+      const detectedName = filteredNameParts.slice(0, 3).join(' ').trim(); // Take first 3 valid words (e.g. "Charizard", "Dark Raichu", "Mewtwo EX")
 
       // 3. Perform OCR on Card Number
       setScanStatus('Reading Card Number...');
@@ -190,7 +203,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
         detectedNumber = '';
       }
 
-      console.log(`OCR Detected Name: "${detectedName}"`);
+      console.log(`OCR Raw Name Text: "${nameRaw}"`);
+      console.log(`OCR Cleaned Name: "${detectedName}"`);
       console.log(`OCR Detected Number: "${detectedNumber}"`);
 
       if (!detectedName && !detectedNumber) {
