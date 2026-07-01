@@ -244,10 +244,9 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
   return (
     <div>
       {/* Title & Exports Bar */}
-      <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
+      <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem', padding: '0.75rem 1.25rem' }}>
         <div>
-          <h2 style={{ fontSize: '1.25rem', color: '#fff' }}>My Pokémon Card Collection</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Browse, edit, and filter your physical and digital card list.</p>
+          <h2 style={{ fontSize: '1.15rem', color: '#fff', margin: 0 }}>My Pokémon Card Collection</h2>
         </div>
         
         {/* Toggle & Export buttons */}
