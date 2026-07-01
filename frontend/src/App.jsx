@@ -127,7 +127,8 @@ function App() {
         return <CardSearch onAddSuccess={triggerRefresh} showToast={showToast} />;
       case 'collection':
         return <CollectionList statsTrigger={statsTrigger} onUpdate={triggerRefresh} showToast={showToast} token={token} />;
-
+      case 'storage':
+        return <LocationManager statsTrigger={statsTrigger} onUpdate={triggerRefresh} showToast={showToast} />;
       case 'settings':
         return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
       case 'admin':
@@ -175,6 +176,13 @@ function App() {
           >
             <Database size={18} />
             <span>Collection</span>
+          </button>
+          <button 
+            className={`nav-tab ${activeTab === 'storage' ? 'active' : ''}`}
+            onClick={() => setActiveTab('storage')}
+          >
+            <MapPin size={18} />
+            <span>Storage</span>
           </button>
 
           <button 

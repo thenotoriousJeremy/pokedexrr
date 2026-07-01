@@ -3,7 +3,6 @@ import { Search, Download, Trash2, Edit2, X, MapPin, LayoutGrid, List, Database,
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 import { getCardDisplayName } from '../utils/langHelper';
 import DeckBuilder from './DeckBuilder';
-import LocationManager from './LocationManager';
 
 function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
   const [collection, setCollection] = useState([]);
@@ -22,6 +21,10 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
   const [locationFilter, setLocationFilter] = useState('');
   const [rarityFilter, setRarityFilter] = useState('');
   const [conditionFilter, setConditionFilter] = useState('');
+  const [printingFilter, setPrintingFilter] = useState('');
+  const [minPriceFilter, setMinPriceFilter] = useState('');
+  const [maxPriceFilter, setMaxPriceFilter] = useState('');
+  const [sortBy, setSortBy] = useState('added-newest');
   
   // Edit Modal State
   const [editingItem, setEditingItem] = useState(null);
@@ -233,8 +236,29 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
                             item.location_id == locationFilter;
     const matchesRarity = rarityFilter === '' ? true : item.rarity === rarityFilter;
     const matchesCondition = conditionFilter === '' ? true : item.condition === conditionFilter;
+    const matchesPrinting = printingFilter === '' ? true : item.printing === printingFilter;
+    
+    const price = item.price_trend || 0;
+    const matchesMinPrice = minPriceFilter === '' ? true : price >= parseFloat(minPriceFilter);
+    const matchesMaxPrice = maxPriceFilter === '' ? true : price <= parseFloat(maxPriceFilter);
 
-    return matchesSearch && matchesLocation && matchesRarity && matchesCondition;
+    return matchesSearch && matchesLocation && matchesRarity && matchesCondition && matchesPrinting && matchesMinPrice && matchesMaxPrice;
+  }).sort((a, b) => {
+    if (sortBy === 'name-asc') {
+      return a.name.localeCompare(b.name);
+    } else if (sortBy === 'name-desc') {
+      return b.name.localeCompare(a.name);
+    } else if (sortBy === 'price-desc') {
+      return (b.price_trend || 0) - (a.price_trend || 0);
+    } else if (sortBy === 'price-asc') {
+      return (a.price_trend || 0) - (b.price_trend || 0);
+    } else if (sortBy === 'qty-desc') {
+      return (b.quantity || 0) - (a.quantity || 0);
+    } else if (sortBy === 'added-oldest') {
+      return new Date(a.added_at || 0) - new Date(b.added_at || 0);
+    } else { // 'added-newest'
+      return new Date(b.added_at || 0) - new Date(a.added_at || 0);
+    }
   });
 
   const selectedLoc = locations.find(l => l.id == editLocationId);
@@ -274,13 +298,6 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
           >
             Deck Builder
           </button>
-          <button 
-            className={`btn ${subTab === 'locations' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setSubTab('locations')}
-            style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
-          >
-            Storage Locations
-          </button>
         </div>
 
         {/* View Toggle */}
@@ -306,67 +323,117 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
 
       {subTab === 'deckbuilder' ? (
         <DeckBuilder showToast={showToast} />
-      ) : subTab === 'locations' ? (
-        <LocationManager statsTrigger={statsTrigger} onUpdate={onUpdate} showToast={showToast} />
       ) : (
         <>
           {/* Filter Options Panel */}
-          <div className="glass-panel" style={{ marginBottom: '1.5rem' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}>
-          
-          {/* Text Search */}
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label>Search Cards</label>
-            <div style={{ position: 'relative' }}>
-              <input 
-                type="text" 
-                className="input-control" 
-                placeholder="Search name, set, card number..." 
-                value={searchFilter}
-                onChange={(e) => setSearchFilter(e.target.value)}
-                style={{ width: '100%', paddingLeft: '2.5rem' }}
-              />
-              <Search size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+          <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1.25rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              
+              {/* Row 1: Text Search & Sorting */}
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Search Cards</label>
+                  <div style={{ position: 'relative' }}>
+                    <input 
+                      type="text" 
+                      className="input-control" 
+                      placeholder="Search name, set, card number..." 
+                      value={searchFilter}
+                      onChange={(e) => setSearchFilter(e.target.value)}
+                      style={{ width: '100%', paddingLeft: '2.5rem' }}
+                    />
+                    <Search size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  </div>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Sort By</label>
+                  <select className="select-control" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+                    <option value="added-newest">Added (Newest)</option>
+                    <option value="added-oldest">Added (Oldest)</option>
+                    <option value="name-asc">Name (A-Z)</option>
+                    <option value="name-desc">Name (Z-A)</option>
+                    <option value="price-desc">Price (High to Low)</option>
+                    <option value="price-asc">Price (Low to High)</option>
+                    <option value="qty-desc">Quantity (High to Low)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Row 2: Selector Filters Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '0.75rem' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Location</label>
+                  <select className="select-control" value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)}>
+                    <option value="">All Locations</option>
+                    <option value="unassigned">Unassigned Pile</option>
+                    {locations.map(loc => (
+                      <option key={loc.id} value={loc.id}>{loc.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Rarity</label>
+                  <select className="select-control" value={rarityFilter} onChange={(e) => setRarityFilter(e.target.value)}>
+                    <option value="">All Rarities</option>
+                    {uniqueRarities.map(rarity => (
+                      <option key={rarity} value={rarity}>{rarity}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Condition</label>
+                  <select className="select-control" value={conditionFilter} onChange={(e) => setConditionFilter(e.target.value)}>
+                    <option value="">All Conditions</option>
+                    <option value="Near Mint">Near Mint</option>
+                    <option value="Lightly Played">Lightly Played</option>
+                    <option value="Moderately Played">Moderately Played</option>
+                    <option value="Heavily Played">Heavily Played</option>
+                    <option value="Damaged">Damaged</option>
+                  </select>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Printing</label>
+                  <select className="select-control" value={printingFilter} onChange={(e) => setPrintingFilter(e.target.value)}>
+                    <option value="">All Printings</option>
+                    <option value="Normal">Normal</option>
+                    <option value="Holofoil">Holofoil</option>
+                    <option value="Reverse Holofoil">Reverse Holofoil</option>
+                    <option value="1st Edition">1st Edition</option>
+                    <option value="Promo">Promo</option>
+                  </select>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Min Price</label>
+                  <input 
+                    type="number" 
+                    className="input-control" 
+                    placeholder="Min $" 
+                    value={minPriceFilter} 
+                    onChange={(e) => setMinPriceFilter(e.target.value)} 
+                    style={{ padding: '0.4rem 0.5rem' }}
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Max Price</label>
+                  <input 
+                    type="number" 
+                    className="input-control" 
+                    placeholder="Max $" 
+                    value={maxPriceFilter} 
+                    onChange={(e) => setMaxPriceFilter(e.target.value)} 
+                    style={{ padding: '0.4rem 0.5rem' }}
+                  />
+                </div>
+              </div>
+
             </div>
           </div>
-
-          {/* Selector Filters Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.75rem' }}>
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Location</label>
-              <select className="select-control" value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)}>
-                <option value="">All Locations</option>
-                <option value="unassigned">Unassigned Pile</option>
-                {locations.map(loc => (
-                  <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Rarity</label>
-              <select className="select-control" value={rarityFilter} onChange={(e) => setRarityFilter(e.target.value)}>
-                <option value="">All Rarities</option>
-                {uniqueRarities.map(rarity => (
-                  <option key={rarity} value={rarity}>{rarity}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Condition</label>
-              <select className="select-control" value={conditionFilter} onChange={(e) => setConditionFilter(e.target.value)}>
-                <option value="">All Conditions</option>
-                <option value="Near Mint">Near Mint</option>
-                <option value="Lightly Played">Lightly Played</option>
-                <option value="Moderately Played">Moderately Played</option>
-                <option value="Heavily Played">Heavily Played</option>
-                <option value="Damaged">Damaged</option>
-              </select>
-            </div>
-          </div>
-        </div>
-      </div>
 
       {/* Database Listing Panel */}
       {loading ? (
@@ -388,6 +455,49 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
                 <div className={`tcg-card-inner ${glowClass}`}>
                   <img src={item.image_url} alt={item.name} className="tcg-card-image" loading="lazy" />
                   <div className="tcg-card-quantity-tag">x{item.quantity}</div>
+                  
+                  {/* Overlay Tags */}
+                  <div style={{
+                    position: 'absolute',
+                    bottom: '6px',
+                    left: '6px',
+                    right: '6px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: '4px',
+                    pointerEvents: 'none'
+                  }}>
+                    <span style={{
+                      fontSize: '0.6rem',
+                      fontWeight: 800,
+                      padding: '2px 5px',
+                      borderRadius: '3px',
+                      background: 'rgba(0, 0, 0, 0.75)',
+                      color: '#fff',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      textTransform: 'uppercase'
+                    }}>
+                      {item.condition === 'Near Mint' ? 'NM' : 
+                       item.condition === 'Lightly Played' ? 'LP' : 
+                       item.condition === 'Moderately Played' ? 'MP' : 
+                       item.condition === 'Heavily Played' ? 'HP' : 'DMG'}
+                    </span>
+                    {item.printing !== 'Normal' && (
+                      <span style={{
+                        fontSize: '0.6rem',
+                        fontWeight: 800,
+                        padding: '2px 5px',
+                        borderRadius: '3px',
+                        background: item.printing.includes('Holo') ? 'rgba(234, 179, 8, 0.9)' : 'rgba(59, 130, 246, 0.9)',
+                        color: '#000',
+                        border: '1px solid rgba(255, 255, 255, 0.2)'
+                      }}>
+                        {item.printing === 'Reverse Holofoil' ? 'REV' : 
+                         item.printing === 'Holofoil' ? 'HOLO' : 
+                         item.printing === '1st Edition' ? '1ST' : 'PRM'}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="tcg-card-info">
                   <div className="tcg-card-name">{getCardDisplayName(item.name, item.language)}</div>
@@ -629,13 +739,13 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
           </div>
         )}
       </div>
-       {/* Card Detail Inspector Modal (Private Authorized View) */}
+      {/* Card Detail Inspector Modal (Private Authorized View) */}
       {inspectorCard && (
         <div style={{
           position: 'fixed',
           top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.7)',
-          backdropFilter: 'blur(5px)',
+          backgroundColor: 'rgba(0,0,0,0.75)',
+          backdropFilter: 'blur(8px)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -643,14 +753,16 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
           padding: '1.5rem'
         }} onClick={() => setInspectorCard(null)}>
           <div className="glass-panel" style={{
-            maxWidth: '680px',
+            maxWidth: '720px',
             width: '100%',
-            padding: '2rem',
+            padding: '2.5rem',
             display: 'flex',
             flexDirection: 'row',
             flexWrap: 'wrap',
-            gap: '2rem',
-            position: 'relative'
+            gap: '2.5rem',
+            position: 'relative',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.6)'
           }} onClick={(e) => e.stopPropagation()}>
             <button className="btn btn-secondary btn-icon-only" onClick={() => setInspectorCard(null)} style={{
               position: 'absolute',
@@ -661,91 +773,67 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
               <X size={16} />
             </button>
 
-            {/* Left side: Card Image */}
-            <div style={{ flex: '1 1 240px', display: 'flex', justifyContent: 'center' }}>
-              <img 
-                src={inspectorCard.image_url} 
-                alt={inspectorCard.name} 
-                style={{
-                  width: '100%',
-                  maxWidth: '260px',
-                  aspectRatio: 0.718,
-                  objectFit: 'cover',
-                  borderRadius: 'var(--radius-md)',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.5), 0 0 15px rgba(255, 255, 255, 0.05)'
-                }}
-              />
+            {/* Left side: Card Image & Badge overlays */}
+            <div style={{ flex: '1 1 250px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
+              <div style={{ position: 'relative', width: '100%', maxWidth: '280px' }}>
+                <img 
+                  src={inspectorCard.image_url} 
+                  alt={inspectorCard.name} 
+                  style={{
+                    width: '100%',
+                    aspectRatio: 0.718,
+                    objectFit: 'cover',
+                    borderRadius: 'var(--radius-md)',
+                    boxShadow: '0 12px 36px rgba(0,0,0,0.6), 0 0 20px rgba(255,255,255,0.05)'
+                  }}
+                />
+              </div>
+              
+              {/* Quantities indicator badge */}
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                <span className="badge" style={{ padding: '0.4rem 0.8rem', background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: '#fff', fontSize: '0.75rem', fontWeight: 700 }}>
+                  Owned: x{inspectorCard.quantity}
+                </span>
+                <span className="badge" style={{ padding: '0.4rem 0.8rem', background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.2)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-yellow)', fontSize: '0.75rem', fontWeight: 700 }}>
+                  {inspectorCard.rarity || 'Common'}
+                </span>
+              </div>
             </div>
 
             {/* Right side: Information */}
-            <div style={{ flex: '1 1 300px', display: 'flex', flexDirection: 'column', gap: '1rem', justifyContent: 'center' }}>
+            <div style={{ flex: '1 1 320px', display: 'flex', flexDirection: 'column', gap: '1.25rem', justifyContent: 'space-between' }}>
               <div>
-                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
-                  <span style={{
-                    fontSize: '0.7rem',
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    padding: '0.15rem 0.4rem',
-                    borderRadius: '4px',
-                    backgroundColor: 'rgba(234, 179, 8, 0.1)',
-                    color: 'var(--accent-yellow)',
-                    border: '1px solid rgba(234, 179, 8, 0.2)'
-                  }}>
-                    {inspectorCard.rarity || 'Common'}
-                  </span>
-
+                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
                   {inspectorCard.list_type === 'wishlist' && (
-                    <span style={{
-                      fontSize: '0.7rem',
-                      fontWeight: 700,
-                      textTransform: 'uppercase',
-                      padding: '0.15rem 0.4rem',
-                      borderRadius: '4px',
-                      backgroundColor: 'rgba(6, 182, 212, 0.15)',
-                      color: '#06b6d4',
-                      border: '1px solid rgba(6, 182, 212, 0.3)'
-                    }}>
+                    <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.2rem 0.5rem', borderRadius: '4px', backgroundColor: 'rgba(6, 182, 212, 0.15)', color: '#06b6d4', border: '1px solid rgba(6, 182, 212, 0.3)' }}>
                       Wishlist Item
                     </span>
                   )}
-
                   {inspectorCard.is_trade === 1 && (
-                    <span style={{
-                      fontSize: '0.7rem',
-                      fontWeight: 700,
-                      textTransform: 'uppercase',
-                      padding: '0.15rem 0.4rem',
-                      borderRadius: '4px',
-                      backgroundColor: 'rgba(74, 222, 128, 0.15)',
-                      color: 'var(--type-grass)',
-                      border: '1px solid rgba(74, 222, 128, 0.3)'
-                    }}>
+                    <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.2rem 0.5rem', borderRadius: '4px', backgroundColor: 'rgba(74, 222, 128, 0.15)', color: 'var(--type-grass)', border: '1px solid rgba(74, 222, 128, 0.3)' }}>
                       For Trade
                     </span>
                   )}
                 </div>
 
-                <h3 style={{ fontSize: '1.5rem', color: '#fff', lineHeight: 1.2 }}>{inspectorCard.name}</h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{inspectorCard.set_name} • Card #{inspectorCard.number}</p>
+                <h3 style={{ fontSize: '1.65rem', color: '#fff', fontWeight: 800, lineHeight: 1.15, marginBottom: '0.25rem' }}>
+                  {getCardDisplayName(inspectorCard.name, inspectorCard.language)}
+                </h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 500 }}>{inspectorCard.set_name} • Card #{inspectorCard.number}</p>
               </div>
 
-              <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
+              {/* Price Panel */}
+              <div style={{ borderTop: '1px solid var(--border-glass)', borderBottom: '1px solid var(--border-glass)', padding: '0.75rem 0', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
                 <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>TCG MARKET</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>TCG MARKET PRICE</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--accent-yellow)', marginTop: '0.15rem' }}>
                     ${inspectorCard.price_trend ? inspectorCard.price_trend.toFixed(2) : '0.00'}
                   </div>
                 </div>
                 <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>PURCHASE PRICE</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>EST. PURCHASE VALUE</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#fff', marginTop: '0.15rem' }}>
                     ${inspectorCard.purchase_price ? inspectorCard.purchase_price.toFixed(2) : '0.00'}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>QUANTITY</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>
-                    x{inspectorCard.quantity}
                   </div>
                 </div>
               </div>
@@ -754,23 +842,23 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
               {loadingHistory ? (
                 <div className="spinner" style={{ height: '30px', margin: '0.5rem auto' }}></div>
               ) : priceHistory.length > 0 && (
-                <div style={{ width: '100%', height: '80px', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px', letterSpacing: '0.05em' }}>Price Trend History (30 Days)</div>
-                  <div style={{ width: '100%', height: '50px' }}>
+                <div style={{ width: '100%', background: 'rgba(0,0,0,0.15)', padding: '0.6rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', marginBottom: '6px', letterSpacing: '0.05em' }}>Price History (30 Days)</div>
+                  <div style={{ width: '100%', height: '65px' }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={priceHistory} margin={{ top: 0, right: 0, left: -22, bottom: 0 }}>
+                      <AreaChart data={priceHistory} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
                         <defs>
                           <linearGradient id="priceGlow" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="var(--accent-yellow)" stopOpacity={0.3}/>
+                            <stop offset="5%" stopColor="var(--accent-yellow)" stopOpacity={0.25}/>
                             <stop offset="95%" stopColor="var(--accent-yellow)" stopOpacity={0}/>
                           </linearGradient>
                         </defs>
                         <XAxis dataKey="recorded_at" hide />
-                        <YAxis domain={['auto', 'auto']} hide />
+                        <YAxis domain={['auto', 'auto']} stroke="var(--text-secondary)" style={{ fontSize: '0.55rem' }} width={30} />
                         <Tooltip 
-                          contentStyle={{ background: 'rgba(0,0,0,0.85)', border: '1px solid var(--border-glass)', borderRadius: '4px', fontSize: '0.75rem', color: '#fff' }}
+                          contentStyle={{ background: 'rgba(0,0,0,0.85)', border: '1px solid var(--border-glass)', borderRadius: '4px', fontSize: '0.7rem', color: '#fff' }}
                           labelFormatter={(label) => new Date(label).toLocaleDateString()}
-                          formatter={(val) => [`$${val.toFixed(2)}`, 'Market Value']}
+                          formatter={(val) => [`$${val.toFixed(2)}`, 'Market']}
                         />
                         <Area type="monotone" dataKey="price" stroke="var(--accent-yellow)" strokeWidth={1.5} fillOpacity={1} fill="url(#priceGlow)" />
                       </AreaChart>
@@ -779,76 +867,70 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
                 </div>
               )}
 
-              {/* Physical Location Details */}
+              {/* Specifications Details Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem 1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-glass)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>
+                <div><span style={{ color: 'var(--text-muted)' }}>Condition:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{inspectorCard.condition}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>Printing:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{inspectorCard.printing}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>Language:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{inspectorCard.language}</span></div>
+                <div><span style={{ color: 'var(--text-muted)' }}>Supertype:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{inspectorCard.supertype}</span></div>
+              </div>
+
+              {/* Storage Container details */}
               {inspectorCard.list_type !== 'wishlist' && (
-                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 600 }}>STORAGE CONTAINER</div>
-                  {inspectorCard.location_name ? (
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.85rem', fontWeight: 700, color: '#fff' }}>
-                        <MapPin size={11} style={{ color: 'var(--accent-red)' }} />
-                        {inspectorCard.location_name} ({inspectorCard.location_type})
-                      </div>
-                      {(inspectorCard.sub_location_1 || inspectorCard.sub_location_2) && (
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', paddingLeft: '1rem', marginTop: '0.1rem' }}>
-                          {inspectorCard.location_type === 'Binder' ? 'Page' : inspectorCard.location_type === 'Box' ? 'Row' : ''} {inspectorCard.sub_location_1 || '?'}{' '}
-                          {inspectorCard.sub_location_2 ? `• Slot/Section: ${inspectorCard.sub_location_2}` : ''}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div style={{ fontStyle: 'italic', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Unassigned Pile</div>
-                  )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255, 71, 71, 0.02)', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', fontSize: '0.75rem' }}>
+                  <MapPin size={14} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Location: </span>
+                    <strong style={{ color: '#fff' }}>
+                      {inspectorCard.location_name ? `${inspectorCard.location_name} (${inspectorCard.location_type})` : 'Unassigned Pile'}
+                    </strong>
+                    {inspectorCard.location_name && (inspectorCard.sub_location_1 || inspectorCard.sub_location_2) && (
+                      <span style={{ color: 'var(--text-secondary)' }}>
+                        {` • ${inspectorCard.location_type === 'Binder' ? 'Page' : 'Row'} ${inspectorCard.sub_location_1 || '?'}`}
+                        {inspectorCard.sub_location_2 ? ` / Slot ${inspectorCard.sub_location_2}` : ''}
+                      </span>
+                    )}
+                  </div>
                 </div>
               )}
 
-              {/* Card Meta details */}
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Supertype:</span> {inspectorCard.supertype}
-                {inspectorCard.types && inspectorCard.types.length > 0 && ` • Types: ${inspectorCard.types.join(', ')}`}
-                {inspectorCard.subtypes && inspectorCard.subtypes.length > 0 && ` • Subtypes: ${inspectorCard.subtypes.join(', ')}`}
-              </div>
-
-              {/* Modal Actions */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.25rem' }}>
+              {/* Actions row inside modal */}
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
                 {inspectorCard.list_type === 'wishlist' && (
                   <button 
                     className="btn btn-primary" 
-                    style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
                     onClick={() => {
-                      // Claim the card by setting edit states to collection mode
                       openEdit(inspectorCard);
-                      setEditListType('collection'); // Force convert
+                      setEditListType('collection');
                       setInspectorCard(null);
                     }}
                   >
-                    Add to Collection (Obtained)
+                    Move to Collection
                   </button>
                 )}
-                
-                <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
-                  <button 
-                    className="btn btn-secondary" 
-                    style={{ flex: 1 }}
-                    onClick={() => {
-                      openEdit(inspectorCard);
-                      setInspectorCard(null);
-                    }}
-                  >
-                    Edit Details
-                  </button>
-                  <button 
-                    className="btn btn-danger" 
-                    style={{ flex: 1 }}
-                    onClick={() => {
-                      handleDelete(inspectorCard.entry_id, inspectorCard.name);
-                      setInspectorCard(null);
-                    }}
-                  >
-                    Delete
-                  </button>
-                </div>
+                <button 
+                  className="btn btn-secondary" 
+                  style={{ flex: 1 }}
+                  onClick={() => {
+                    openEdit(inspectorCard);
+                    setInspectorCard(null);
+                  }}
+                >
+                  Edit Card
+                </button>
+                <button 
+                  className="btn btn-danger" 
+                  style={{ flex: 1 }}
+                  onClick={() => {
+                    handleDelete(inspectorCard.entry_id, inspectorCard.name);
+                    setInspectorCard(null);
+                  }}
+                >
+                  Delete
+                </button>
               </div>
+
             </div>
           </div>
         </div>
