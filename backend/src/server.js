@@ -613,25 +613,53 @@ app.post('/api/collection', authenticateToken, async (req, res) => {
       }
     }
 
-    // Insert into collection
-    const result = await db.run(`
-      INSERT INTO collection 
-      (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, user_id, list_type, is_trade)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    // Check if an identical card entry already exists in this location to stack them
+    const existing = await db.get(`
+      SELECT id, quantity FROM collection 
+      WHERE card_id = ? AND condition = ? AND printing = ? AND language = ? 
+        AND location_id IS ? AND sub_location_1 IS ? AND sub_location_2 IS ?
+        AND user_id = ? AND list_type = ? AND is_trade = ?
     `, [
       card_id,
-      quantity,
       condition,
       printing,
       language,
-      purchase_price || 0,
       location_id,
-      sub_location_1,
-      sub_location_2,
+      sub_location_1 || null,
+      sub_location_2 || null,
       req.user.id,
       list_type,
       is_trade ? 1 : 0
     ]);
+
+    let lastInsertedId;
+    if (existing) {
+      const newQuantity = existing.quantity + parseInt(quantity, 10);
+      await db.run(`
+        UPDATE collection SET quantity = ? WHERE id = ?
+      `, [newQuantity, existing.id]);
+      lastInsertedId = existing.id;
+    } else {
+      const result = await db.run(`
+        INSERT INTO collection 
+        (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, user_id, list_type, is_trade)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        card_id,
+        quantity,
+        condition,
+        printing,
+        language,
+        purchase_price || 0,
+        location_id,
+        sub_location_1 || null,
+        sub_location_2 || null,
+        req.user.id,
+        list_type,
+        is_trade ? 1 : 0
+      ]);
+      lastInsertedId = result.lastID;
+    }
 
     // Record initial price history trend
     const cacheCard = await db.get(`SELECT price_trend FROM card_cache WHERE id = ?`, [card_id]);
@@ -639,7 +667,7 @@ app.post('/api/collection', authenticateToken, async (req, res) => {
       await db.run(`INSERT OR IGNORE INTO price_history (card_id, price) VALUES (?, ?)`, [card_id, cacheCard.price_trend]);
     }
 
-    res.status(201).json({ message: 'Card added to collection', id: result.lastID });
+    res.status(201).json({ message: 'Card added to collection', id: lastInsertedId });
   } catch (error) {
     res.status(500).json({ error: 'Failed to add card', message: error.message });
   }
@@ -663,7 +691,7 @@ app.put('/api/collection/:id', authenticateToken, async (req, res) => {
 
   try {
     // Ensure entry exists and belongs to the user
-    const entry = await db.get(`SELECT id FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    const entry = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!entry) {
       return res.status(404).json({ error: 'Collection entry not found' });
     }
@@ -674,6 +702,78 @@ app.put('/api/collection/:id', authenticateToken, async (req, res) => {
       if (!loc) {
         return res.status(400).json({ error: 'Invalid location ID' });
       }
+    }
+
+    const finalLocId = location_id !== undefined ? location_id : entry.location_id;
+    const finalSub1 = sub_location_1 !== undefined ? sub_location_1 : entry.sub_location_1;
+    const finalSub2 = sub_location_2 !== undefined ? sub_location_2 : entry.sub_location_2;
+
+    if (finalLocId && finalSub1 && finalSub2) {
+      const loc = await db.get(`SELECT type FROM locations WHERE id = ? AND user_id = ?`, [finalLocId, req.user.id]);
+      if (loc && (loc.type === 'Box' || loc.type === 'Toploader Box')) {
+        const targetSeq = parseInt((finalSub2 || '').replace(/\D/g, ''), 10) || 0;
+        if (targetSeq > 0) {
+          // Shift subsequent cards
+          const cardsInRow = await db.all(`
+            SELECT id, sub_location_2 
+            FROM collection 
+            WHERE location_id = ? AND sub_location_1 = ? AND user_id = ? AND id != ?
+          `, [finalLocId, finalSub1, req.user.id, id]);
+
+          const cardsToShift = cardsInRow.filter(c => {
+            const seq = parseInt((c.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
+            return seq >= targetSeq;
+          }).sort((a, b) => {
+            const seqA = parseInt((a.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
+            const seqB = parseInt((b.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
+            return seqB - seqA;
+          });
+
+          for (const card of cardsToShift) {
+            const seq = parseInt((card.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
+            await db.run(`
+              UPDATE collection 
+              SET sub_location_2 = ? 
+              WHERE id = ?
+            `, [`Section ${seq + 1}`, card.id]);
+          }
+        }
+      }
+    }
+
+    // Compute what the final values would be after this update
+    const finalQuantity = quantity !== undefined ? parseInt(quantity, 10) : entry.quantity;
+    const finalCondition = condition !== undefined ? condition : entry.condition;
+    const finalPrinting = printing !== undefined ? printing : entry.printing;
+    const finalLanguage = language !== undefined ? language : entry.language;
+    const finalListType = list_type !== undefined ? list_type : entry.list_type;
+    const finalIsTrade = is_trade !== undefined ? (is_trade ? 1 : 0) : entry.is_trade;
+
+    // Check if there is an identical card entry already in that new location (except this row itself)
+    const existing = await db.get(`
+      SELECT id, quantity FROM collection 
+      WHERE card_id = ? AND condition = ? AND printing = ? AND language = ? 
+        AND location_id IS ? AND sub_location_1 IS ? AND sub_location_2 IS ?
+        AND user_id = ? AND list_type = ? AND is_trade = ? AND id != ?
+    `, [
+      entry.card_id,
+      finalCondition,
+      finalPrinting,
+      finalLanguage,
+      finalLocId,
+      finalSub1 || null,
+      finalSub2 || null,
+      req.user.id,
+      finalListType,
+      finalIsTrade,
+      entry.id
+    ]);
+
+    if (existing) {
+      const newQuantity = existing.quantity + finalQuantity;
+      await db.run(`UPDATE collection SET quantity = ? WHERE id = ?`, [newQuantity, existing.id]);
+      await db.run(`DELETE FROM collection WHERE id = ? AND user_id = ?`, [entry.id, req.user.id]);
+      return res.json({ message: 'Collection entry merged/stacked successfully', id: existing.id });
     }
 
     // Build dynamic UPDATE query based on passed values
@@ -736,21 +836,40 @@ app.get('/api/locations', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/locations', authenticateToken, async (req, res) => {
-  const { name, type, description = '' } = req.body;
+  const { 
+    name, 
+    type, 
+    description = '', 
+    sort_order = 'name-asc',
+    max_pages = 30,
+    page_style = '3x3',
+    max_rows = 3,
+    max_capacity = 1000
+  } = req.body;
+
   if (!name || !type) {
     return res.status(400).json({ error: 'name and type are required' });
   }
   try {
-    // Check for duplicates for this user
     const existing = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [name, req.user.id]);
     if (existing) {
       return res.status(400).json({ error: 'A location with this name already exists' });
     }
 
     const result = await db.run(`
-      INSERT INTO locations (name, type, description, user_id)
-      VALUES (?, ?, ?, ?)
-    `, [name, type, description, req.user.id]);
+      INSERT INTO locations (name, type, description, sort_order, max_pages, page_style, max_rows, max_capacity, user_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      name, 
+      type, 
+      description, 
+      sort_order, 
+      parseInt(max_pages, 10) || 30, 
+      page_style, 
+      parseInt(max_rows, 10) || 3, 
+      parseInt(max_capacity, 10) || 1000, 
+      req.user.id
+    ]);
     res.status(201).json({ message: 'Location created', id: result.lastID });
   } catch (error) {
     res.status(500).json({ error: 'Failed to create location', message: error.message });
@@ -759,7 +878,7 @@ app.post('/api/locations', authenticateToken, async (req, res) => {
 
 app.put('/api/locations/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
-  const { name, type, description } = req.body;
+  const { name, type, description, sort_order, max_pages, page_style, max_rows, max_capacity } = req.body;
   try {
     const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) {
@@ -775,10 +894,29 @@ app.put('/api/locations/:id', authenticateToken, async (req, res) => {
 
     await db.run(`
       UPDATE locations 
-      SET name = COALESCE(?, name), type = COALESCE(?, type), description = COALESCE(?, description)
+      SET 
+        name = COALESCE(?, name), 
+        type = COALESCE(?, type), 
+        description = COALESCE(?, description),
+        sort_order = COALESCE(?, sort_order),
+        max_pages = COALESCE(?, max_pages),
+        page_style = COALESCE(?, page_style),
+        max_rows = COALESCE(?, max_rows),
+        max_capacity = COALESCE(?, max_capacity)
       WHERE id = ? AND user_id = ?
-    `, [name, type, description, id, req.user.id]);
-    res.json({ message: 'Location updated successfully' });
+    `, [
+      name, 
+      type, 
+      description, 
+      sort_order, 
+      max_pages !== undefined ? parseInt(max_pages, 10) : null,
+      page_style,
+      max_rows !== undefined ? parseInt(max_rows, 10) : null,
+      max_capacity !== undefined ? parseInt(max_capacity, 10) : null,
+      id, 
+      req.user.id
+    ]);
+    res.json({ message: 'Location updated' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to update location', message: error.message });
   }

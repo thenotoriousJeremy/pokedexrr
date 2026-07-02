@@ -84,8 +84,13 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS locations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
-      type TEXT CHECK(type IN ('Binder', 'Box', 'Other')) NOT NULL,
-      description TEXT
+      type TEXT CHECK(type IN ('Binder', 'Box', 'Toploader Box', 'Deck Box', 'Tin / Case', 'Other')) NOT NULL,
+      description TEXT,
+      sort_order TEXT DEFAULT 'name-asc',
+      max_pages INTEGER DEFAULT 30,
+      page_style TEXT DEFAULT '3x3',
+      max_rows INTEGER DEFAULT 3,
+      max_capacity INTEGER DEFAULT 1000
     )
   `);
 
@@ -184,6 +189,28 @@ async function initDb() {
   if (!locationsCols.some(c => c.name === 'user_id')) {
     console.log('Adding user_id column to locations table...');
     await run(`ALTER TABLE locations ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`);
+  }
+
+  // Add custom dimension columns to locations table if missing
+  if (!locationsCols.some(c => c.name === 'sort_order')) {
+    console.log('Adding sort_order column to locations table...');
+    await run(`ALTER TABLE locations ADD COLUMN sort_order TEXT DEFAULT 'name-asc'`);
+  }
+  if (!locationsCols.some(c => c.name === 'max_pages')) {
+    console.log('Adding max_pages column to locations table...');
+    await run(`ALTER TABLE locations ADD COLUMN max_pages INTEGER DEFAULT 30`);
+  }
+  if (!locationsCols.some(c => c.name === 'page_style')) {
+    console.log('Adding page_style column to locations table...');
+    await run(`ALTER TABLE locations ADD COLUMN page_style TEXT DEFAULT '3x3'`);
+  }
+  if (!locationsCols.some(c => c.name === 'max_rows')) {
+    console.log('Adding max_rows column to locations table...');
+    await run(`ALTER TABLE locations ADD COLUMN max_rows INTEGER DEFAULT 3`);
+  }
+  if (!locationsCols.some(c => c.name === 'max_capacity')) {
+    console.log('Adding max_capacity column to locations table...');
+    await run(`ALTER TABLE locations ADD COLUMN max_capacity INTEGER DEFAULT 1000`);
   }
 
   // 3. Remove UNIQUE constraint on locations name per user (optional, but let's make sure it's not unique across users)
