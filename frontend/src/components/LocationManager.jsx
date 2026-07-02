@@ -746,17 +746,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 >
                   <img src={card.image_url} alt={card.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   {/* Shiny holo overlay */}
-                  {((card.printing || '').toLowerCase().includes('holo') || (card.printing || '').toLowerCase().includes('foil')) && (
-                    <div style={{
-                      position: 'absolute',
-                      top: 0, left: 0, right: 0, bottom: 0,
-                      background: 'linear-gradient(135deg, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0) 50%, rgba(255,255,255,0.1) 100%)',
-                      pointerEvents: 'none',
-                      zIndex: 2,
-                      mixBlendMode: 'overlay',
-                      borderRadius: '8px'
-                    }} />
-                  )}
+                  {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '8px' }} />}
+                  {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '8px' }} />}
                   <div style={{
                     position: 'absolute',
                     bottom: 0, left: 0, right: 0,
@@ -1575,6 +1566,17 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
       const targetIndex = combined.findIndex(c => c.entry_id === card.entry_id);
       if (targetIndex !== -1) {
+        let targetPosition = 1000;
+        if (combined.length > 1) {
+          if (targetIndex === 0) {
+            targetPosition = combined[1].position / 2;
+          } else if (targetIndex === combined.length - 1) {
+            targetPosition = combined[targetIndex - 1].position + 1000;
+          } else {
+            targetPosition = (combined[targetIndex - 1].position + combined[targetIndex + 1].position) / 2;
+          }
+        }
+
         if (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') {
           const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
           const maxP = selectedLoc.max_pages || 30;
@@ -1585,7 +1587,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             return {
               sub1: `Page ${page}`,
               sub2: `Slot ${slot}`,
-              label: `Page ${page}, Slot ${slot}`
+              label: `Page ${page}, Slot ${slot}`,
+              position: targetPosition
             };
           }
         } else if (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand') {
@@ -1597,7 +1600,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             return {
               sub1: `Row ${rowNum}`,
               sub2: String(seq),
-              label: `Row ${rowNum}, Pos ${seq}`
+              label: `Row ${rowNum}, Pos ${seq}`,
+              position: targetPosition
             };
           }
         }
@@ -1898,17 +1902,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                 >
                                   <img src={card.image_url} alt={card.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px' }} />
                                   {/* Shiny holo overlay */}
-                                  {((card.printing || '').toLowerCase().includes('holo') || (card.printing || '').toLowerCase().includes('foil')) && (
-                                    <div style={{
-                                      position: 'absolute',
-                                      top: 0, left: 0, right: 0, bottom: 0,
-                                      background: 'linear-gradient(135deg, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0) 50%, rgba(255,255,255,0.1) 100%)',
-                                      pointerEvents: 'none',
-                                      zIndex: 2,
-                                      mixBlendMode: 'overlay',
-                                      borderRadius: '4px'
-                                    }} />
-                                  )}
+                                  {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '4px' }} />}
+                                  {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '4px' }} />}
                                   <div style={{
                                     position: 'absolute',
                                     bottom: 0, left: 0, right: 0,
@@ -2227,7 +2222,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                             type="button" 
                             className="btn btn-primary"
                             onClick={async () => {
-                              await moveCardToLocation(card.entry_id, selectedLoc.id, recommended.sub1, recommended.sub2);
+                              await moveCardToLocation(card.entry_id, selectedLoc.id, recommended.sub1, recommended.sub2, recommended.position);
                               showToast(`Placed ${card.name} in ${recommended.label}`);
                               if (idx >= queue.length - 1) {
                                 setAssistantIndex(0);
@@ -2645,17 +2640,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           }} title="Click to view in collection list">
             <img src={activeMoveCard.image_url} alt={activeMoveCard.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }} />
             {/* Shiny holo overlay */}
-            {((activeMoveCard.printing || '').toLowerCase().includes('holo') || (activeMoveCard.printing || '').toLowerCase().includes('foil')) && (
-              <div style={{
-                position: 'absolute',
-                top: 0, left: 0, right: 0, bottom: 0,
-                background: 'linear-gradient(135deg, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0) 50%, rgba(255,255,255,0.1) 100%)',
-                pointerEvents: 'none',
-                zIndex: 2,
-                mixBlendMode: 'overlay',
-                borderRadius: '4px'
-              }} />
-            )}
+            {activeMoveCard.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '4px' }} />}
+            {activeMoveCard.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '4px' }} />}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div 

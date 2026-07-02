@@ -52,6 +52,122 @@ async function generateSession(userId) {
   return token;
 }
 
+async function rebalanceLocationPositions(db, locationId, userId) {
+  if (!locationId) return;
+  const cards = await db.all(`SELECT id FROM collection WHERE location_id = ? AND user_id = ? ORDER BY position ASC`, [locationId, userId]);
+  for (let i = 0; i < cards.length; i++) {
+    const cleanPos = (i + 1) * 1000;
+    await db.run(`UPDATE collection SET position = ? WHERE id = ?`, [cleanPos, cards[i].id]);
+  }
+}
+
+async function getSortedPositionForCard(db, locationId, userId, cardMetadata) {
+  const loc = await db.get(`SELECT type, sort_order FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
+  if (!loc || loc.sort_order === 'custom') {
+    const maxRow = await db.get(`SELECT MAX(position) as maxPos FROM collection WHERE location_id = ? AND user_id = ?`, [locationId, userId]);
+    return maxRow && maxRow.maxPos !== null ? maxRow.maxPos + 1000 : 1000;
+  }
+
+  const sortOrder = loc.sort_order;
+
+  const query = `
+    SELECT c.id as entry_id, c.position, c.printing, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number, cc.price_trend
+    FROM collection c
+    JOIN card_cache cc ON c.card_id = cc.id
+    WHERE c.location_id = ? AND c.user_id = ?
+  `;
+  const existing = await db.all(query, [locationId, userId]);
+
+  existing.forEach(c => {
+    try {
+      c.types = JSON.parse(c.types || '[]');
+    } catch {
+      c.types = [];
+    }
+  });
+
+  const newCard = {
+    entry_id: -1,
+    printing: cardMetadata.printing || 'Normal',
+    name: cardMetadata.name || '',
+    supertype: cardMetadata.supertype || '',
+    types: cardMetadata.types || [],
+    rarity: cardMetadata.rarity || '',
+    set_name: cardMetadata.set_name || '',
+    number: cardMetadata.number || '0',
+    price_trend: parseFloat(cardMetadata.price_trend) || 0
+  };
+  existing.push(newCard);
+
+  const POKEMON_TYPE_ORDER = {
+    'Grass': 1, 'Fire': 2, 'Water': 3, 'Lightning': 4, 'Psychic': 5,
+    'Fighting': 6, 'Darkness': 7, 'Metal': 8, 'Dragon': 9, 'Colorless': 10, 'Trainer': 11, 'Energy': 12
+  };
+  const PRINTING_ORDER = {
+    'Normal': 1,
+    'Reverse Holofoil': 2,
+    'Holofoil': 3,
+    '1st Edition': 4,
+    'Promo': 5
+  };
+
+  if (sortOrder === 'name-asc') {
+    existing.sort((a, b) => a.name.localeCompare(b.name));
+  } else if (sortOrder === 'price-desc') {
+    existing.sort((a, b) => (b.price_trend || 0) - (a.price_trend || 0));
+  } else if (sortOrder === 'set-number') {
+    existing.sort((a, b) => {
+      const cmpSet = (a.set_name || '').localeCompare(b.set_name || '');
+      if (cmpSet !== 0) return cmpSet;
+      const numA = parseInt(a.number || '0', 10) || 0;
+      const numB = parseInt(b.number || '0', 10) || 0;
+      if (numA !== numB) return numA - numB;
+      return (a.number || '').localeCompare(b.number || '');
+    });
+  } else if (sortOrder === 'set-number-printing') {
+    existing.sort((a, b) => {
+      const setA = a.set_name || '';
+      const setB = b.set_name || '';
+      const cmpSet = setA.localeCompare(setB);
+      if (cmpSet !== 0) return cmpSet;
+
+      const printA = PRINTING_ORDER[a.printing] || 10;
+      const printB = PRINTING_ORDER[b.printing] || 10;
+      if (printA !== printB) return printA - printB;
+
+      const numA = parseInt(a.number || '0', 10) || 0;
+      const numB = parseInt(b.number || '0', 10) || 0;
+      if (numA !== numB) return numA - numB;
+
+      const cmpNum = (a.number || '').localeCompare(b.number || '');
+      if (cmpNum !== 0) return cmpNum;
+
+      return a.name.localeCompare(b.name);
+    });
+  } else if (sortOrder === 'type-name') {
+    existing.sort((a, b) => {
+      const typeA = (a.types && a.types[0]) || 'Unknown';
+      const typeB = (b.types && b.types[0]) || 'Unknown';
+      const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
+      const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
+      if (orderA !== orderB) return orderA - orderB;
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  const targetIndex = existing.findIndex(c => c.entry_id === -1);
+  if (targetIndex === -1) return 1000;
+
+  if (existing.length === 1) return 1000;
+  if (targetIndex === 0) {
+    return existing[1].position / 2;
+  }
+  if (targetIndex === existing.length - 1) {
+    return existing[targetIndex - 1].position + 1000;
+  }
+  return (existing[targetIndex - 1].position + existing[targetIndex + 1].position) / 2;
+}
+
 async function authenticateToken(req, res, next) {
   let token = null;
   const authHeader = req.headers['authorization'];
@@ -645,8 +761,14 @@ app.post('/api/collection', authenticateToken, async (req, res) => {
       let finalPosition = position;
       if (finalPosition === undefined) {
         if (location_id) {
-          const maxRow = await db.get(`SELECT MAX(position) as maxPos FROM collection WHERE location_id = ? AND user_id = ?`, [location_id, req.user.id]);
-          finalPosition = maxRow && maxRow.maxPos !== null ? maxRow.maxPos + 1000 : 1000;
+          const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, supertype, rarity FROM card_cache WHERE id = ?`, [card_id]);
+          if (cardMetadata) {
+            cardMetadata.printing = printing;
+            try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
+            finalPosition = await getSortedPositionForCard(db, location_id, req.user.id, cardMetadata);
+          } else {
+            finalPosition = 1000;
+          }
         } else {
           finalPosition = 0;
         }
@@ -672,6 +794,24 @@ app.post('/api/collection', authenticateToken, async (req, res) => {
         finalPosition
       ]);
       lastInsertedId = result.lastID;
+
+      if (location_id) {
+        const neighbors = await db.all(`
+          SELECT position FROM collection 
+          WHERE location_id = ? AND user_id = ? AND id != ?
+          ORDER BY ABS(position - ?) ASC LIMIT 2
+        `, [location_id, req.user.id, lastInsertedId, finalPosition]);
+        let needsRebalance = false;
+        for (const n of neighbors) {
+          if (Math.abs(n.position - finalPosition) < 0.001) {
+            needsRebalance = true;
+            break;
+          }
+        }
+        if (needsRebalance) {
+          await rebalanceLocationPositions(db, location_id, req.user.id);
+        }
+      }
     }
 
     // Record initial price history trend
@@ -757,6 +897,22 @@ app.put('/api/collection/:id', authenticateToken, async (req, res) => {
       return res.json({ message: 'Collection entry merged/stacked successfully', id: existing.id });
     }
 
+    let finalPosition = position;
+    if (finalPosition === undefined && location_id !== undefined && location_id !== entry.location_id) {
+      if (location_id) {
+        const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, supertype, rarity FROM card_cache WHERE id = ?`, [entry.card_id]);
+        if (cardMetadata) {
+          cardMetadata.printing = printing !== undefined ? printing : entry.printing;
+          try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
+          finalPosition = await getSortedPositionForCard(db, location_id, req.user.id, cardMetadata);
+        } else {
+          finalPosition = 1000;
+        }
+      } else {
+        finalPosition = 0;
+      }
+    }
+
     // Build dynamic UPDATE query based on passed values
     const fields = [];
     const params = [];
@@ -771,7 +927,7 @@ app.put('/api/collection/:id', authenticateToken, async (req, res) => {
     if (sub_location_2 !== undefined) { fields.push('sub_location_2 = ?'); params.push(sub_location_2); }
     if (list_type !== undefined) { fields.push('list_type = ?'); params.push(list_type); }
     if (is_trade !== undefined) { fields.push('is_trade = ?'); params.push(is_trade ? 1 : 0); }
-    if (position !== undefined) { fields.push('position = ?'); params.push(position); }
+    if (finalPosition !== undefined) { fields.push('position = ?'); params.push(finalPosition); }
 
     if (fields.length === 0) {
       return res.status(400).json({ error: 'No fields provided for update' });
@@ -780,6 +936,24 @@ app.put('/api/collection/:id', authenticateToken, async (req, res) => {
     params.push(id);
     params.push(req.user.id);
     await db.run(`UPDATE collection SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, params);
+
+    if (finalLocId && finalPosition !== undefined) {
+      const neighbors = await db.all(`
+        SELECT position FROM collection 
+        WHERE location_id = ? AND user_id = ? AND id != ?
+        ORDER BY ABS(position - ?) ASC LIMIT 2
+      `, [finalLocId, req.user.id, id, finalPosition]);
+      let needsRebalance = false;
+      for (const n of neighbors) {
+        if (Math.abs(n.position - finalPosition) < 0.001) {
+          needsRebalance = true;
+          break;
+        }
+      }
+      if (needsRebalance) {
+        await rebalanceLocationPositions(db, finalLocId, req.user.id);
+      }
+    }
     
     res.json({ message: 'Collection entry updated successfully' });
   } catch (error) {

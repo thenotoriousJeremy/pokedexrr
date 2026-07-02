@@ -1421,3 +1421,46 @@ button, input, select, textarea {
   font-size: 0.7rem;
 }
 
+/* Premium Holofoil Shimmer Sheen */
+@keyframes holoShimmer {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.holo-shine-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(115deg, 
+    rgba(255, 0, 0, 0.15) 0%, 
+    rgba(255, 255, 0, 0.1) 20%, 
+    rgba(0, 255, 255, 0.15) 40%, 
+    rgba(0, 0, 255, 0.1) 60%, 
+    rgba(255, 0, 255, 0.15) 80%, 
+    rgba(255, 0, 0, 0.15) 100%
+  );
+  background-size: 200% 200%;
+  animation: holoShimmer 4s ease infinite;
+  pointer-events: none;
+  z-index: 2;
+  mix-blend-mode: color-dodge;
+  opacity: 0.85;
+}
+
+.reverse-holo-shine-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(135deg, 
+    rgba(255, 255, 255, 0.3) 0%, 
+    rgba(255, 255, 255, 0) 40%, 
+    rgba(255, 255, 255, 0.2) 60%, 
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 200%;
+  animation: holoShimmer 6s linear infinite;
+  pointer-events: none;
+  z-index: 2;
+  mix-blend-mode: overlay;
+  opacity: 0.9;
+}
+
