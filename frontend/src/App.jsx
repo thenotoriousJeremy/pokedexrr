@@ -11,6 +11,32 @@ import AdminPanel from './components/AdminPanel';
 import SharedCollection from './components/SharedCollection';
 import DeckBuilder from './components/DeckBuilder';
 
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '2rem', color: '#fff', background: 'rgba(255,0,0,0.1)', border: '1px solid red', borderRadius: '8px', margin: '2rem' }}>
+          <h2 style={{ fontSize: '1.2rem', marginBottom: '1rem', color: 'var(--accent-red)' }}>Something went wrong.</h2>
+          <pre style={{ whiteSpace: 'pre-wrap', color: '#ff8888', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '4px', fontSize: '0.85rem' }}>{this.state.error && this.state.error.toString()}</pre>
+          <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.75rem', marginTop: '1rem', color: 'var(--text-secondary)' }}>{this.state.error && this.state.error.stack}</pre>
+          <button className="btn btn-primary" style={{ marginTop: '1.5rem' }} onClick={() => window.location.reload()}>Reload Page</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // Global fetch interceptor to append authorization headers and handle 401s
 const originalFetch = window.fetch;
 window.fetch = function (url, options = {}) {
@@ -42,6 +68,8 @@ function App() {
   });
 
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [selectedLocationId, setSelectedLocationId] = useState(null);
+  const [selectedCardFilter, setSelectedCardFilter] = useState('');
   const [toast, setToast] = useState(null);
   const [statsTrigger, setStatsTrigger] = useState(0); 
 
@@ -120,15 +148,34 @@ function App() {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard statsTrigger={statsTrigger} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={setActiveTab} />;
       case 'scanner':
-        return <CameraScanner onAddSuccess={triggerRefresh} showToast={showToast} />;
+        return <CameraScanner onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={setActiveTab} />;
       case 'search':
         return <CardSearch onAddSuccess={triggerRefresh} showToast={showToast} />;
       case 'collection':
-        return <CollectionList statsTrigger={statsTrigger} onUpdate={triggerRefresh} showToast={showToast} token={token} />;
+        return (
+          <CollectionList 
+            statsTrigger={statsTrigger} 
+            onUpdate={triggerRefresh} 
+            showToast={showToast} 
+            token={token} 
+            selectedCardFilter={selectedCardFilter}
+            setSelectedCardFilter={setSelectedCardFilter}
+          />
+        );
       case 'storage':
-        return <LocationManager statsTrigger={statsTrigger} onUpdate={triggerRefresh} showToast={showToast} />;
+        return (
+          <LocationManager 
+            statsTrigger={statsTrigger} 
+            onUpdate={triggerRefresh} 
+            showToast={showToast} 
+            selectedLocationId={selectedLocationId}
+            setSelectedLocationId={setSelectedLocationId}
+            setSelectedCardFilter={setSelectedCardFilter}
+            setActiveTab={setActiveTab}
+          />
+        );
       case 'settings':
         return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
       case 'admin':
@@ -221,7 +268,9 @@ function App() {
 
       {/* Main Content Area */}
       <main style={{ flex: 1, marginTop: '1rem' }}>
-        {renderContent()}
+        <ErrorBoundary>
+          {renderContent()}
+        </ErrorBoundary>
       </main>
 
       {/* Toast Notification */}
