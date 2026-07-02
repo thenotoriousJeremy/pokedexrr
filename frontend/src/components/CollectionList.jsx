@@ -4,10 +4,18 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'rec
 import { getCardDisplayName } from '../utils/langHelper';
 import DeckBuilder from './DeckBuilder';
 
-function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
+function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCardFilter, setSelectedCardFilter }) {
   const [collection, setCollection] = useState([]);
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (selectedCardFilter) {
+      setSearchFilter(selectedCardFilter);
+      // Reset after applying so they can clear search manually
+      setSelectedCardFilter('');
+    }
+  }, [selectedCardFilter]);
   
   // UX view state
   const [viewMode, setViewMode] = useState('gallery'); // 'gallery' or 'list'
@@ -513,72 +521,51 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token }) {
       ) : (
         /* Traditional List Table View */
         <div className="glass-panel" style={{ padding: 0, overflow: 'hidden' }}>
-          <div className="collection-table-wrapper">
-            <table className="collection-table">
+          <div style={{ overflowY: 'auto' }}>
+            <table className="collection-table" style={{ minWidth: 0 }}>
               <thead>
                 <tr>
-                  <th>Card Name / Set</th>
-                  <th>Real-World Location</th>
-                  <th>Condition / Printing</th>
-                  <th>Qty</th>
-                  <th>Valuation (Each)</th>
-                  <th>Total Spent</th>
-                  <th>Actions</th>
+                  <th>Card</th>
+                  <th style={{ width: '70px', textAlign: 'right' }}>Qty / Value</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredCollection.map((item) => (
                   <tr key={item.entry_id}>
                     <td>
-                      <div className="collection-card-row-info">
-                        <img src={item.image_url} alt={item.name} className="collection-row-thumbnail" />
-                        <div>
-                          <div style={{ fontWeight: 700, color: '#fff' }}>{getCardDisplayName(item.name, item.language)}</div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <div style={{ position: 'relative', width: '36px', height: '50px', flexShrink: 0 }}>
+                          <img src={item.image_url} alt={item.name} className="collection-row-thumbnail" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px' }} />
+                          {((item.printing || '').toLowerCase().includes('holo') || (item.printing || '').toLowerCase().includes('foil')) && (
+                            <div style={{
+                              position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                              background: 'linear-gradient(135deg, rgba(255,255,255,0.25) 0%, transparent 50%, rgba(255,255,255,0.15) 100%)',
+                              pointerEvents: 'none', zIndex: 2, mixBlendMode: 'overlay', borderRadius: '4px'
+                            }} />
+                          )}
+                        </div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{getCardDisplayName(item.name, item.language)}</div>
+                          <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {item.set_name} • #{item.number} • {item.rarity}
+                          </div>
+                          <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                            {item.printing}{item.printing !== 'Normal' ? '' : ''} • {item.condition}
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.35rem', marginTop: '2px' }}>
+                            <button className="btn btn-secondary btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => openEdit(item)} title="Edit">
+                              <Edit2 size={9} />
+                            </button>
+                            <button className="btn btn-danger btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => handleDelete(item.entry_id, item.name)} title="Delete">
+                              <Trash2 size={9} />
+                            </button>
                           </div>
                         </div>
                       </div>
                     </td>
-                    <td>
-                      {item.location_name ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
-                          <span style={{ fontWeight: 600, color: '#fff', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <MapPin size={12} style={{ color: 'var(--accent-red)' }} />
-                            {item.location_name}
-                          </span>
-                          {(item.sub_location_1 || item.sub_location_2) && (
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', paddingLeft: '1rem' }}>
-                              {item.location_type === 'Binder' ? 'Page' : item.location_type === 'Box' ? 'Row' : ''} {item.sub_location_1 || '?'}{' '}
-                              {item.sub_location_2 ? `• Slot/Section: ${item.sub_location_2}` : ''}
-                            </span>
-                          )}
-                        </div>
-                      ) : (
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Unassigned Pile</span>
-                      )}
-                    </td>
-                    <td>
-                      <div style={{ fontSize: '0.85rem', color: '#fff' }}>{item.condition}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{item.printing} • {item.language}</div>
-                    </td>
-                    <td style={{ fontWeight: 700 }}>x{item.quantity}</td>
-                    <td>
-                      <div style={{ fontWeight: 700, color: 'var(--accent-yellow)' }}>${(item.price_trend || 0).toFixed(2)}</div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Market Price</div>
-                    </td>
-                    <td style={{ fontSize: '0.9rem' }}>
-                      ${((item.purchase_price || 0) * item.quantity).toFixed(2)}
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: '0.35rem' }}>
-                        <button className="btn btn-secondary btn-icon-only" onClick={() => openEdit(item)}>
-                          <Edit2 size={12} />
-                        </button>
-                        <button className="btn btn-danger btn-icon-only" onClick={() => handleDelete(item.entry_id, item.name)}>
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
+                    <td style={{ textAlign: 'right', verticalAlign: 'top', paddingTop: '0.6rem' }}>
+                      <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.85rem' }}>x{item.quantity}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>${(item.price_trend || 0).toFixed(2)}</div>
                     </td>
                   </tr>
                 ))}
