@@ -25,6 +25,32 @@ const PRINTING_ORDER = {
   'Promo': 5
 };
 
+const getCardRarityBorder = (rarity) => {
+  const r = (rarity || '').toLowerCase();
+  if (r.includes('secret') || r.includes('ultra') || r.includes('hyper') || r.includes('illustration') || r.includes('double rare') || r.includes('shiny rare') || r.includes('classic collection')) {
+    return {
+      border: '2px solid rgba(245, 158, 11, 0.95)',
+      boxShadow: '0 0 10px rgba(245, 158, 11, 0.6), inset 0 0 4px rgba(245, 158, 11, 0.4)'
+    };
+  }
+  if (r.includes('rare') || r.includes('promo')) {
+    return {
+      border: '1.5px solid rgba(255, 255, 255, 0.85)',
+      boxShadow: '0 0 7px rgba(255, 255, 255, 0.55)'
+    };
+  }
+  if (r.includes('uncommon')) {
+    return {
+      border: '1px solid rgba(59, 130, 246, 0.75)',
+      boxShadow: '0 0 4px rgba(59, 130, 246, 0.3)'
+    };
+  }
+  return {
+    border: '1px solid rgba(255, 255, 255, 0.15)',
+    boxShadow: 'none'
+  };
+};
+
 function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, setSelectedCardFilter, setActiveTab }) {
   const isMobile = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
   const [locations, setLocations] = useState([]);
@@ -663,6 +689,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               const opacity = absOffset > 2 ? 0.2 : 1 - (absOffset * 0.35);
 
               const isSelected = activeMoveCard?.entry_id === card.entry_id;
+              const rarityStyle = getCardRarityBorder(card.rarity);
 
               return (
                 <div
@@ -677,10 +704,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     transition: 'all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1)',
                     pointerEvents: absOffset > 1.2 ? 'none' : 'auto',
                     cursor: 'pointer',
-                    boxShadow: isActive ? '0 10px 25px rgba(0,0,0,0.5), 0 0 10px rgba(255, 71, 71, 0.3)' : '0 5px 12px rgba(0,0,0,0.3)',
+                    boxShadow: isSelected ? '0 0 12px var(--accent-yellow)' : isActive ? `0 10px 25px rgba(0,0,0,0.5), ${rarityStyle.boxShadow}` : rarityStyle.boxShadow,
                     borderRadius: '8px',
                     overflow: 'hidden',
-                    border: isSelected ? '2px solid var(--accent-yellow)' : isActive ? '1px solid rgba(255,255,255,0.2)' : '1px solid rgba(255,255,255,0.08)'
+                    border: isSelected ? '2.5px solid var(--accent-yellow)' : rarityStyle.border
                   }}
                   onClick={async (e) => {
                     e.stopPropagation();
@@ -748,6 +775,41 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   {/* Shiny holo overlay */}
                   {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '8px' }} />}
                   {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '8px' }} />}
+                  {/* Holo / Rev Holo text badge indicators */}
+                  {card.printing === 'Holofoil' && (
+                    <span style={{
+                      position: 'absolute',
+                      top: '4px',
+                      right: '4px',
+                      background: 'rgba(217, 119, 6, 0.95)',
+                      color: '#fff',
+                      fontSize: '0.55rem',
+                      fontWeight: 900,
+                      letterSpacing: '0.05em',
+                      padding: '1px 4px',
+                      borderRadius: '3px',
+                      zIndex: 10,
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+                      textTransform: 'uppercase'
+                    }}>Holo</span>
+                  )}
+                  {card.printing === 'Reverse Holofoil' && (
+                    <span style={{
+                      position: 'absolute',
+                      top: '4px',
+                      right: '4px',
+                      background: 'rgba(75, 85, 99, 0.95)',
+                      color: '#fff',
+                      fontSize: '0.55rem',
+                      fontWeight: 900,
+                      letterSpacing: '0.05em',
+                      padding: '1px 4px',
+                      borderRadius: '3px',
+                      zIndex: 10,
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+                      textTransform: 'uppercase'
+                    }}>Rev Holo</span>
+                  )}
                   <div style={{
                     position: 'absolute',
                     bottom: 0, left: 0, right: 0,
@@ -1817,9 +1879,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           <div style={{
                             display: 'grid',
                             gridTemplateColumns: pocketsCols,
-                            gap: '0.4rem',
+                            gap: '0.2rem',
                             background: 'rgba(0,0,0,0.25)',
-                            padding: '0.4rem',
+                            padding: '0.2rem',
                             borderRadius: 'var(--radius-sm)',
                             boxShadow: 'inset 0 4px 15px rgba(0,0,0,0.6)'
                           }}>
@@ -1830,7 +1892,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           const isTargetable = !!activeMoveCard;
 
                           const rowsCount = selectedLoc.page_style === '2x2' ? 2 : selectedLoc.page_style === '3x4' ? 4 : 3;
-                          const maxSlotHeight = `calc((100vh - 290px) / ${rowsCount})`;
+                          const maxSlotHeight = `calc((100vh - 230px) / ${rowsCount})`;
+                          const rarityStyle = card ? getCardRarityBorder(card.rarity) : null;
 
                           return (
                             <div 
@@ -1846,7 +1909,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                               style={{ 
                                 aspectRatio: 0.718, 
                                 maxHeight: maxSlotHeight,
-                                border: card ? '1px solid rgba(255,255,255,0.1)' : isTargetable ? '2px dashed var(--accent-yellow)' : '2px dashed var(--border-glass)',
+                                border: card 
+                                  ? (isTargetable ? '2px dashed var(--accent-yellow)' : rarityStyle.border) 
+                                  : (isTargetable ? '2px dashed var(--accent-yellow)' : '2px dashed var(--border-glass)'),
                                 borderRadius: 'var(--radius-sm)',
                                 background: card ? 'transparent' : isTargetable ? 'rgba(234, 179, 8, 0.08)' : 'rgba(0,0,0,0.3)',
                                 display: 'flex',
@@ -1856,8 +1921,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                 position: 'relative',
                                 overflow: 'hidden',
                                 cursor: (card || isTargetable) ? 'pointer' : 'default',
-                                padding: '2px',
-                                boxShadow: card ? '0 5px 12px rgba(0,0,0,0.45)' : 'none',
+                                padding: '1px',
+                                boxShadow: card ? `0 5px 12px rgba(0,0,0,0.45), ${rarityStyle.boxShadow}` : 'none',
                                 transition: 'all 0.2s ease'
                               }}
                             >
@@ -1902,8 +1967,43 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                 >
                                   <img src={card.image_url} alt={card.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px' }} />
                                   {/* Shiny holo overlay */}
-                                  {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '4px' }} />}
-                                  {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '4px' }} />}
+                                  {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '8px' }} />}
+                                  {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '8px' }} />}
+                                  {/* Holo / Rev Holo text badge indicators */}
+                                  {card.printing === 'Holofoil' && (
+                                    <span style={{
+                                      position: 'absolute',
+                                      top: '4px',
+                                      right: '4px',
+                                      background: 'rgba(217, 119, 6, 0.95)',
+                                      color: '#fff',
+                                      fontSize: '0.55rem',
+                                      fontWeight: 900,
+                                      letterSpacing: '0.05em',
+                                      padding: '1px 4px',
+                                      borderRadius: '3px',
+                                      zIndex: 10,
+                                      boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+                                      textTransform: 'uppercase'
+                                    }}>Holo</span>
+                                  )}
+                                  {card.printing === 'Reverse Holofoil' && (
+                                    <span style={{
+                                      position: 'absolute',
+                                      top: '4px',
+                                      right: '4px',
+                                      background: 'rgba(75, 85, 99, 0.95)',
+                                      color: '#fff',
+                                      fontSize: '0.55rem',
+                                      fontWeight: 900,
+                                      letterSpacing: '0.05em',
+                                      padding: '1px 4px',
+                                      borderRadius: '3px',
+                                      zIndex: 10,
+                                      boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+                                      textTransform: 'uppercase'
+                                    }}>Rev Holo</span>
+                                  )}
                                   <div style={{
                                     position: 'absolute',
                                     bottom: 0, left: 0, right: 0,
