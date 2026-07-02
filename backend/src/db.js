@@ -213,6 +213,44 @@ async function initDb() {
     await run(`ALTER TABLE locations ADD COLUMN max_capacity INTEGER DEFAULT 1000`);
   }
 
+  // Add position column to collection table if missing
+  if (!collectionCols.some(c => c.name === 'position')) {
+    console.log('Adding position column to collection table...');
+    await run(`ALTER TABLE collection ADD COLUMN position REAL DEFAULT 0`);
+
+    // Migrate existing collection records to positions
+    console.log('Migrating existing coordinates to position indices...');
+    const existingCards = await all(`
+      SELECT c.id, c.sub_location_1, c.sub_location_2, l.type as location_type, l.page_style
+      FROM collection c
+      LEFT JOIN locations l ON c.location_id = l.id
+      WHERE c.location_id IS NOT NULL
+    `);
+
+    for (const card of existingCards) {
+      let pageNum = parseInt((card.sub_location_1 || '').replace(/\D/g, ''), 10) || 0;
+      let slotNum = parseInt((card.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
+      
+      let index = 0;
+      if (card.location_type === 'Binder' || card.location_type === 'Toploader Binder') {
+        const pocketsCount = card.page_style === '2x2' ? 4 : card.page_style === '3x4' ? 12 : 9;
+        if (pageNum > 0 && slotNum > 0) {
+          index = (pageNum - 1) * pocketsCount + (slotNum - 1);
+        }
+      } else if (card.location_type === 'Box' || card.location_type === 'Toploader Box' || card.location_type === 'Graded Slab Box' || card.location_type === 'Display Shelf / Stand') {
+        if (pageNum > 0 && slotNum > 0) {
+          index = (pageNum - 1) * 40 + (slotNum - 1);
+        }
+      } else {
+        index = slotNum - 1;
+      }
+      if (index < 0) index = 0;
+      const position = index * 1000;
+      await run(`UPDATE collection SET position = ? WHERE id = ?`, [position, card.id]);
+    }
+    console.log('Migration of coordinates to position indices completed.');
+  }
+
   // 3. Remove UNIQUE constraint on locations name per user (optional, but let's make sure it's not unique across users)
   // SQLite doesn't easily support dropping constraints, but we can manage name checking in routes.
 

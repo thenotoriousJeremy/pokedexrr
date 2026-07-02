@@ -537,6 +537,7 @@ app.get('/api/collection', authenticateToken, async (req, res) => {
         c.purchase_price,
         c.sub_location_1,
         c.sub_location_2,
+        c.position,
         c.added_at,
         c.is_trade,
         c.list_type,
@@ -587,7 +588,8 @@ app.post('/api/collection', authenticateToken, async (req, res) => {
     sub_location_1 = '',
     sub_location_2 = '',
     list_type = 'collection',
-    is_trade = 0
+    is_trade = 0,
+    position
   } = req.body;
 
   if (!card_id) {
@@ -640,10 +642,20 @@ app.post('/api/collection', authenticateToken, async (req, res) => {
       `, [newQuantity, existing.id]);
       lastInsertedId = existing.id;
     } else {
+      let finalPosition = position;
+      if (finalPosition === undefined) {
+        if (location_id) {
+          const maxRow = await db.get(`SELECT MAX(position) as maxPos FROM collection WHERE location_id = ? AND user_id = ?`, [location_id, req.user.id]);
+          finalPosition = maxRow && maxRow.maxPos !== null ? maxRow.maxPos + 1000 : 1000;
+        } else {
+          finalPosition = 0;
+        }
+      }
+
       const result = await db.run(`
         INSERT INTO collection 
-        (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, user_id, list_type, is_trade)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, user_id, list_type, is_trade, position)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         card_id,
         quantity,
@@ -656,7 +668,8 @@ app.post('/api/collection', authenticateToken, async (req, res) => {
         sub_location_2 || null,
         req.user.id,
         list_type,
-        is_trade ? 1 : 0
+        is_trade ? 1 : 0,
+        finalPosition
       ]);
       lastInsertedId = result.lastID;
     }
@@ -686,7 +699,8 @@ app.put('/api/collection/:id', authenticateToken, async (req, res) => {
     sub_location_1,
     sub_location_2,
     list_type,
-    is_trade
+    is_trade,
+    position
   } = req.body;
 
   try {
@@ -707,39 +721,6 @@ app.put('/api/collection/:id', authenticateToken, async (req, res) => {
     const finalLocId = location_id !== undefined ? location_id : entry.location_id;
     const finalSub1 = sub_location_1 !== undefined ? sub_location_1 : entry.sub_location_1;
     const finalSub2 = sub_location_2 !== undefined ? sub_location_2 : entry.sub_location_2;
-
-    if (finalLocId && finalSub1 && finalSub2) {
-      const loc = await db.get(`SELECT type FROM locations WHERE id = ? AND user_id = ?`, [finalLocId, req.user.id]);
-      if (loc && (loc.type === 'Box' || loc.type === 'Toploader Box')) {
-        const targetSeq = parseInt((finalSub2 || '').replace(/\D/g, ''), 10) || 0;
-        if (targetSeq > 0) {
-          // Shift subsequent cards
-          const cardsInRow = await db.all(`
-            SELECT id, sub_location_2 
-            FROM collection 
-            WHERE location_id = ? AND sub_location_1 = ? AND user_id = ? AND id != ?
-          `, [finalLocId, finalSub1, req.user.id, id]);
-
-          const cardsToShift = cardsInRow.filter(c => {
-            const seq = parseInt((c.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
-            return seq >= targetSeq;
-          }).sort((a, b) => {
-            const seqA = parseInt((a.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
-            const seqB = parseInt((b.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
-            return seqB - seqA;
-          });
-
-          for (const card of cardsToShift) {
-            const seq = parseInt((card.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
-            await db.run(`
-              UPDATE collection 
-              SET sub_location_2 = ? 
-              WHERE id = ?
-            `, [`Section ${seq + 1}`, card.id]);
-          }
-        }
-      }
-    }
 
     // Compute what the final values would be after this update
     const finalQuantity = quantity !== undefined ? parseInt(quantity, 10) : entry.quantity;
@@ -790,6 +771,7 @@ app.put('/api/collection/:id', authenticateToken, async (req, res) => {
     if (sub_location_2 !== undefined) { fields.push('sub_location_2 = ?'); params.push(sub_location_2); }
     if (list_type !== undefined) { fields.push('list_type = ?'); params.push(list_type); }
     if (is_trade !== undefined) { fields.push('is_trade = ?'); params.push(is_trade ? 1 : 0); }
+    if (position !== undefined) { fields.push('position = ?'); params.push(position); }
 
     if (fields.length === 0) {
       return res.status(400).json({ error: 'No fields provided for update' });

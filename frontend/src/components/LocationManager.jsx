@@ -181,6 +181,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             location_id: activeLocationId,
             sub_location_1: `Page ${pageNum}`,
             sub_location_2: `Slot ${slotNum}`,
+            position: targetCard.position || 0,
             quantity: sourceCard.quantity,
             condition: sourceCard.condition,
             printing: sourceCard.printing,
@@ -198,6 +199,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             location_id: sourceCard.location_id ? sourceCard.location_id : null,
             sub_location_1: sourceCard.sub_location_1 ? sourceCard.sub_location_1 : null,
             sub_location_2: sourceCard.sub_location_2 ? sourceCard.sub_location_2 : null,
+            position: sourceCard.position || 0,
             quantity: targetCard.quantity,
             condition: targetCard.condition,
             printing: targetCard.printing,
@@ -224,6 +226,39 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     } else {
       // Move card to empty slot
       try {
+        const pocketsCount = selectedLoc?.page_style === '2x2' ? 4 : selectedLoc?.page_style === '3x4' ? 12 : 9;
+        const targetSlotIndex = (pageNum - 1) * pocketsCount + (slotNum - 1);
+        const otherCards = locationCards.filter(c => c.entry_id !== sourceCard.entry_id);
+
+        let prevCard = null;
+        let nextCard = null;
+
+        otherCards.forEach(c => {
+          const p = getPageNum(c.sub_location_1);
+          const s = getSlotNum(c.sub_location_2);
+          const idx = (p - 1) * pocketsCount + (s - 1);
+          
+          if (idx < targetSlotIndex) {
+            if (!prevCard || idx > (getPageNum(prevCard.sub_location_1) - 1) * pocketsCount + (getSlotNum(prevCard.sub_location_2) - 1)) {
+              prevCard = c;
+            }
+          }
+          if (idx > targetSlotIndex) {
+            if (!nextCard || idx < (getPageNum(nextCard.sub_location_1) - 1) * pocketsCount + (getSlotNum(nextCard.sub_location_2) - 1)) {
+              nextCard = c;
+            }
+          }
+        });
+
+        let pos = 1000;
+        if (prevCard && nextCard) {
+          pos = (prevCard.position + nextCard.position) / 2;
+        } else if (prevCard) {
+          pos = prevCard.position + 1000;
+        } else if (nextCard) {
+          pos = nextCard.position / 2;
+        }
+
         const response = await fetch(`/api/collection/${sourceCard.entry_id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -231,6 +266,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             location_id: activeLocationId,
             sub_location_1: `Page ${pageNum}`,
             sub_location_2: `Slot ${slotNum}`,
+            position: pos,
             quantity: sourceCard.quantity,
             condition: sourceCard.condition,
             printing: sourceCard.printing,
@@ -306,6 +342,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           location_id: targetLoc.id,
           sub_location_1: sub1,
           sub_location_2: sub2,
+          position: (targetCards.length > 0 ? Math.max(...targetCards.map(c => c.position || 0)) : 0) + 1000,
           quantity: sourceCard ? sourceCard.quantity : 1,
           condition: sourceCard ? sourceCard.condition : 'NM',
           printing: sourceCard ? sourceCard.printing : 'Standard',
@@ -342,7 +379,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     const existingInRow = locationCards.filter(c => c.sub_location_1 === rowName);
     const targetSeq = existingInRow.length + 1;
     
-    await moveCardToLocation(entryId, activeLocationId, rowName, `Section ${targetSeq}`);
+    const lastCard = existingInRow[existingInRow.length - 1];
+    const newPos = lastCard ? lastCard.position + 1000 : 1000;
+
+    await moveCardToLocation(entryId, activeLocationId, rowName, `Section ${targetSeq}`, newPos);
     setActiveMoveCard(null);
   };
 
@@ -655,6 +695,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                               location_id: selectedLoc.id,
                               sub_location_1: card.sub_location_1,
                               sub_location_2: card.sub_location_2,
+                              position: card.position || 0,
                               quantity: activeMoveCard.quantity,
                               condition: activeMoveCard.condition,
                               printing: activeMoveCard.printing,
@@ -671,6 +712,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                               location_id: activeMoveCard.location_id || null,
                               sub_location_1: activeMoveCard.sub_location_1 || '',
                               sub_location_2: activeMoveCard.sub_location_2 || '',
+                              position: activeMoveCard.position || 0,
                               quantity: card.quantity,
                               condition: card.condition,
                               printing: card.printing,
@@ -935,32 +977,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         // Filter by selected location id
         const filtered = allCards.filter(c => c.location_id === locId);
         
-        // Sort cards depending on type
-        const loc = locations.find(l => l.id === locId);
-        if (loc && loc.type === 'Binder') {
-          // Sort by Page and Slot numerically
-          filtered.sort((a, b) => {
-            const pageA = parseInt((a.sub_location_1 || '').replace(/\D/g, ''), 10) || 0;
-            const pageB = parseInt((b.sub_location_1 || '').replace(/\D/g, ''), 10) || 0;
-            if (pageA !== pageB) return pageA - pageB;
-            
-            const slotA = parseInt((a.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
-            const slotB = parseInt((b.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
-            return slotA - slotB;
-          });
-        } else {
-          // Sort by Row (sub1) and Category (sub2)
-          filtered.sort((a, b) => {
-            const rowA = a.sub_location_1 || '';
-            const rowB = b.sub_location_1 || '';
-            const compareRows = rowA.localeCompare(rowB, undefined, { numeric: true });
-            if (compareRows !== 0) return compareRows;
-            
-            const secA = a.sub_location_2 || '';
-            const secB = b.sub_location_2 || '';
-            return secA.localeCompare(secB);
-          });
-        }
+        // Sort cards by position float value
+        filtered.sort((a, b) => (a.position || 0) - (b.position || 0));
         
         setLocationCards(filtered);
       }
@@ -1006,27 +1024,33 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     e.dataTransfer.setData('card_entry_id', card.entry_id.toString());
   };
 
-  const moveCardToLocation = async (cardEntryId, locationId, sub1, sub2) => {
+  const moveCardToLocation = async (cardEntryId, locationId, sub1, sub2, position) => {
     try {
       const targetCard = unsortedCards.find(c => c.entry_id == cardEntryId) || 
                          locationCards.find(c => c.entry_id == cardEntryId);
       if (!targetCard) return;
 
+      const body = {
+        location_id: locationId,
+        sub_location_1: sub1,
+        sub_location_2: sub2,
+        quantity: targetCard.quantity,
+        condition: targetCard.condition,
+        printing: targetCard.printing,
+        language: targetCard.language,
+        purchase_price: targetCard.purchase_price || 0,
+        is_trade: targetCard.is_trade || 0,
+        list_type: targetCard.list_type || 'collection'
+      };
+
+      if (position !== undefined) {
+        body.position = position;
+      }
+
       const response = await fetch(`/api/collection/${cardEntryId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          location_id: locationId,
-          sub_location_1: sub1,
-          sub_location_2: sub2,
-          quantity: targetCard.quantity,
-          condition: targetCard.condition,
-          printing: targetCard.printing,
-          language: targetCard.language,
-          purchase_price: targetCard.purchase_price || 0,
-          is_trade: targetCard.is_trade || 0,
-          list_type: targetCard.list_type || 'collection'
-        })
+        body: JSON.stringify(body)
       });
 
       if (response.ok) {
@@ -1146,6 +1170,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           location_id: locId,
           sub_location_1: sub1,
           sub_location_2: sub2,
+          position: locId ? (index + 1) * 1000 : 0,
           quantity: card.quantity,
           condition: card.condition,
           printing: card.printing,
@@ -1200,6 +1225,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             location_id: activeLocationId,
             sub_location_1: `Page ${targetPageNum}`,
             sub_location_2: `Slot ${targetSlot}`,
+            position: targetCard.position || 0,
             quantity: sourceCard.quantity,
             condition: sourceCard.condition,
             printing: sourceCard.printing,
@@ -1217,6 +1243,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             location_id: sourceCard.location_id ? sourceCard.location_id : null,
             sub_location_1: sourceCard.sub_location_1 ? sourceCard.sub_location_1 : null,
             sub_location_2: sourceCard.sub_location_2 ? sourceCard.sub_location_2 : null,
+            position: sourceCard.position || 0,
             quantity: targetCard.quantity,
             condition: targetCard.condition,
             printing: targetCard.printing,
@@ -1241,6 +1268,39 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       }
     } else {
       try {
+        const pocketsCount = selectedLoc?.page_style === '2x2' ? 4 : selectedLoc?.page_style === '3x4' ? 12 : 9;
+        const targetSlotIndex = (targetPageNum - 1) * pocketsCount + (targetSlot - 1);
+        const otherCards = locationCards.filter(c => c.entry_id !== sourceCard.entry_id);
+
+        let prevCard = null;
+        let nextCard = null;
+
+        otherCards.forEach(c => {
+          const p = getPageNum(c.sub_location_1);
+          const s = getSlotNum(c.sub_location_2);
+          const idx = (p - 1) * pocketsCount + (s - 1);
+          
+          if (idx < targetSlotIndex) {
+            if (!prevCard || idx > (getPageNum(prevCard.sub_location_1) - 1) * pocketsCount + (getSlotNum(prevCard.sub_location_2) - 1)) {
+              prevCard = c;
+            }
+          }
+          if (idx > targetSlotIndex) {
+            if (!nextCard || idx < (getPageNum(nextCard.sub_location_1) - 1) * pocketsCount + (getSlotNum(nextCard.sub_location_2) - 1)) {
+              nextCard = c;
+            }
+          }
+        });
+
+        let pos = 1000;
+        if (prevCard && nextCard) {
+          pos = (prevCard.position + nextCard.position) / 2;
+        } else if (prevCard) {
+          pos = prevCard.position + 1000;
+        } else if (nextCard) {
+          pos = nextCard.position / 2;
+        }
+
         const response = await fetch(`/api/collection/${sourceCard.entry_id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -1248,6 +1308,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             location_id: activeLocationId,
             sub_location_1: `Page ${targetPageNum}`,
             sub_location_2: `Slot ${targetSlot}`,
+            position: pos,
             quantity: sourceCard.quantity,
             condition: sourceCard.condition,
             printing: sourceCard.printing,
@@ -1283,7 +1344,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     const existingInRow = locationCards.filter(c => c.sub_location_1 === rowName);
     const targetSeq = existingInRow.length + 1;
     
-    await moveCardToLocation(entryId, selectedLoc.id, rowName, `Section ${targetSeq}`);
+    const lastCard = existingInRow[existingInRow.length - 1];
+    const newPos = lastCard ? lastCard.position + 1000 : 1000;
+    
+    await moveCardToLocation(entryId, selectedLoc.id, rowName, `Section ${targetSeq}`, newPos);
   };
 
 
@@ -1686,6 +1750,25 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             ) : (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') ? (
               /* Binder Double Page Book Visualizer (Left & Right Pages side-by-side) */
               (() => {
+                const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
+                
+                // Calculate virtual indices dynamically
+                const virtualIndices = new Map();
+                let currentSlot = 0;
+                locationCards.forEach((card, i) => {
+                  if (i === 0) {
+                    const p = parseInt((card.sub_location_1 || '').replace(/\D/g, ''), 10) || 1;
+                    const s = parseInt((card.sub_location_2 || '').replace(/\D/g, ''), 10) || 1;
+                    currentSlot = Math.max(0, (p - 1) * pocketsCount + (s - 1));
+                  } else {
+                    const prev = locationCards[i - 1];
+                    const diff = card.position - prev.position;
+                    const gap = Math.max(0, Math.floor(diff / 1000) - 1);
+                    currentSlot = currentSlot + 1 + gap;
+                  }
+                  virtualIndices.set(card.entry_id, currentSlot);
+                });
+
                 const leftPageNum = 2 * Math.floor((selectedPage - 1) / 2) + 1;
                 const rightPageNum = leftPageNum + 1;
 
@@ -1721,10 +1804,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                   <ChevronRight size={12} />
                                 </button>
                               )}
+                              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                               {locationCards.filter(c => Math.floor((virtualIndices.get(c.entry_id) ?? -100) / pocketsCount) + 1 === pageNum).length} Card(s)
+                             </span>
                             </div>
-                            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                              {locationCards.filter(c => getPageNum(c.sub_location_1) === pageNum).length} Card(s)
-                            </span>
                           </div>
 
                           <div style={{
@@ -1737,7 +1820,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                             boxShadow: 'inset 0 4px 15px rgba(0,0,0,0.6)'
                           }}>
                             {Array.from({ length: pocketsCount }, (_, i) => i + 1).map(slotNum => {
-                          const slotCards = locationCards.filter(c => getPageNum(c.sub_location_1) === pageNum && getSlotNum(c.sub_location_2) === slotNum);
+                          const targetSlotIndex = (pageNum - 1) * pocketsCount + (slotNum - 1);
+                          const slotCards = locationCards.filter(c => virtualIndices.get(c.entry_id) === targetSlotIndex);
                           const card = slotCards[0];
                           const isTargetable = !!activeMoveCard;
 
