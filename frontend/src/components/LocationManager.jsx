@@ -1083,16 +1083,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           const cmpSet = setA.localeCompare(setB);
           if (cmpSet !== 0) return cmpSet;
 
+          const printA = PRINTING_ORDER[a.printing] || 10;
+          const printB = PRINTING_ORDER[b.printing] || 10;
+          if (printA !== printB) return printA - printB;
+
           const numA = parseInt(a.number || '0', 10) || 0;
           const numB = parseInt(b.number || '0', 10) || 0;
           if (numA !== numB) return numA - numB;
 
           const cmpNum = (a.number || '').localeCompare(b.number || '');
           if (cmpNum !== 0) return cmpNum;
-
-          const printA = PRINTING_ORDER[a.printing] || 10;
-          const printB = PRINTING_ORDER[b.printing] || 10;
-          if (printA !== printB) return printA - printB;
 
           return a.name.localeCompare(b.name);
         });
@@ -1458,263 +1458,134 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     const getPageNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
     const getSlotNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
 
+    if (sortingPref !== 'custom') {
+      const combined = [...locationCards];
+      const exists = combined.some(c => c.entry_id === card.entry_id);
+      if (!exists) {
+        combined.push(card);
+      }
+
+      if (sortingPref === 'name-asc') {
+        combined.sort((a, b) => a.name.localeCompare(b.name));
+      } else if (sortingPref === 'price-desc') {
+        combined.sort((a, b) => (b.price_trend || 0) - (a.price_trend || 0));
+      } else if (sortingPref === 'set-number') {
+        combined.sort((a, b) => {
+          const cmpSet = (a.set_name || '').localeCompare(b.set_name || '');
+          if (cmpSet !== 0) return cmpSet;
+          const numA = parseInt(a.number || '0', 10) || 0;
+          const numB = parseInt(b.number || '0', 10) || 0;
+          if (numA !== numB) return numA - numB;
+          return (a.number || '').localeCompare(b.number || '');
+        });
+      } else if (sortingPref === 'set-number-printing') {
+        combined.sort((a, b) => {
+          const setA = a.set_name || '';
+          const setB = b.set_name || '';
+          const cmpSet = setA.localeCompare(setB);
+          if (cmpSet !== 0) return cmpSet;
+
+          const printA = PRINTING_ORDER[a.printing] || 10;
+          const printB = PRINTING_ORDER[b.printing] || 10;
+          if (printA !== printB) return printA - printB;
+
+          const numA = parseInt(a.number || '0', 10) || 0;
+          const numB = parseInt(b.number || '0', 10) || 0;
+          if (numA !== numB) return numA - numB;
+
+          const cmpNum = (a.number || '').localeCompare(b.number || '');
+          if (cmpNum !== 0) return cmpNum;
+
+          return a.name.localeCompare(b.name);
+        });
+      } else if (sortingPref === 'type-name') {
+        combined.sort((a, b) => {
+          const typeA = (a.types && a.types[0]) || 'Unknown';
+          const typeB = (b.types && b.types[0]) || 'Unknown';
+          const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
+          const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
+          if (orderA !== orderB) return orderA - orderB;
+          return a.name.localeCompare(b.name);
+        });
+      }
+
+      const targetIndex = combined.findIndex(c => c.entry_id === card.entry_id);
+      if (targetIndex !== -1) {
+        if (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') {
+          const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
+          const maxP = selectedLoc.max_pages || 30;
+          const page = Math.floor(targetIndex / pocketsCount) + 1;
+          const slot = (targetIndex % pocketsCount) + 1;
+
+          if (page <= maxP) {
+            return {
+              sub1: `Page ${page}`,
+              sub2: `Slot ${slot}`,
+              label: `Page ${page}, Slot ${slot}`
+            };
+          }
+        } else if (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand') {
+          const maxRows = selectedLoc.max_rows || 3;
+          const rowNum = Math.floor(targetIndex / 40) + 1;
+          const seq = (targetIndex % 40) + 1;
+
+          if (rowNum <= maxRows) {
+            return {
+              sub1: `Row ${rowNum}`,
+              sub2: String(seq),
+              label: `Row ${rowNum}, Pos ${seq}`
+            };
+          }
+        }
+      }
+    }
+
     const occupied = new Set();
-    if (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') {
-      locationCards.forEach(c => {
+    locationCards.forEach(c => {
+      if (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') {
         const p = getPageNum(c.sub_location_1);
         const s = getSlotNum(c.sub_location_2);
-        if (p > 0 && s > 0) {
-          occupied.add(`${p}-${s}`);
+        if (p > 0 && s > 0) occupied.add(`${p}-${s}`);
+      } else {
+        if (c.sub_location_1 && c.sub_location_2) {
+          occupied.add(`${c.sub_location_1}-${c.sub_location_2}`);
         }
-      });
-    }
+      }
+    });
 
     if (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') {
       const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
       const maxP = selectedLoc.max_pages || 30;
-      
-      let targetStartPage = 1;
-      let targetEndPage = maxP;
-      let isHoloPrioritized = false;
-
-      if (card) {
-        if (sortingPref === 'type-name') {
-          const energyRanges = config.energyRanges || {
-            'Grass': 1, 'Fire': 4, 'Water': 7, 'Lightning': 10, 'Psychic': 13,
-            'Fighting': 16, 'Darkness': 19, 'Metal': 22, 'Dragon': 25, 'Colorless': 27, 'Trainers': 29
-          };
-          const cardType = (card.types && card.types[0]) || 'Colorless';
-          const isTrainer = card.supertype === 'Trainer' || card.set_name?.toLowerCase().includes('trainer');
-          const typeKey = isTrainer ? 'Trainers' : cardType;
-          
-          targetStartPage = energyRanges[typeKey] || 1;
-          const nextStartPage = Object.values(energyRanges)
-            .filter(v => v > targetStartPage)
-            .sort((a, b) => a - b)[0] || (maxP + 1);
-          targetEndPage = Math.min(maxP, nextStartPage - 1);
-        } 
-        else if (sortingPref === 'name-asc') {
-          const defaultAlphaGroups = ["A-C", "D-F", "G-I", "J-L", "M-O", "P-R", "S-U", "V-Z"];
-          const customAlphaGroups = config.alphabetGroups || defaultAlphaGroups;
-          
-          const firstChar = card.name ? card.name.charAt(0).toUpperCase() : 'A';
-          let groupIdx = 0;
-          customAlphaGroups.forEach((group, idx) => {
-            if (!group) return;
-            const parts = group.split('-');
-            const start = parts[0] || 'A';
-            const end = parts[1] || 'Z';
-            if (firstChar >= start && firstChar <= end) {
-              groupIdx = idx;
-            }
-          });
-          
-          const pagesPerGroup = Math.max(1, Math.floor(maxP / customAlphaGroups.length));
-          targetStartPage = 1 + groupIdx * pagesPerGroup;
-          targetEndPage = Math.min(maxP, targetStartPage + pagesPerGroup - 1);
-        }
-        else if (sortingPref === 'price-desc') {
-          const thresholdHigh = parseFloat(config.priceHigh) || 20;
-          const thresholdMid = parseFloat(config.priceMid) || 5;
-          const cardPrice = parseFloat(card.price_trend) || 0;
-
-          if (cardPrice >= thresholdHigh) {
-            targetStartPage = 1;
-            targetEndPage = 1;
-          } else if (cardPrice >= thresholdMid) {
-            targetStartPage = 2;
-            targetEndPage = Math.min(5, maxP);
-          } else {
-            targetStartPage = Math.min(6, maxP);
-            targetEndPage = maxP;
-          }
-        }
-        else if (sortingPref === 'set-number') {
-          const sameSetCards = locationCards.filter(c => c.set_name === card.set_name);
-          if (sameSetCards.length > 0) {
-            const pages = sameSetCards.map(c => getPageNum(c.sub_location_1)).filter(p => p > 0);
-            if (pages.length > 0) {
-              targetStartPage = Math.min(...pages);
-              targetEndPage = Math.max(...pages);
-            }
-          } else {
-            const pageOccupancies = {};
-            locationCards.forEach(c => {
-              const p = getPageNum(c.sub_location_1);
-              if (p > 0) {
-                pageOccupancies[p] = (pageOccupancies[p] || 0) + 1;
-              }
-            });
-            for (let p = 1; p <= maxP; p++) {
-              if (!pageOccupancies[p]) {
-                targetStartPage = p;
-                targetEndPage = p;
-                break;
-              }
-            }
-          }
-        }
-        else if (sortingPref === 'set-number-printing') {
-          // Same logic as set-number: group by set, then within the set
-          // the slot order will be by number then printing variant
-          const sameSetCards = locationCards.filter(c => c.set_name === card.set_name);
-          if (sameSetCards.length > 0) {
-            const pages = sameSetCards.map(c => getPageNum(c.sub_location_1)).filter(p => p > 0);
-            if (pages.length > 0) {
-              targetStartPage = Math.min(...pages);
-              targetEndPage = Math.max(...pages);
-            }
-          } else {
-            // Find first empty page for a new set
-            const pageOccupancies = {};
-            locationCards.forEach(c => {
-              const p = getPageNum(c.sub_location_1);
-              if (p > 0) {
-                pageOccupancies[p] = (pageOccupancies[p] || 0) + 1;
-              }
-            });
-            for (let p = 1; p <= maxP; p++) {
-              if (!pageOccupancies[p]) {
-                targetStartPage = p;
-                targetEndPage = p;
-                break;
-              }
-            }
-          }
-
-          // Within the target pages, try to place the card next to its numeric neighbor
-          // by finding where this card's number would slot in
-          if (sameSetCards.length > 0) {
-            const cardNum = parseInt(card.number || '0', 10) || 0;
-            // Find the card with the closest number that's <= this card
-            const sorted = sameSetCards
-              .map(c => ({ page: getPageNum(c.sub_location_1), slot: getSlotNum(c.sub_location_2), num: parseInt(c.number || '0', 10) || 0 }))
-              .filter(c => c.page > 0)
-              .sort((a, b) => a.num - b.num);
-            
-            // Try to place on the same page as the closest numbered card
-            const closest = sorted.filter(c => c.num <= cardNum).pop() || sorted[0];
-            if (closest) {
-              targetStartPage = closest.page;
-              targetEndPage = closest.page;
-            }
-          }
-        }
-      }
-
-      for (let p = targetStartPage; p <= targetEndPage; p++) {
-        for (let s = 1; s <= pocketsCount; s++) {
-          if (!occupied.has(`${p}-${s}`)) {
-            return { sub1: `Page ${p}`, sub2: `Slot ${s}`, label: `Page ${p}, Slot ${s}` };
-          }
-        }
-      }
-      
       for (let p = 1; p <= maxP; p++) {
         for (let s = 1; s <= pocketsCount; s++) {
           if (!occupied.has(`${p}-${s}`)) {
-            return { sub1: `Page ${p}`, sub2: `Slot ${s}`, label: `Page ${p}, Slot ${s} (Fallback)` };
+            return { sub1: `Page ${p}`, sub2: `Slot ${s}`, label: `Page ${p}, Slot ${s} (Next Empty)` };
           }
         }
       }
-      return null;
-    } 
-    else if (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box') {
-      let recommendedRow = newBoxRowName || 'Row 1';
-
-      if (card) {
-        if (sortingPref === 'type-name') {
-          const cardType = (card.types && card.types[0]) || 'Colorless';
-          const isTrainer = card.supertype === 'Trainer' || card.set_name?.toLowerCase().includes('trainer');
-          const typeKey = isTrainer ? 'Trainer' : cardType;
-          
-          const existingRows = Array.from(new Set([
-            'Row 1', 'Row 2', 'Row 3',
-            ...locationCards.map(c => c.sub_location_1 || 'Row 1')
-          ]));
-          
-          const matchedRow = existingRows.find(r => r.toLowerCase().includes(typeKey.toLowerCase()));
-          if (matchedRow) {
-            recommendedRow = matchedRow;
-          }
-        }
-        else if (sortingPref === 'name-asc') {
-          const firstChar = card.name ? card.name.charAt(0).toUpperCase() : 'A';
-          const existingRows = Array.from(new Set([
-            'Row 1', 'Row 2', 'Row 3',
-            ...locationCards.map(c => c.sub_location_1 || 'Row 1')
-          ])).sort();
-
-          if (existingRows.length > 0) {
-            const charsPerRow = Math.max(1, Math.floor(26 / existingRows.length));
-            const charCode = firstChar.charCodeAt(0) - 65; 
-            const rowIdx = Math.min(existingRows.length - 1, Math.floor(charCode / charsPerRow));
-            recommendedRow = existingRows[rowIdx];
-          }
-        }
-        else if (sortingPref === 'price-desc') {
-          const thresholdHigh = parseFloat(config.priceHigh) || 20;
-          const thresholdMid = parseFloat(config.priceMid) || 5;
-          const cardPrice = parseFloat(card.price_trend) || 0;
-          
-          const existingRows = Array.from(new Set([
-            'Row 1', 'Row 2', 'Row 3',
-            ...locationCards.map(c => c.sub_location_1 || 'Row 1')
-          ])).sort();
-
-          if (existingRows.length >= 3) {
-            if (cardPrice >= thresholdHigh) recommendedRow = existingRows[0]; 
-            else if (cardPrice >= thresholdMid) recommendedRow = recommendedRow = existingRows[1]; 
-            else recommendedRow = existingRows[2]; 
-          }
-        }
-        else if (sortingPref === 'set-number') {
-          const sameSetCards = locationCards.filter(c => c.set_name === card.set_name);
-          if (sameSetCards.length > 0 && sameSetCards[0].sub_location_1) {
-            recommendedRow = sameSetCards[0].sub_location_1;
-          } else {
-            const existingRows = Array.from(new Set([
-              ...locationCards.map(c => c.sub_location_1)
-            ])).filter(Boolean);
-            const matchedRow = existingRows.find(r => r.toLowerCase().includes((card.set_name || '').toLowerCase()));
-            if (matchedRow) {
-              recommendedRow = matchedRow;
-            }
-          }
-        }
-        else if (sortingPref === 'set-number-printing') {
-          // Same as set-number: group by set into same row
-          const sameSetCards = locationCards.filter(c => c.set_name === card.set_name);
-          if (sameSetCards.length > 0 && sameSetCards[0].sub_location_1) {
-            recommendedRow = sameSetCards[0].sub_location_1;
-          } else {
-            const existingRows = Array.from(new Set([
-              ...locationCards.map(c => c.sub_location_1)
-            ])).filter(Boolean);
-            const matchedRow = existingRows.find(r => r.toLowerCase().includes((card.set_name || '').toLowerCase()));
-            if (matchedRow) {
-              recommendedRow = matchedRow;
-            }
-          }
+    } else if (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand') {
+      const maxRows = selectedLoc.max_rows || 3;
+      for (let r = 1; r <= maxRows; r++) {
+        const rowName = `Row ${r}`;
+        const existingInRow = locationCards.filter(c => c.sub_location_1 === rowName);
+        if (existingInRow.length < 40) {
+          const nextSeq = existingInRow.length + 1;
+          return { sub1: rowName, sub2: String(nextSeq), label: `${rowName}, Pos ${nextSeq}` };
         }
       }
-
-      const existingInRow = locationCards.filter(c => c.sub_location_1 === recommendedRow);
-      const nextSeq = existingInRow.length + 1;
-      return { sub1: recommendedRow, sub2: `Section ${nextSeq}`, label: `${recommendedRow}, Section ${nextSeq}` };
-    } 
-    else {
+    } else {
       if (selectedLoc.type === 'Deck Box') {
         const targetDeckSize = parseInt(config.targetDeckSize, 10) || 60;
         const currentCount = locationCards.reduce((acc, c) => acc + c.quantity, 0);
         if (currentCount >= targetDeckSize) {
-          return { sub1: 'Compartment 1', sub2: `Slot ${locationCards.length + 1}`, label: `Slot ${locationCards.length + 1} (DECK EXCEEDS TARGET SIZE)` };
+          return { sub1: 'Compartment 1', sub2: `Slot ${locationCards.length + 1}`, label: `Slot ${locationCards.length + 1} (DECK EXCEEDS TARGET)` };
         }
       }
-
       const count = locationCards.length + 1;
       return { sub1: 'Compartment 1', sub2: `Slot ${count}`, label: `Slot ${count}` };
     }
+
+    return null;
   };
 
   const selectedLoc = locations.find(l => l.id === activeLocationId);
@@ -2159,16 +2030,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   const cmpSet = setA.localeCompare(setB);
                   if (cmpSet !== 0) return cmpSet;
 
+                  const printA = PRINTING_ORDER[a.printing] || 10;
+                  const printB = PRINTING_ORDER[b.printing] || 10;
+                  if (printA !== printB) return printA - printB;
+
                   const numA = parseInt(a.number || '0', 10) || 0;
                   const numB = parseInt(b.number || '0', 10) || 0;
                   if (numA !== numB) return numA - numB;
 
                   const cmpNum = (a.number || '').localeCompare(b.number || '');
                   if (cmpNum !== 0) return cmpNum;
-
-                  const printA = PRINTING_ORDER[a.printing] || 10;
-                  const printB = PRINTING_ORDER[b.printing] || 10;
-                  if (printA !== printB) return printA - printB;
 
                   return a.name.localeCompare(b.name);
                 }
@@ -2425,16 +2296,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     const cmpSet = setA.localeCompare(setB);
                     if (cmpSet !== 0) return cmpSet;
 
+                    const printA = PRINTING_ORDER[a.printing] || 10;
+                    const printB = PRINTING_ORDER[b.printing] || 10;
+                    if (printA !== printB) return printA - printB;
+
                     const numA = parseInt(a.number || '0', 10) || 0;
                     const numB = parseInt(b.number || '0', 10) || 0;
                     if (numA !== numB) return numA - numB;
 
                     const cmpNum = (a.number || '').localeCompare(b.number || '');
                     if (cmpNum !== 0) return cmpNum;
-
-                    const printA = PRINTING_ORDER[a.printing] || 10;
-                    const printB = PRINTING_ORDER[b.printing] || 10;
-                    if (printA !== printB) return printA - printB;
 
                     return a.name.localeCompare(b.name);
                   }
