@@ -694,7 +694,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               return (
                 <div
                   key={card.entry_id}
-                  className={`coverflow-card ${isSelected ? 'card-move-selecting' : ''}`}
+                  className={`coverflow-card tilt-card-wrapper ${isSelected ? 'card-move-selecting' : ''}`}
+                  onMouseMove={handleCardMouseMove}
+                  onMouseLeave={handleCardMouseLeave}
                   style={{
                     position: 'absolute',
                     width: '120px',
@@ -1794,18 +1796,42 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             </div>
 
             {selectedLoc.type === 'Binder' && viewMode === 'grid' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.5rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', width: 'fit-content' }}>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Binder Page:</span>
-                <select 
-                  className="select-control" 
-                  value={selectedPage} 
-                  onChange={(e) => setSelectedPage(parseInt(e.target.value, 10))}
-                  style={{ width: '100px', padding: '0.2rem 0.4rem', fontSize: '0.8rem' }}
-                >
-                  {Array.from({ length: selectedLoc.max_pages || 30 }, (_, i) => i + 1).map(p => (
-                    <option key={p} value={p}>Page {p}</option>
-                  ))}
-                </select>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem', width: '100%' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.4rem 0.8rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Binder Page:</span>
+                  <select 
+                    className="select-control" 
+                    value={selectedPage} 
+                    onChange={(e) => setSelectedPage(parseInt(e.target.value, 10))}
+                    style={{ width: '100px', padding: '0.2rem 0.4rem', fontSize: '0.8rem' }}
+                  >
+                    {Array.from({ length: selectedLoc.max_pages || 30 }, (_, i) => i + 1).map(p => (
+                      <option key={p} value={p}>Page {p}</option>
+                    ))}
+                  </select>
+                </div>
+                
+                {/* Highlight Search Bar */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: '220px' }}>
+                  <input
+                    type="text"
+                    className="input-control"
+                    placeholder="Search/Highlight cards on page..."
+                    value={visualizerSearch}
+                    onChange={(e) => setVisualizerSearch(e.target.value)}
+                    style={{ width: '100%', padding: '0.35rem 0.75rem', fontSize: '0.8rem', height: '32px' }}
+                  />
+                  {visualizerSearch && (
+                    <button 
+                      type="button" 
+                      className="btn btn-secondary btn-sm" 
+                      onClick={() => setVisualizerSearch('')}
+                      style={{ padding: '0.35rem 0.6rem', height: '32px', display: 'flex', alignItems: 'center' }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 
@@ -3152,6 +3178,108 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               >
                 Delete Container
               </button>
+            </div>
+        </div>
+      )}
+
+      {/* Stack Expansion Inspector Drawer */}
+      {inspectorStackSlot && (
+        <div className="stack-inspector-backdrop" onClick={() => setInspectorStackSlot(null)}>
+          <div className="stack-inspector-drawer" onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
+              <div>
+                <h3 style={{ fontSize: '0.95rem', fontWeight: 850, color: '#fff', margin: 0 }}>
+                  Duplicate Stack Inspector (Slot #{inspectorStackSlot.slotNum})
+                </h3>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                  Page {inspectorStackSlot.pageNum} • {inspectorStackSlot.cards.length} copies of {inspectorStackSlot.cards[0]?.name}
+                </span>
+              </div>
+              <button 
+                type="button" 
+                className="btn btn-secondary btn-icon-only" 
+                onClick={() => setInspectorStackSlot(null)}
+                style={{ width: '28px', height: '28px', borderRadius: '50%', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="stack-inspector-list">
+              {inspectorStackSlot.cards.map((c, i) => {
+                const rarityStyle = getCardRarityBorder(c.rarity);
+                return (
+                  <div key={c.entry_id} className="stack-inspector-item">
+                    {/* Card Thumbnail */}
+                    <div style={{ position: 'relative', width: '50px', aspectRatio: 0.718, flexShrink: 0 }}>
+                      <img src={c.image_url} alt={c.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px', border: rarityStyle.border }} />
+                      {c.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '4px' }} />}
+                      {c.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '4px' }} />}
+                    </div>
+
+                    {/* Card details */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 800, fontSize: '0.8rem', color: '#fff' }}>
+                          Copy #{i + 1} • {c.condition}
+                        </span>
+                        <span style={{
+                          fontSize: '0.55rem',
+                          background: c.printing === 'Holofoil' ? 'rgba(217, 119, 6, 0.95)' : c.printing === 'Reverse Holofoil' ? 'rgba(75, 85, 99, 0.95)' : 'rgba(255,255,255,0.05)',
+                          color: '#fff',
+                          padding: '1px 4px',
+                          borderRadius: '3px',
+                          fontWeight: 700,
+                          textTransform: 'uppercase'
+                        }}>
+                          {c.printing}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                        Value: <strong style={{ color: 'var(--accent-yellow)' }}>${(c.price_trend || 0).toFixed(2)}</strong> • Added: {c.added_at ? new Date(c.added_at).toLocaleDateString() : 'N/A'}
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div style={{ display: 'flex', gap: '0.35rem' }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => {
+                          setActiveMoveCard(c);
+                          setInspectorStackSlot(null);
+                          showToast(`Selected copy for relocation.`);
+                        }}
+                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.65rem' }}
+                      >
+                        Move
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-sm"
+                        onClick={async () => {
+                          if (window.confirm(`Delete this copy of ${c.name} from collection?`)) {
+                            const res = await fetch(`/api/collection/${c.entry_id}`, { method: 'DELETE' });
+                            if (res.ok) {
+                              showToast(`Removed copy`);
+                              const updatedCards = inspectorStackSlot.cards.filter(card => card.entry_id !== c.entry_id);
+                              if (updatedCards.length === 0) {
+                                setInspectorStackSlot(null);
+                              } else {
+                                setInspectorStackSlot({ ...inspectorStackSlot, cards: updatedCards });
+                              }
+                              onUpdate();
+                            }
+                          }
+                        }}
+                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.65rem' }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
