@@ -1483,6 +1483,22 @@ button, input, select, textarea {
   transition: opacity 0.3s ease, background-position 0.05s ease-out;
 }
 
+.holo-shine-overlay {
+  opacity: 0.35 !important;
+}
+
+.reverse-holo-shine-overlay {
+  opacity: 0.4 !important;
+}
+
+.tilt-card-wrapper:hover .holo-shine-overlay {
+  opacity: 0.95 !important;
+}
+
+.tilt-card-wrapper:hover .reverse-holo-shine-overlay {
+  opacity: 0.95 !important;
+}
+
 /* Dimming/Blur effect for visualizer search filtering */
 .visualizer-slot-dimmed {
   opacity: 0.15 !important;
