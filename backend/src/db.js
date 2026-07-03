@@ -284,6 +284,17 @@ async function initDb() {
     await run(`ALTER TABLE card_cache ADD COLUMN price_reverse_holofoil REAL`);
   }
 
+  // 6. Add checked_out columns to decks table if missing
+  const decksCols = await all(`PRAGMA table_info(decks)`);
+  if (!decksCols.some(c => c.name === 'checked_out')) {
+    console.log('Adding checked_out column to decks table...');
+    await run(`ALTER TABLE decks ADD COLUMN checked_out INTEGER DEFAULT 0`);
+  }
+  if (!decksCols.some(c => c.name === 'checked_out_at')) {
+    console.log('Adding checked_out_at column to decks table...');
+    await run(`ALTER TABLE decks ADD COLUMN checked_out_at DATETIME`);
+  }
+
   // --- SEED DATA & MIGRATION TO DEFAULT ADMIN ---
   const userCount = await get(`SELECT COUNT(*) as count FROM users`);
   let adminId = null;

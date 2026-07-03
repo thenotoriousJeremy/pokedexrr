@@ -1834,6 +1834,8 @@ app.get('/api/decks', authenticateToken, async (req, res) => {
         d.name,
         d.description,
         d.created_at,
+        d.checked_out,
+        d.checked_out_at,
         COUNT(dc.card_id) as total_card_types,
         COALESCE(SUM(dc.quantity), 0) as total_cards
       FROM decks d
@@ -2015,6 +2017,42 @@ app.delete('/api/decks/:id/cards/:card_id', authenticateToken, async (req, res) 
     res.json({ message: 'Card removed from deck successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to remove card from deck', message: error.message });
+  }
+});
+
+// 9. Checkout Deck (mark as in play)
+app.put('/api/decks/:id/checkout', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!deck) {
+      return res.status(404).json({ error: 'Deck not found or unauthorized' });
+    }
+    await db.run(
+      `UPDATE decks SET checked_out = 1, checked_out_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [id]
+    );
+    res.json({ message: 'Deck checked out successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to checkout deck', message: error.message });
+  }
+});
+
+// 10. Return Deck (mark as returned to storage)
+app.put('/api/decks/:id/return', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!deck) {
+      return res.status(404).json({ error: 'Deck not found or unauthorized' });
+    }
+    await db.run(
+      `UPDATE decks SET checked_out = 0, checked_out_at = NULL WHERE id = ?`,
+      [id]
+    );
+    res.json({ message: 'Deck returned to storage successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to return deck', message: error.message });
   }
 });
 

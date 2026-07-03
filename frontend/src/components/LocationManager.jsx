@@ -122,6 +122,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [newBoxRowName, setNewBoxRowName] = useState('');
   const [unsortedViewMode, setUnsortedViewMode] = useState('list'); // 'list' or 'assistant'
   const [assistantIndex, setAssistantIndex] = useState(0);
+  const [assistantHighlightRow, setAssistantHighlightRow] = useState(null); // NEW: highlighted row for box visualizer
   const [unsortedDateFilter, setUnsortedDateFilter] = useState('all');
   const [carouselTouchStartIndex, setCarouselTouchStartIndex] = useState(0);
   
@@ -651,6 +652,266 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   // ==========================================
   // CUSTOM PREMIUM CONTAINER VISUALIZERS
   // ==========================================
+
+  // ==========================================
+  // BOX ROW VISUALIZER (for Box, Toploader Box, etc.)
+  // ==========================================
+  const renderBoxVisualizer = () => {
+    const isBoxType = selectedLoc && (
+      selectedLoc.type === 'Box' ||
+      selectedLoc.type === 'Toploader Box' ||
+      selectedLoc.type === 'Graded Slab Box' ||
+      selectedLoc.type === 'Display Shelf / Stand'
+    );
+    if (!isBoxType) return null;
+
+    const maxRows = selectedLoc.max_rows || 3;
+    const rowNames = Array.from({ length: maxRows }, (_, i) => `Row ${i + 1}`);
+
+    if (locationCards.length === 0) {
+      return (
+        <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2.5rem 1rem' }}>
+          <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>📦</div>
+          <p>This box is empty. Go to Search or Scanner to add cards, or drag cards here from the Unsorted panel!</p>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', width: '100%' }}>
+        {rowNames.map((rowName, rowIdx) => {
+          const rowCards = locationCards.filter(c => c.sub_location_1 === rowName)
+            .sort((a, b) => {
+              const seqA = parseInt(a.sub_location_2 || '0', 10) || 0;
+              const seqB = parseInt(b.sub_location_2 || '0', 10) || 0;
+              return seqA - seqB || (a.position || 0) - (b.position || 0);
+            });
+
+          const isHighlighted = assistantHighlightRow === rowName;
+          const isTargetable = !!activeMoveCard;
+
+          return (
+            <div
+              key={rowName}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                const cardId = e.dataTransfer.getData('card_entry_id');
+                handleDropToBoxRow(cardId, rowName);
+              }}
+              onClick={() => {
+                if (activeMoveCard) {
+                  handlePlaceCardInBoxRow(activeMoveCard.entry_id, rowName);
+                }
+              }}
+              style={{
+                borderRadius: 'var(--radius-md)',
+                border: isHighlighted
+                  ? '2px solid #eab308'
+                  : isTargetable
+                  ? '2px dashed rgba(255,255,255,0.2)'
+                  : '1px solid var(--border-glass)',
+                background: isHighlighted
+                  ? 'rgba(234,179,8,0.06)'
+                  : isTargetable
+                  ? 'rgba(255,255,255,0.02)'
+                  : 'rgba(0,0,0,0.15)',
+                boxShadow: isHighlighted ? '0 0 18px rgba(234,179,8,0.25), inset 0 0 12px rgba(234,179,8,0.05)' : 'none',
+                transition: 'all 0.25s ease',
+                cursor: isTargetable ? 'pointer' : 'default',
+                overflow: 'hidden',
+                animation: isHighlighted ? 'pulse-row 1.5s ease-in-out infinite' : 'none'
+              }}
+            >
+              {/* Row Header */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.6rem',
+                padding: '0.4rem 0.75rem',
+                borderBottom: isHighlighted ? '1px solid rgba(234,179,8,0.3)' : '1px solid var(--border-glass)',
+                background: isHighlighted ? 'rgba(234,179,8,0.08)' : 'rgba(0,0,0,0.2)'
+              }}>
+                <span style={{
+                  fontSize: '0.7rem',
+                  fontWeight: 850,
+                  letterSpacing: '0.08em',
+                  color: isHighlighted ? '#eab308' : 'var(--text-secondary)',
+                  textTransform: 'uppercase'
+                }}>
+                  {rowName}
+                </span>
+                <span style={{
+                  fontSize: '0.6rem',
+                  background: isHighlighted ? 'rgba(234,179,8,0.2)' : 'rgba(255,255,255,0.06)',
+                  color: isHighlighted ? '#eab308' : 'var(--text-muted)',
+                  border: isHighlighted ? '1px solid rgba(234,179,8,0.4)' : '1px solid var(--border-glass)',
+                  borderRadius: '8px',
+                  padding: '1px 6px',
+                  fontWeight: 700
+                }}>
+                  {rowCards.length} card{rowCards.length !== 1 ? 's' : ''}
+                </span>
+                {isHighlighted && (
+                  <span style={{
+                    marginLeft: 'auto',
+                    fontSize: '0.6rem',
+                    fontWeight: 800,
+                    color: '#eab308',
+                    background: 'rgba(234,179,8,0.15)',
+                    border: '1px solid rgba(234,179,8,0.4)',
+                    borderRadius: '8px',
+                    padding: '2px 8px',
+                    letterSpacing: '0.05em',
+                    textTransform: 'uppercase',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    animation: 'pulse-text 1.5s ease-in-out infinite'
+                  }}>
+                    🎯 Place Here
+                  </span>
+                )}
+              </div>
+
+              {/* Cards Strip */}
+              <div style={{
+                display: 'flex',
+                flexDirection: 'row',
+                gap: '0.35rem',
+                padding: '0.5rem 0.75rem',
+                overflowX: 'auto',
+                minHeight: '90px',
+                alignItems: 'center',
+                flexWrap: 'nowrap'
+              }}>
+                {rowCards.map((card, posIdx) => {
+                  const isSelected = activeMoveCard?.entry_id === card.entry_id;
+                  const rarityStyle = getCardRarityBorder(card.rarity);
+                  return (
+                    <div
+                      key={card.entry_id}
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, card)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (activeMoveCard) {
+                          // Swap within same box
+                          handlePlaceCardInBoxRow(activeMoveCard.entry_id, rowName);
+                        } else {
+                          handleCardSelectForMove(card);
+                        }
+                      }}
+                      className={`tilt-card-wrapper ${isSelected ? 'card-move-selecting' : ''}`}
+                      title={`${card.name} — ${card.set_name} #${card.number} | ${card.condition} | ${card.printing}`}
+                      style={{
+                        position: 'relative',
+                        width: '60px',
+                        aspectRatio: 0.718,
+                        flexShrink: 0,
+                        borderRadius: '5px',
+                        overflow: 'hidden',
+                        cursor: 'pointer',
+                        border: isSelected ? '2px solid var(--accent-yellow)' : rarityStyle.border,
+                        boxShadow: isSelected
+                          ? '0 0 10px var(--accent-yellow)'
+                          : `0 3px 8px rgba(0,0,0,0.45), ${rarityStyle.boxShadow}`,
+                        transition: 'all 0.15s ease',
+                        transform: isSelected ? 'scale(1.08) translateY(-2px)' : 'scale(1)'
+                      }}
+                    >
+                      <img
+                        src={card.image_url}
+                        alt={card.name}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                      {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '5px' }} />}
+                      {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '5px' }} />}
+                      {/* Position badge */}
+                      <span style={{
+                        position: 'absolute',
+                        top: '2px',
+                        left: '2px',
+                        fontSize: '0.45rem',
+                        fontWeight: 900,
+                        color: 'rgba(255,255,255,0.85)',
+                        background: 'rgba(0,0,0,0.6)',
+                        borderRadius: '2px',
+                        padding: '0px 2px',
+                        lineHeight: 1.4
+                      }}>
+                        #{posIdx + 1}
+                      </span>
+                      {/* Qty badge */}
+                      {card.quantity > 1 && (
+                        <span style={{
+                          position: 'absolute',
+                          bottom: '1px',
+                          right: '2px',
+                          fontSize: '0.5rem',
+                          fontWeight: 900,
+                          color: '#fff',
+                          background: 'var(--accent-red)',
+                          borderRadius: '3px',
+                          padding: '0px 3px'
+                        }}>
+                          x{card.quantity}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Drop target placeholder */}
+                {isTargetable && (
+                  <div
+                    style={{
+                      width: '60px',
+                      aspectRatio: 0.718,
+                      flexShrink: 0,
+                      borderRadius: '5px',
+                      border: isHighlighted ? '2px dashed #eab308' : '2px dashed rgba(255,255,255,0.2)',
+                      background: isHighlighted ? 'rgba(234,179,8,0.1)' : 'rgba(255,255,255,0.02)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: isHighlighted ? '1.1rem' : '0.9rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handlePlaceCardInBoxRow(activeMoveCard.entry_id, rowName);
+                    }}
+                  >
+                    {isHighlighted ? '🎯' : '+'}
+                  </div>
+                )}
+
+                {/* Empty row placeholder */}
+                {rowCards.length === 0 && !isTargetable && (
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontStyle: 'italic', padding: '0 0.5rem' }}>
+                    Empty row — drag cards here to fill
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        <style>{`
+          @keyframes pulse-row {
+            0%, 100% { box-shadow: 0 0 18px rgba(234,179,8,0.25), inset 0 0 12px rgba(234,179,8,0.05); }
+            50% { box-shadow: 0 0 30px rgba(234,179,8,0.5), inset 0 0 20px rgba(234,179,8,0.1); }
+          }
+          @keyframes pulse-text {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+          }
+        `}</style>
+      </div>
+    );
+  };
+
   // ==========================================
   // CUSTOM PREMIUM COVER FLOW CARD BROWSING
   // ==========================================
@@ -962,52 +1223,15 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 </div>
               </div>
 
-              {/* Compartment/Row assignment for boxes */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flex: 1, minWidth: '110px' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Row:</span>
-                <input 
-                  type="text"
-                  className="input-control"
-                  style={{ fontSize: '0.75rem', padding: '0.2rem 0.4rem', height: '24px' }}
-                  placeholder="e.g. Row 1"
-                  value={activeCard.sub_location_1 || ''}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setLocationCards(prev => prev.map((c, i) => i === activeIdx ? { ...c, sub_location_1: val } : c));
-                  }}
-                  onBlur={async (e) => {
-                    await fetch(`/api/collection/${activeCard.entry_id}`, {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ ...activeCard, sub_location_1: e.target.value })
-                    });
-                    fetchLocationCards(activeLocationId);
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flex: 1, minWidth: '110px' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Section:</span>
-                <input 
-                  type="text"
-                  className="input-control"
-                  style={{ fontSize: '0.75rem', padding: '0.2rem 0.4rem', height: '24px' }}
-                  placeholder="e.g. Section 1"
-                  value={activeCard.sub_location_2 || ''}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setLocationCards(prev => prev.map((c, i) => i === activeIdx ? { ...c, sub_location_2: val } : c));
-                  }}
-                  onBlur={async (e) => {
-                    await fetch(`/api/collection/${activeCard.entry_id}`, {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ ...activeCard, sub_location_2: e.target.value })
-                    });
-                    fetchLocationCards(activeLocationId);
-                  }}
-                />
-              </div>
+              {/* Row/Position display for boxes (read-only) */}
+              {(selectedLoc?.type === 'Box' || selectedLoc?.type === 'Toploader Box' || selectedLoc?.type === 'Graded Slab Box' || selectedLoc?.type === 'Display Shelf / Stand') && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flex: 1 }}>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Location:</span>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#fff', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border-glass)', borderRadius: '4px', padding: '2px 8px' }}>
+                    {activeCard.sub_location_1 || '—'}{activeCard.sub_location_2 ? `, Pos ${activeCard.sub_location_2}` : ''}
+                  </span>
+                </div>
+              )}
 
               {/* Quick Actions */}
               <div style={{ display: 'flex', gap: '0.4rem' }}>
@@ -1945,7 +2169,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </div>
             )}
 
-            {(selectedLoc.type !== 'Binder' && selectedLoc.type !== 'Toploader Binder' && locationCards.length === 0) ? (
+            {(selectedLoc.type !== 'Binder' && selectedLoc.type !== 'Toploader Binder' && selectedLoc.type !== 'Box' && selectedLoc.type !== 'Toploader Box' && selectedLoc.type !== 'Graded Slab Box' && selectedLoc.type !== 'Display Shelf / Stand' && locationCards.length === 0) ? (
               <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem' }}>
                 <p>This container is currently empty. Go to Search or Scanner to add cards to this location, or drag/place cards here!</p>
               </div>
@@ -2331,6 +2555,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   </div>
                 );
               })()
+            ) : (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand') ? (
+              /* Box Row Visualizer — horizontal row strips */
+              renderBoxVisualizer()
             ) : (
               /* Cover Flow cards visualizer for all other containers */
               renderCardCoverFlow()
@@ -2579,10 +2806,25 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       {recommended ? (() => {
                         const sortLabels = { 'custom': 'Custom', 'name-asc': 'A-Z', 'price-desc': 'Value', 'set-number': 'Set & Number', 'set-number-printing': 'Set/Number/Printing', 'type-name': 'Energy Type' };
                         const sortScheme = sortLabels[selectedLoc?.sort_order] || 'Default';
+                        
+                        // Auto-highlight the recommended row for box containers
+                        const isBoxContainer = selectedLoc && (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand');
+                        const recommendedRowName = isBoxContainer ? recommended.sub1 : null;
+                        
+                        // Set the highlight whenever we show this card (effect-like, inline)
+                        if (recommendedRowName && assistantHighlightRow !== recommendedRowName) {
+                          setTimeout(() => setAssistantHighlightRow(recommendedRowName), 0);
+                        } else if (!isBoxContainer && assistantHighlightRow) {
+                          setTimeout(() => setAssistantHighlightRow(null), 0);
+                        }
+                        
                         return (
                         <div style={{ background: 'rgba(255, 71, 71, 0.05)', border: '1px solid rgba(255, 71, 71, 0.15)', padding: '0.4rem', borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'center' }}>
                           <span style={{ fontSize: '0.55rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Recommended Target ({sortScheme})</span>
                           <strong style={{ fontSize: '0.75rem', color: 'var(--accent-red)' }}>{recommended.label}</strong>
+                          {isBoxContainer && (
+                            <span style={{ fontSize: '0.55rem', color: '#eab308', fontStyle: 'italic' }}>↑ See highlighted row above</span>
+                          )}
                           
                           <button 
                             type="button" 
@@ -2590,6 +2832,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                             onClick={async () => {
                               await moveCardToLocation(card.entry_id, selectedLoc.id, recommended.sub1, recommended.sub2, recommended.position);
                               showToast(`Placed ${card.name} in ${recommended.label}`);
+                              setAssistantHighlightRow(null);
                               if (idx >= queue.length - 1) {
                                 setAssistantIndex(0);
                               }
@@ -2610,7 +2853,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         <button 
                           type="button" 
                           className="btn btn-secondary" 
-                          onClick={() => setAssistantIndex(prev => Math.max(0, prev - 1))}
+                          onClick={() => { setAssistantIndex(prev => Math.max(0, prev - 1)); setAssistantHighlightRow(null); }}
                           disabled={idx === 0}
                           style={{ flex: 1, fontSize: '0.65rem', padding: '0.2rem 0', height: '22px' }}
                         >
@@ -2622,7 +2865,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         <button 
                           type="button" 
                           className="btn btn-secondary" 
-                          onClick={() => setAssistantIndex(prev => (prev + 1) % queue.length)}
+                          onClick={() => { setAssistantIndex(prev => (prev + 1) % queue.length); setAssistantHighlightRow(null); }}
                           style={{ flex: 1, fontSize: '0.65rem', padding: '0.2rem 0', height: '22px' }}
                         >
                           Skip

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, X, ChevronLeft, Play, BarChart2, Search, ArrowRight, Eye } from 'lucide-react';
+import { Plus, Trash2, Edit2, X, ChevronLeft, Play, BarChart2, Search, ArrowRight, Eye, LogOut, LogIn, PackageCheck } from 'lucide-react';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 
 function DeckBuilder({ showToast }) {
@@ -23,6 +23,9 @@ function DeckBuilder({ showToast }) {
   const [simulatorDeck, setSimulatorDeck] = useState([]);
   const [hand, setHand] = useState([]);
   const [mulliganCount, setMulliganCount] = useState(0);
+
+  // Checkout States
+  const [checkingOut, setCheckingOut] = useState(false);
 
   useEffect(() => {
     fetchDecks();
@@ -74,7 +77,9 @@ function DeckBuilder({ showToast }) {
       const response = await fetch(`/api/decks/${deckId}`);
       if (response.ok) {
         const data = await response.json();
-        setActiveDeck(data);
+        // Also get checkout status from deck list
+        const deckMeta = decks.find(d => d.id === deckId);
+        setActiveDeck({ ...data, checked_out: deckMeta?.checked_out || 0, checked_out_at: deckMeta?.checked_out_at || null });
         setViewMode('detail');
       }
     } catch (err) {
@@ -186,6 +191,47 @@ function DeckBuilder({ showToast }) {
       showToast('Search failed.');
     } finally {
       setSearching(false);
+    }
+  };
+
+  // --- CHECKOUT / RETURN ---
+  const handleCheckout = async () => {
+    if (!activeDeck) return;
+    try {
+      setCheckingOut(true);
+      const res = await fetch(`/api/decks/${activeDeck.id}/checkout`, { method: 'PUT' });
+      if (res.ok) {
+        showToast(`🎮 "${activeDeck.name}" is now checked out for play!`);
+        setActiveDeck(prev => ({ ...prev, checked_out: 1, checked_out_at: new Date().toISOString() }));
+        fetchDecks();
+      } else {
+        showToast('Failed to check out deck.');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error checking out deck.');
+    } finally {
+      setCheckingOut(false);
+    }
+  };
+
+  const handleReturn = async () => {
+    if (!activeDeck) return;
+    try {
+      setCheckingOut(true);
+      const res = await fetch(`/api/decks/${activeDeck.id}/return`, { method: 'PUT' });
+      if (res.ok) {
+        showToast(`📦 "${activeDeck.name}" returned to storage!`);
+        setActiveDeck(prev => ({ ...prev, checked_out: 0, checked_out_at: null }));
+        fetchDecks();
+      } else {
+        showToast('Failed to return deck.');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error returning deck.');
+    } finally {
+      setCheckingOut(false);
     }
   };
 
@@ -308,8 +354,35 @@ function DeckBuilder({ showToast }) {
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.25rem' }}>
               {decks.map(deck => (
-                <div key={deck.id} className="glass-panel" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '1rem', border: '1px solid var(--border-glass-hover)' }}>
-                  <div>
+                <div key={deck.id} className="glass-panel" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '1rem', border: deck.checked_out ? '1px solid rgba(234,179,8,0.4)' : '1px solid var(--border-glass-hover)', position: 'relative', overflow: 'hidden' }}>
+                  
+                  {/* In Play Banner */}
+                  {deck.checked_out ? (
+                    <div style={{
+                      position: 'absolute',
+                      top: 0, left: 0, right: 0,
+                      background: 'linear-gradient(90deg, rgba(234,179,8,0.9), rgba(245,158,11,0.85))',
+                      padding: '4px 12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '0.65rem',
+                      fontWeight: 800,
+                      color: '#000',
+                      letterSpacing: '0.08em',
+                      textTransform: 'uppercase'
+                    }}>
+                      <span>🎮</span>
+                      <span>Currently In Play</span>
+                      {deck.checked_out_at && (
+                        <span style={{ marginLeft: 'auto', opacity: 0.75, fontWeight: 600 }}>
+                          since {new Date(deck.checked_out_at).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
+
+                  <div style={{ marginTop: deck.checked_out ? '28px' : 0 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <h3 style={{ color: '#fff', fontSize: '1.1rem', margin: 0 }}>{deck.name}</h3>
                       <span style={{ 
@@ -333,7 +406,7 @@ function DeckBuilder({ showToast }) {
                     <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Created {new Date(deck.created_at).toLocaleDateString()}</span>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                       <button className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => loadDeckDetails(deck.id)}>
-                        <Edit2 size={12} /> Edit Deck
+                        <Edit2 size={12} /> Edit
                       </button>
                       <button className="btn btn-danger btn-icon-only" style={{ padding: '0.35rem' }} onClick={() => handleDeleteDeck(deck.id, deck.name)}>
                         <Trash2 size={12} />
@@ -351,28 +424,107 @@ function DeckBuilder({ showToast }) {
       {viewMode === 'detail' && activeDeck && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           {/* Header */}
-          <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+          <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', position: 'relative', overflow: 'hidden' }}>
+            
+            {/* Checked out banner */}
+            {activeDeck.checked_out ? (
+              <div style={{
+                position: 'absolute',
+                top: 0, left: 0, right: 0,
+                height: '4px',
+                background: 'linear-gradient(90deg, #eab308, #f59e0b, #eab308)',
+                backgroundSize: '200% auto',
+                animation: 'shimmer-gold 2s linear infinite'
+              }} />
+            ) : null}
+
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
               <button className="btn btn-secondary btn-icon-only" onClick={() => { setViewMode('list'); fetchDecks(); }} style={{ borderRadius: '50%' }}>
                 <ChevronLeft size={16} />
               </button>
               <div>
-                <h2 style={{ fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <h2 style={{ fontSize: '1.25rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                   {activeDeck.name}
                   <span style={{ fontSize: '0.8rem', color: totalDeckCardsCount === 60 ? 'var(--type-grass)' : 'var(--accent-yellow)', fontWeight: 600 }}>
                     ({totalDeckCardsCount}/60 cards)
                   </span>
+                  {activeDeck.checked_out ? (
+                    <span style={{
+                      fontSize: '0.65rem',
+                      background: 'rgba(234,179,8,0.15)',
+                      border: '1px solid rgba(234,179,8,0.4)',
+                      color: '#eab308',
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                      fontWeight: 700,
+                      letterSpacing: '0.05em',
+                      textTransform: 'uppercase',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}>
+                      🎮 In Play
+                    </span>
+                  ) : null}
                 </h2>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{activeDeck.description || 'Custom deck build.'}</p>
+                {activeDeck.checked_out && activeDeck.checked_out_at && (
+                  <p style={{ color: '#eab308', fontSize: '0.7rem', marginTop: '2px' }}>
+                    Checked out since {new Date(activeDeck.checked_out_at).toLocaleString()}
+                  </p>
+                )}
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {/* Checkout / Return button */}
+              {activeDeck.checked_out ? (
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleReturn}
+                  disabled={checkingOut}
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', border: '1px solid rgba(234,179,8,0.4)', color: '#eab308' }}
+                >
+                  <PackageCheck size={14} /> Return to Storage
+                </button>
+              ) : (
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleCheckout}
+                  disabled={checkingOut}
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                >
+                  <LogOut size={14} /> Check Out for Play
+                </button>
+              )}
               <button className="btn btn-primary" onClick={startSimulator} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                 <Play size={14} /> Draw Simulator
               </button>
             </div>
           </div>
+
+          {/* Checked out info banner */}
+          {activeDeck.checked_out && (
+            <div style={{
+              background: 'rgba(234,179,8,0.06)',
+              border: '1px solid rgba(234,179,8,0.25)',
+              borderRadius: 'var(--radius-md)',
+              padding: '0.85rem 1.25rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              fontSize: '0.85rem',
+              color: '#eab308'
+            }}>
+              <span style={{ fontSize: '1.25rem' }}>🎮</span>
+              <div>
+                <strong>This deck is currently checked out for play.</strong>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                  These cards are physically out of storage. Click "Return to Storage" when you're done playing to mark them as back in storage.
+                </div>
+              </div>
+            </div>
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem', alignItems: 'start' }}>
             <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: '1.5rem' }}>
@@ -670,6 +822,10 @@ function DeckBuilder({ showToast }) {
               @keyframes draw-card-anim {
                 from { transform: translateY(30px) scale(0.85); opacity: 0; }
                 to { transform: translateY(0) scale(1); opacity: 1; }
+              }
+              @keyframes shimmer-gold {
+                0% { background-position: 0% center; }
+                100% { background-position: 200% center; }
               }
             `}</style>
           </div>
