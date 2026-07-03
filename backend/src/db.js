@@ -90,7 +90,8 @@ async function initDb() {
       max_pages INTEGER DEFAULT 30,
       page_style TEXT DEFAULT '3x3',
       max_rows INTEGER DEFAULT 3,
-      max_capacity INTEGER DEFAULT 1000
+      max_capacity INTEGER DEFAULT 1000,
+      foil_sorting TEXT DEFAULT 'normals_first'
     )
   `);
 
@@ -214,6 +215,10 @@ async function initDb() {
   if (!locationsCols.some(c => c.name === 'max_capacity')) {
     console.log('Adding max_capacity column to locations table...');
     await run(`ALTER TABLE locations ADD COLUMN max_capacity INTEGER DEFAULT 1000`);
+  }
+  if (!locationsCols.some(c => c.name === 'foil_sorting')) {
+    console.log('Adding foil_sorting column to locations table...');
+    await run(`ALTER TABLE locations ADD COLUMN foil_sorting TEXT DEFAULT 'normals_first'`);
   }
 
   // Add position column to collection table if missing

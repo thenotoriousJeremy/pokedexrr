@@ -76,7 +76,7 @@ async function rebalanceLocationPositions(db, locationId, userId) {
 }
 
 async function getSortedPositionForCard(db, locationId, userId, cardMetadata) {
-  const loc = await db.get(`SELECT type, sort_order FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
+  const loc = await db.get(`SELECT type, sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
   if (!loc || loc.sort_order === 'custom') {
     const maxRow = await db.get(`SELECT MAX(position) as maxPos FROM collection WHERE location_id = ? AND user_id = ?`, [locationId, userId]);
     return maxRow && maxRow.maxPos !== null ? maxRow.maxPos + 1000 : 1000;
@@ -118,13 +118,25 @@ async function getSortedPositionForCard(db, locationId, userId, cardMetadata) {
     'Grass': 1, 'Fire': 2, 'Water': 3, 'Lightning': 4, 'Psychic': 5,
     'Fighting': 6, 'Darkness': 7, 'Metal': 8, 'Dragon': 9, 'Colorless': 10, 'Trainer': 11, 'Energy': 12
   };
-  const PRINTING_ORDER = {
+  
+  const PRINTING_ORDER_NORMALS_FIRST = {
     'Normal': 1,
     'Reverse Holofoil': 2,
     'Holofoil': 3,
     '1st Edition': 4,
     'Promo': 5
   };
+  
+  const PRINTING_ORDER_FOILS_FIRST = {
+    'Reverse Holofoil': 1,
+    'Holofoil': 2,
+    'Normal': 3,
+    '1st Edition': 4,
+    'Promo': 5
+  };
+
+  const isFoilsFirst = loc && loc.foil_sorting === 'foils_first';
+  const PRINTING_ORDER = isFoilsFirst ? PRINTING_ORDER_FOILS_FIRST : PRINTING_ORDER_NORMALS_FIRST;
 
   if (sortOrder === 'name-asc') {
     existing.sort((a, b) => a.name.localeCompare(b.name));
@@ -640,6 +652,105 @@ app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, 
   }
 });
 
+// Generate a random collection of various cards for admins database so we can test
+app.post('/api/admin/seed-cards', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    // 1. Get or create Binder and Box locations for admin
+    let binder = await db.get(`SELECT id, page_style FROM locations WHERE user_id = ? AND type = 'Binder' LIMIT 1`, [req.user.id]);
+    if (!binder) {
+      const result = await db.run(`
+        INSERT INTO locations (name, type, description, sort_order, max_pages, page_style, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, ['Binder Seed Box', 'Binder', 'Seeded binder', 'custom', 10, '3x3', req.user.id]);
+      binder = { id: result.lastID, page_style: '3x3' };
+    }
+
+    let box = await db.get(`SELECT id FROM locations WHERE user_id = ? AND type = 'Box' LIMIT 1`, [req.user.id]);
+    if (!box) {
+      const result = await db.run(`
+        INSERT INTO locations (name, type, description, sort_order, max_rows, max_capacity, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, ['Box Seed Box', 'Box', 'Seeded bulk box', 'custom', 3, 200, req.user.id]);
+      box = { id: result.lastID };
+    }
+
+    const MOCK_POOL = [
+      { id: 'base1-58', name: 'Pikachu', set_id: 'base1', set_name: 'Base Set', number: '58', rarity: 'Common', supertype: 'Pokémon', types: '["Lightning"]', img: 'https://images.pokemontcg.io/base1/58_hier.png' },
+      { id: 'base1-4', name: 'Charizard', set_id: 'base1', set_name: 'Base Set', number: '4', rarity: 'Rare Holo', supertype: 'Pokémon', types: '["Fire"]', img: 'https://images.pokemontcg.io/base1/4_hier.png' },
+      { id: 'base1-2', name: 'Blastoise', set_id: 'base1', set_name: 'Base Set', number: '2', rarity: 'Rare Holo', supertype: 'Pokémon', types: '["Water"]', img: 'https://images.pokemontcg.io/base1/2_hier.png' },
+      { id: 'base1-15', name: 'Venusaur', set_id: 'base1', set_name: 'Base Set', number: '15', rarity: 'Rare Holo', supertype: 'Pokémon', types: '["Grass"]', img: 'https://images.pokemontcg.io/base1/15_hier.png' },
+      { id: 'base1-10', name: 'Mewtwo', set_id: 'base1', set_name: 'Base Set', number: '10', rarity: 'Rare Holo', supertype: 'Pokémon', types: '["Psychic"]', img: 'https://images.pokemontcg.io/base1/10_hier.png' },
+      { id: 'fossil-20', name: 'Gengar', set_id: 'fossil', set_name: 'Fossil', number: '20', rarity: 'Rare', supertype: 'Pokémon', types: '["Psychic"]', img: 'https://images.pokemontcg.io/fossil/20_hier.png' },
+      { id: 'jungle-51', name: 'Eevee', set_id: 'jungle', set_name: 'Jungle', number: '51', rarity: 'Common', supertype: 'Pokémon', types: '["Colorless"]', img: 'https://images.pokemontcg.io/jungle/51_hier.png' },
+      { id: 'neo1-9', name: 'Lugia', set_id: 'neo1', set_name: 'Neo Genesis', number: '9', rarity: 'Rare Holo', supertype: 'Pokémon', types: '["Colorless"]', img: 'https://images.pokemontcg.io/neo1/9_hier.png' },
+      { id: 'ex3-102', name: 'Rayquaza', set_id: 'ex3', set_name: 'EX Deoxys', number: '102', rarity: 'Rare Holo Star', supertype: 'Pokémon', types: '["Colorless"]', img: 'https://images.pokemontcg.io/ex3/102_hier.png' },
+      { id: 'base1-6', name: 'Gyarados', set_id: 'base1', set_name: 'Base Set', number: '6', rarity: 'Rare Holo', supertype: 'Pokémon', types: '["Water"]', img: 'https://images.pokemontcg.io/base1/6_hier.png' }
+    ];
+
+    // Seed mock cards into card_cache
+    for (const card of MOCK_POOL) {
+      const priceNormal = parseFloat((1.5 + Math.random() * 5).toFixed(2));
+      const priceHolo = parseFloat((10 + Math.random() * 60).toFixed(2));
+      const priceRev = parseFloat((5 + Math.random() * 30).toFixed(2));
+      
+      await db.run(`
+        INSERT OR REPLACE INTO card_cache (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend, price_normal, price_holofoil, price_reverse_holofoil)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [card.id, card.name, card.supertype, '["Basic"]', card.types, card.rarity, card.set_id, card.set_name, card.number, card.img, priceHolo, priceNormal, priceHolo, priceRev]);
+    }
+
+    // Insert random collection entries distributed across binder & box
+    const prints = ['Normal', 'Holofoil', 'Reverse Holofoil'];
+    const conditions = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played'];
+    
+    let addedCount = 0;
+    
+    // Seed binder entries (use pages 1 to 3, slots 1 to 9)
+    for (let p = 1; p <= 3; p++) {
+      for (let s = 1; s <= 9; s++) {
+        if (Math.random() > 0.25) {
+          const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
+          const print = prints[Math.floor(Math.random() * prints.length)];
+          const condition = conditions[Math.floor(Math.random() * conditions.length)];
+          const qty = Math.floor(Math.random() * 3) + 1; // 1-3 copies
+          const purchasePrice = parseFloat((Math.random() * 10).toFixed(2));
+          const pos = ((p - 1) * 9 + (s - 1)) * 1000;
+          
+          await db.run(`
+            INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, position, user_id)
+            VALUES (?, ?, ?, ?, 'English', ?, ?, ?, ?, ?, ?)
+          `, [card.id, qty, condition, print, purchasePrice, binder.id, `Page ${p}`, `Slot ${s}`, pos, req.user.id]);
+          addedCount += qty;
+        }
+      }
+    }
+
+    // Seed box entries (use row 1-2, slot 1-15)
+    for (let r = 1; r <= 2; r++) {
+      for (let s = 1; s <= 15; s++) {
+        if (Math.random() > 0.4) {
+          const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
+          const print = prints[Math.floor(Math.random() * prints.length)];
+          const condition = conditions[Math.floor(Math.random() * conditions.length)];
+          const qty = Math.floor(Math.random() * 4) + 1; // 1-4 copies
+          const purchasePrice = parseFloat((Math.random() * 5).toFixed(2));
+          const pos = ((r - 1) * 40 + (s - 1)) * 1000;
+          
+          await db.run(`
+            INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, position, user_id)
+            VALUES (?, ?, ?, ?, 'English', ?, ?, ?, ?, ?, ?)
+          `, [card.id, qty, condition, print, purchasePrice, box.id, `Row ${r}`, `Slot ${s}`, pos, req.user.id]);
+          addedCount += qty;
+        }
+      }
+    }
+
+    res.json({ message: `Successfully seeded test collection with ${addedCount} cards for admin user!` });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to seed test cards', message: error.message });
+  }
+});
+
 // --- CARD MANAGEMENT ENDPOINTS ---
 
 // 1. Search Pokémon TCG cards (proxies to Pokemon TCG API and database cache)
@@ -1029,7 +1140,8 @@ app.post('/api/locations', authenticateToken, async (req, res) => {
     max_pages = 30,
     page_style = '3x3',
     max_rows = 3,
-    max_capacity = 1000
+    max_capacity = 1000,
+    foil_sorting = 'normals_first'
   } = req.body;
 
   if (!name || !type) {
@@ -1042,8 +1154,8 @@ app.post('/api/locations', authenticateToken, async (req, res) => {
     }
 
     const result = await db.run(`
-      INSERT INTO locations (name, type, description, sort_order, max_pages, page_style, max_rows, max_capacity, user_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO locations (name, type, description, sort_order, max_pages, page_style, max_rows, max_capacity, foil_sorting, user_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       name, 
       type, 
@@ -1053,6 +1165,7 @@ app.post('/api/locations', authenticateToken, async (req, res) => {
       page_style, 
       parseInt(max_rows, 10) || 3, 
       parseInt(max_capacity, 10) || 1000, 
+      foil_sorting || 'normals_first',
       req.user.id
     ]);
     res.status(201).json({ message: 'Location created', id: result.lastID });
@@ -1063,7 +1176,7 @@ app.post('/api/locations', authenticateToken, async (req, res) => {
 
 app.put('/api/locations/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
-  const { name, type, description, sort_order, max_pages, page_style, max_rows, max_capacity } = req.body;
+  const { name, type, description, sort_order, max_pages, page_style, max_rows, max_capacity, foil_sorting } = req.body;
   try {
     const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) {
@@ -1087,7 +1200,8 @@ app.put('/api/locations/:id', authenticateToken, async (req, res) => {
         max_pages = COALESCE(?, max_pages),
         page_style = COALESCE(?, page_style),
         max_rows = COALESCE(?, max_rows),
-        max_capacity = COALESCE(?, max_capacity)
+        max_capacity = COALESCE(?, max_capacity),
+        foil_sorting = COALESCE(?, foil_sorting)
       WHERE id = ? AND user_id = ?
     `, [
       name, 
@@ -1098,6 +1212,7 @@ app.put('/api/locations/:id', authenticateToken, async (req, res) => {
       page_style,
       max_rows !== undefined ? parseInt(max_rows, 10) : null,
       max_capacity !== undefined ? parseInt(max_capacity, 10) : null,
+      foil_sorting,
       id, 
       req.user.id
     ]);

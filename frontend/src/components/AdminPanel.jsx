@@ -21,6 +21,31 @@ function AdminPanel({ showToast }) {
     fetchUsers();
   }, []);
 
+  const handleSeedDatabase = async () => {
+    if (!window.confirm("Seed database with a random collection of test cards (Pikachu, Charizard, etc.)? This will add them to your collection.")) {
+      return;
+    }
+    try {
+      const token = localStorage.getItem('pokedexrr_token');
+      const res = await fetch('/api/admin/seed-cards', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showToast(data.message);
+        fetchUsers(); // Refresh stats
+      } else {
+        showToast("Failed to seed database.");
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Error seeding database.");
+    }
+  };
+
   const fetchUsers = async () => {
     try {
       setLoading(true);
@@ -180,9 +205,20 @@ function AdminPanel({ showToast }) {
           <h2 style={{ fontSize: '1.25rem', color: '#fff' }}>Trainer Administration</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Maintain users, assign roles, reset passwords, and monitor system metrics.</p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.5rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-          <Users size={16} style={{ color: 'var(--accent-red)' }} />
-          <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Total Trainers: {users.length}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button 
+            type="button" 
+            className="btn btn-secondary btn-sm" 
+            onClick={handleSeedDatabase}
+            style={{ padding: '0.5rem 1rem', height: '34px', fontSize: '0.8rem', border: '1px solid var(--border-glass)' }}
+          >
+            🧪 Generate Test Cards
+          </button>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.5rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', height: '34px' }}>
+            <Users size={16} style={{ color: 'var(--accent-red)' }} />
+            <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Total Trainers: {users.length}</span>
+          </div>
         </div>
       </div>
 

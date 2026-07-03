@@ -17,12 +17,26 @@ const POKEMON_TYPE_ORDER = {
   'Unknown': 100
 };
 
-const PRINTING_ORDER = {
-  'Normal': 1,
-  'Reverse Holofoil': 2,
-  'Holofoil': 3,
-  '1st Edition': 4,
-  'Promo': 5
+const getPrintingRank = (printing, foilSorting) => {
+  const isFoilsFirst = foilSorting === 'foils_first';
+  if (isFoilsFirst) {
+    const MAP = {
+      'Reverse Holofoil': 1,
+      'Holofoil': 2,
+      'Normal': 3,
+      '1st Edition': 4,
+      'Promo': 5
+    };
+    return MAP[printing] || 10;
+  }
+  const MAP = {
+    'Normal': 1,
+    'Reverse Holofoil': 2,
+    'Holofoil': 3,
+    '1st Edition': 4,
+    'Promo': 5
+  };
+  return MAP[printing] || 10;
 };
 
 const getCardRarityBorder = (rarity) => {
@@ -88,6 +102,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [editPageStyle, setEditPageStyle] = useState('3x3');
   const [editMaxRows, setEditMaxRows] = useState(3);
   const [editMaxCapacity, setEditMaxCapacity] = useState(1000);
+  const [editFoilSorting, setEditFoilSorting] = useState('normals_first');
 
   // Binder Grid Visualizer states
   const [viewMode, setViewMode] = useState('grid'); // Defaults to 'grid' (no list view)
@@ -1164,8 +1179,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           const cmpSet = setA.localeCompare(setB);
           if (cmpSet !== 0) return cmpSet;
 
-          const printA = PRINTING_ORDER[a.printing] || 10;
-          const printB = PRINTING_ORDER[b.printing] || 10;
+          const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
+          const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
           if (printA !== printB) return printA - printB;
 
           const numA = parseInt(a.number || '0', 10) || 0;
@@ -1550,7 +1565,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           max_pages: (editType === 'Binder' || editType === 'Toploader Binder') ? parseInt(editMaxPages, 10) : 30,
           page_style: (editType === 'Binder' || editType === 'Toploader Binder') ? editPageStyle : '3x3',
           max_rows: (editType === 'Box' || editType === 'Toploader Box' || editType === 'Graded Slab Box' || editType === 'Display Shelf / Stand') ? parseInt(editMaxRows, 10) : 3,
-          max_capacity: (editType !== 'Binder' && editType !== 'Toploader Binder' && editType !== 'Box' && editType !== 'Toploader Box' && editType !== 'Graded Slab Box' && editType !== 'Display Shelf / Stand') ? parseInt(editMaxCapacity, 10) : 1000
+          max_capacity: (editType !== 'Binder' && editType !== 'Toploader Binder' && editType !== 'Box' && editType !== 'Toploader Box' && editType !== 'Graded Slab Box' && editType !== 'Display Shelf / Stand') ? parseInt(editMaxCapacity, 10) : 1000,
+          foil_sorting: editFoilSorting
         })
       });
 
@@ -1606,8 +1622,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           const cmpSet = setA.localeCompare(setB);
           if (cmpSet !== 0) return cmpSet;
 
-          const printA = PRINTING_ORDER[a.printing] || 10;
-          const printB = PRINTING_ORDER[b.printing] || 10;
+          const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
+          const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
           if (printA !== printB) return printA - printB;
 
           const numA = parseInt(a.number || '0', 10) || 0;
@@ -1781,6 +1797,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       setEditPageStyle(selectedLoc.page_style || '3x3');
                       setEditMaxRows(selectedLoc.max_rows || 3);
                       setEditMaxCapacity(selectedLoc.max_capacity || 1000);
+                      setEditFoilSorting(selectedLoc.foil_sorting || 'normals_first');
                       setIsEditing(true);
                     }}
                     style={{ width: '26px', height: '26px', padding: 0, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem' }}
@@ -2237,8 +2254,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   const cmpSet = setA.localeCompare(setB);
                   if (cmpSet !== 0) return cmpSet;
 
-                  const printA = PRINTING_ORDER[a.printing] || 10;
-                  const printB = PRINTING_ORDER[b.printing] || 10;
+                  const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
+                  const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
                   if (printA !== printB) return printA - printB;
 
                   const numA = parseInt(a.number || '0', 10) || 0;
@@ -2503,8 +2520,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     const cmpSet = setA.localeCompare(setB);
                     if (cmpSet !== 0) return cmpSet;
 
-                    const printA = PRINTING_ORDER[a.printing] || 10;
-                    const printB = PRINTING_ORDER[b.printing] || 10;
+                    const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
+                    const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
                     if (printA !== printB) return printA - printB;
 
                     const numA = parseInt(a.number || '0', 10) || 0;
@@ -3160,6 +3177,20 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 <option value="set-number">Set & Number</option>
                 <option value="set-number-printing">Set, Number & Printing</option>
                 <option value="type-name">Energy Type</option>
+              </select>
+            </div>
+
+            {/* Foil Sorting Preference settings */}
+            <div className="form-group" style={{ marginBottom: '0.5rem' }}>
+              <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Foil Sorting Priority</label>
+              <select 
+                className="select-control" 
+                value={editFoilSorting} 
+                onChange={(e) => setEditFoilSorting(e.target.value)}
+                style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
+              >
+                <option value="normals_first">Normals First (Normal -> Rev Holo -> Holo)</option>
+                <option value="foils_first">Foils First (Rev Holo -> Holo -> Normal)</option>
               </select>
             </div>
 
