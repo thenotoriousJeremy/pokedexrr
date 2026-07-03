@@ -602,6 +602,43 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </>
             )}
 
+            {/* General Layout & Sorting Preferences */}
+            <span style={{ fontSize: '0.6rem', color: 'var(--accent-red)', fontWeight: 800, textTransform: 'uppercase', display: 'block', marginTop: '0.5rem' }}>General Settings</span>
+            
+            <div className="advanced-config-row">
+              <label>Foil Sorting Priority</label>
+              <select 
+                className="select-control" 
+                value={isCreation ? foilSorting : editFoilSorting} 
+                onChange={(e) => {
+                  if (isCreation) {
+                    setFoilSorting(e.target.value);
+                  } else {
+                    setEditFoilSorting(e.target.value);
+                  }
+                }}
+                style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem', height: '24px', flex: 1, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(0,0,0,0.2)', color: '#fff', borderRadius: '4px' }}
+              >
+                <option value="normals_first">Normals First (Normal -&gt; Rev Holo -&gt; Holo)</option>
+                <option value="foils_first">Foils First (Rev Holo -&gt; Holo -&gt; Normal)</option>
+              </select>
+            </div>
+
+            {(currentType === 'Binder' || currentType === 'Toploader Binder') && (
+              <div className="advanced-config-row" style={{ marginTop: '0.4rem' }}>
+                <label>1st Page Solo (Cover Style)</label>
+                <select 
+                  className="select-control" 
+                  value={activeConfig.firstPageSolo ? 'yes' : 'no'} 
+                  onChange={(e) => updateVal('firstPageSolo', e.target.value === 'yes')}
+                  style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem', height: '24px', flex: 1, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(0,0,0,0.2)', color: '#fff', borderRadius: '4px' }}
+                >
+                  <option value="no">No (Side-by-side Page 1 & 2)</option>
+                  <option value="yes">Yes (Page 1 alone on right)</option>
+                </select>
+              </div>
+            )}
+
             <div style={{ fontSize: '0.55rem', color: 'var(--text-muted)', fontStyle: 'italic', marginTop: '0.2rem', lineHeight: 1.2 }}>
               These custom thresholds set the targets suggested by the Sorting Assistant mode.
             </div>
@@ -1106,13 +1143,39 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const handleTouchEnd = () => {
     if (!touchStart || !touchEnd) return;
     const distance = touchStart - touchEnd;
-    const leftPage = 2 * Math.floor((selectedPage - 1) / 2) + 1;
+    
+    const isFirstPageSolo = selectedLoc ? !!parseAdvancedConfig(selectedLoc).firstPageSolo : false;
+    const maxPages = selectedLoc?.max_pages || 30;
+
+    let leftPage;
+    if (isFirstPageSolo) {
+      leftPage = selectedPage === 1 ? null : 2 * Math.floor(selectedPage / 2);
+    } else {
+      leftPage = 2 * Math.floor((selectedPage - 1) / 2) + 1;
+    }
+
     if (distance > 60) {
       // Swipe Left -> next page pair
-      if (leftPage < 29) handleTurnPage(leftPage + 2);
+      if (isFirstPageSolo) {
+        if (leftPage === null) {
+          if (2 <= maxPages) handleTurnPage(2);
+        } else if (leftPage + 2 <= maxPages) {
+          handleTurnPage(leftPage + 2);
+        }
+      } else {
+        if (leftPage + 2 <= maxPages) handleTurnPage(leftPage + 2);
+      }
     } else if (distance < -60) {
       // Swipe Right -> prev page pair
-      if (leftPage > 1) handleTurnPage(leftPage - 2);
+      if (isFirstPageSolo) {
+        if (leftPage === 2) {
+          handleTurnPage(1);
+        } else if (leftPage !== null && leftPage > 2) {
+          handleTurnPage(leftPage - 2);
+        }
+      } else {
+        if (leftPage > 1) handleTurnPage(leftPage - 2);
+      }
     }
     setTouchStart(null);
     setTouchEnd(null);
@@ -1908,12 +1971,57 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   virtualIndices.set(card.entry_id, currentSlot);
                 });
 
-                const leftPageNum = 2 * Math.floor((selectedPage - 1) / 2) + 1;
-                const rightPageNum = leftPageNum + 1;
+                const isFirstPageSolo = selectedLoc ? !!parseAdvancedConfig(selectedLoc).firstPageSolo : false;
+
+                let leftPageNum, rightPageNum;
+                if (isFirstPageSolo) {
+                  if (selectedPage === 1) {
+                    leftPageNum = null;
+                    rightPageNum = 1;
+                  } else {
+                    leftPageNum = 2 * Math.floor(selectedPage / 2);
+                    rightPageNum = leftPageNum + 1;
+                  }
+                } else {
+                  leftPageNum = 2 * Math.floor((selectedPage - 1) / 2) + 1;
+                  rightPageNum = leftPageNum + 1;
+                }
 
                 const renderBinderPageGrid = (pageNum, sideClass) => {
                   const pocketsCols = selectedLoc.page_style === '2x2' ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)';
                   const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
+
+                  if (pageNum === null) {
+                    return (
+                      <div className="binder-page-left inside-cover" style={{ 
+                        flex: 1,
+                        background: 'linear-gradient(135deg, rgba(20,20,25,0.95), rgba(10,10,12,0.98))', 
+                        border: '1.5px solid rgba(255,255,255,0.03)', 
+                        borderRadius: '12px', 
+                        display: 'flex', 
+                        flexDirection: 'column',
+                        alignItems: 'center', 
+                        justifyContent: 'center', 
+                        color: 'var(--text-muted)',
+                        boxShadow: 'inset 0 0 40px rgba(0,0,0,0.8), 0 8px 30px rgba(0,0,0,0.6)',
+                        position: 'relative',
+                        overflow: 'hidden',
+                        minHeight: '400px'
+                      }}>
+                        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0.03, background: 'radial-gradient(circle, #fff 10%, transparent 11%)', backgroundSize: '12px 12px' }}></div>
+                        <div style={{ textAlign: 'center', padding: '2rem', zIndex: 2 }}>
+                          <div style={{ fontSize: '3.5rem', marginBottom: '1rem', filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.4))' }}>📕</div>
+                          <h4 style={{ fontSize: '0.85rem', fontWeight: 900, letterSpacing: '0.2em', color: '#fff', margin: '0 0 0.5rem 0', textTransform: 'uppercase' }}>Pokédex Binder</h4>
+                          <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', fontWeight: 550, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Premium Storage System</span>
+                        </div>
+                        <div style={{ position: 'absolute', right: '4px', top: '10%', bottom: '10%', width: '4px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', opacity: 0.4 }}>
+                          {[1,2,3,4,5,6].map(i => (
+                            <div key={i} style={{ width: '4px', height: '12px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px' }}></div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  }
 
                   return (
                     <div className={sideClass} style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
@@ -1924,8 +2032,15 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                 <button
                                   type="button"
                                   className="btn btn-secondary btn-icon-only"
-                                  onClick={() => handleTurnPage(leftPageNum - 2)}
-                                  disabled={leftPageNum === 1}
+                                  onClick={() => {
+                                    if (isFirstPageSolo) {
+                                      if (leftPageNum === 2) handleTurnPage(1);
+                                      else handleTurnPage(leftPageNum - 2);
+                                    } else {
+                                      handleTurnPage(leftPageNum - 2);
+                                    }
+                                  }}
+                                  disabled={isFirstPageSolo ? (leftPageNum === null) : (leftPageNum === 1)}
                                   style={{ width: '20px', height: '20px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
                                   title="Previous Page"
                                 >
@@ -1935,8 +2050,18 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                 <button
                                   type="button"
                                   className="btn btn-secondary btn-icon-only"
-                                  onClick={() => handleTurnPage(leftPageNum + 2)}
-                                  disabled={leftPageNum + 1 >= (selectedLoc.max_pages || 30)}
+                                  onClick={() => {
+                                    if (isFirstPageSolo) {
+                                      if (leftPageNum === null) handleTurnPage(2);
+                                      else handleTurnPage(leftPageNum + 2);
+                                    } else {
+                                      handleTurnPage(leftPageNum + 2);
+                                    }
+                                  }}
+                                  disabled={isFirstPageSolo ? 
+                                    (leftPageNum === null ? 2 > (selectedLoc.max_pages || 30) : (leftPageNum + 2 > (selectedLoc.max_pages || 30))) : 
+                                    (leftPageNum + 1 >= (selectedLoc.max_pages || 30))
+                                  }
                                   style={{ width: '20px', height: '20px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
                                   title="Next Page"
                                 >
@@ -3115,19 +3240,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </select>
             </div>
 
-            {/* Foil Sorting Preference settings */}
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Foil Sorting Priority</label>
-              <select 
-                className="select-control" 
-                value={foilSorting} 
-                onChange={(e) => setFoilSorting(e.target.value)}
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-              >
-                <option value="normals_first">Normals First (Normal -&gt; Rev Holo -&gt; Holo)</option>
-                <option value="foils_first">Foils First (Rev Holo -&gt; Holo -&gt; Normal)</option>
-              </select>
-            </div>
 
             {/* Advanced configurations accordion during creation */}
             {renderAdvancedConfigAccordion(true, createAdvancedConfig, setCreateAdvancedConfig)}
@@ -3290,19 +3402,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </select>
             </div>
 
-            {/* Foil Sorting Preference settings */}
-            <div className="form-group" style={{ marginBottom: '0.5rem' }}>
-              <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Foil Sorting Priority</label>
-              <select 
-                className="select-control" 
-                value={editFoilSorting} 
-                onChange={(e) => setEditFoilSorting(e.target.value)}
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-              >
-                <option value="normals_first">Normals First (Normal -&gt; Rev Holo -&gt; Holo)</option>
-                <option value="foils_first">Foils First (Rev Holo -&gt; Holo -&gt; Normal)</option>
-              </select>
-            </div>
 
             {/* Advanced configurations accordion during editing */}
             {renderAdvancedConfigAccordion(false)}
