@@ -3,6 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pi
 import { TrendingUp, Coins, Library, Compass, Trophy, Plus, ArrowUpRight, Sparkles, X } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
+import PriceHistoryChart from './PriceHistoryChart';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
@@ -511,26 +512,7 @@ function Dashboard({ statsTrigger, onNavigate }) {
               </div>
 
               {/* Price History Area Chart */}
-              {loadingCardHistory ? (
-                <div className="spinner" style={{ height: '30px', margin: '0.5rem auto' }}></div>
-              ) : cardHistory.length > 0 && (
-                <div style={{ width: '100%', height: '80px', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px', letterSpacing: '0.05em' }}>Price Trend History (30 Days)</div>
-                  <div style={{ width: '100%', height: '50px' }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={cardHistory} margin={{ top: 0, right: 0, left: -25, bottom: 0 }}>
-                        <XAxis dataKey="recorded_at" hide />
-                        <YAxis stroke="var(--text-secondary)" style={{ fontSize: '0.6rem' }} />
-                        <Tooltip 
-                          contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)', fontSize: '0.7rem' }}
-                          formatter={(v) => [`$${v}`, 'Price']}
-                        />
-                        <Area type="monotone" dataKey="price" stroke="var(--accent-yellow)" strokeWidth={1.5} fill="rgba(234,179,8,0.1)" />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              )}
+              <PriceHistoryChart data={cardHistory} loading={loadingCardHistory} title="Price Trend History (30 Days)" height={120} />
 
               <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                 <div><span style={{ color: 'var(--text-muted)' }}>Condition:</span> <span style={{ color: '#fff' }}>{inspectorCard.condition}</span></div>

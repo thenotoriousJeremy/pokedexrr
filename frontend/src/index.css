@@ -1421,49 +1421,89 @@ button, input, select, textarea {
   font-size: 0.7rem;
 }
 
-/* Premium Holofoil Shimmer Sheen */
-@keyframes holoShimmer {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
+/* ==========================================================================
+   FOIL FINISHES — Holofoil vs Reverse Holofoil are intentionally distinct.
+   Holofoil  = full rainbow prism that drifts continuously (screen blend).
+   Reverse   = cool silver sheen band sweeping over a subtle pinstripe.
+   The continuous motion lives on ::after pseudo-elements so it never fights
+   the JS tilt handler, which drives the element's own background-position.
+   ========================================================================== */
+
+@keyframes holoDrift {
+  to { transform: rotate(360deg); }
+}
+@keyframes foilSweep {
+  0%   { transform: translateX(-120%) skewX(-18deg); }
+  60%, 100% { transform: translateX(320%) skewX(-18deg); }
 }
 
 .holo-shine-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
+  overflow: hidden;
+  border-radius: inherit;
   background: linear-gradient(125deg,
     rgba(255, 255, 255, 0) 0%,
-    rgba(255, 0, 128, 0.08) 15%,
-    rgba(128, 0, 255, 0.12) 30%,
-    rgba(0, 128, 255, 0.12) 45%,
-    rgba(0, 255, 128, 0.08) 60%,
-    rgba(255, 255, 0, 0.12) 75%,
+    rgba(255, 0, 128, 0.14) 15%,
+    rgba(128, 0, 255, 0.20) 30%,
+    rgba(0, 128, 255, 0.20) 45%,
+    rgba(0, 255, 128, 0.14) 60%,
+    rgba(255, 255, 0, 0.18) 75%,
     rgba(255, 255, 255, 0) 100%
   );
   background-size: 200% 200%;
   pointer-events: none;
   z-index: 5;
   mix-blend-mode: screen;
-  opacity: 0.3;
+  opacity: 0.5;
   transition: opacity 0.3s ease, background-position 0.05s ease-out;
+}
+.holo-shine-overlay::after {
+  content: '';
+  position: absolute;
+  inset: -60%;
+  background: conic-gradient(from 0deg,
+    #ff0080, #8b00ff, #0080ff, #00ffcc, #ffee00, #ff6a00, #ff0080);
+  mix-blend-mode: color-dodge;
+  opacity: 0.22;
+  animation: holoDrift 7s linear infinite;
 }
 
 .reverse-holo-shine-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: linear-gradient(135deg,
-    rgba(255, 255, 255, 0.25) 0%,
-    rgba(255, 255, 255, 0) 30%,
-    rgba(255, 255, 255, 0.2) 50%,
-    rgba(255, 255, 255, 0) 70%,
-    rgba(255, 255, 255, 0.25) 100%
+  overflow: hidden;
+  border-radius: inherit;
+  background: repeating-linear-gradient(112deg,
+    rgba(220, 240, 255, 0.06) 0px,
+    rgba(220, 240, 255, 0.06) 6px,
+    rgba(0, 0, 0, 0) 6px,
+    rgba(0, 0, 0, 0) 13px
   );
-  background-size: 200% 200%;
   pointer-events: none;
   z-index: 5;
   mix-blend-mode: overlay;
-  opacity: 0.4;
+  opacity: 0.55;
   transition: opacity 0.3s ease, background-position 0.05s ease-out;
+}
+.reverse-holo-shine-overlay::after {
+  content: '';
+  position: absolute;
+  top: -20%; bottom: -20%;
+  left: 0;
+  width: 45%;
+  background: linear-gradient(90deg,
+    transparent,
+    rgba(190, 225, 255, 0.55) 45%,
+    rgba(255, 255, 255, 0.65) 50%,
+    rgba(190, 225, 255, 0.55) 55%,
+    transparent);
+  animation: foilSweep 4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .holo-shine-overlay::after,
+  .reverse-holo-shine-overlay::after { animation: none; }
 }
 
 /* 3D Card Hover Tilt Effects */
