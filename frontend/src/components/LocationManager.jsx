@@ -5,6 +5,24 @@ import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '.
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getPageNum, getSlotNum } from '../utils/locationCoords';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
+import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
+import { buildLocationProfiles, suggestBestContainer } from '../utils/containerSuggest';
+
+// Shared corner badge for a card's finish (Holo / Rev / 1st / Promo). Colors and
+// label come from the single source of truth so Storage matches Collection.
+function PrintingBadge({ printing, style }) {
+  const label = getPrintingBadgeLabel(printing);
+  if (!label) return null;
+  return (
+    <span style={{
+      position: 'absolute', top: '4px', right: '4px',
+      fontSize: '0.55rem', fontWeight: 900, letterSpacing: '0.05em',
+      padding: '1px 5px', borderRadius: '3px', zIndex: 10,
+      boxShadow: '0 1px 3px rgba(0,0,0,0.5)', textTransform: 'uppercase',
+      ...getPrintingBadgeStyle(printing), ...style
+    }}>{label}</span>
+  );
+}
 
 function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, setSelectedCardFilter, setActiveTab }) {
   const isMobile = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
@@ -43,8 +61,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [editMaxPages, setEditMaxPages] = useState(30);
   const [editPageStyle, setEditPageStyle] = useState('3x3');
   const [editMaxRows, setEditMaxRows] = useState(3);
+  const [editMaxRowsStr, setEditMaxRowsStr] = useState('3'); // string version to allow clearing
   const [editMaxCapacity, setEditMaxCapacity] = useState(1000);
   const [editFoilSorting, setEditFoilSorting] = useState('normals_first');
+  const [editRowCapacity, setEditRowCapacity] = useState(40); // cards per row for box
+  const [editRowCapacityStr, setEditRowCapacityStr] = useState('40');
+  const [editAssignedSets, setEditAssignedSets] = useState(''); // newline-separated set names
 
   // Binder Grid Visualizer states
   const [viewMode, setViewMode] = useState('grid'); // Defaults to 'grid' (no list view)
@@ -58,11 +80,15 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   
   // Unsorted Cards states
   const [unsortedCards, setUnsortedCards] = useState([]);
+  const [allCards, setAllCards] = useState([]); // full collection, for cross-location suggestions
+  const locationProfiles = useMemo(() => buildLocationProfiles(allCards), [allCards]);
   const [unsortedSearch, setUnsortedSearch] = useState('');
   const [unsortedSortOrder, setUnsortedSortOrder] = useState('name-asc');
   const [unsortedViewMode, setUnsortedViewMode] = useState('list'); // 'list' or 'assistant'
   const [assistantIndex, setAssistantIndex] = useState(0);
-  const [assistantHighlightRow, setAssistantHighlightRow] = useState(null); // NEW: highlighted row for box visualizer
+  const [assistantHighlightRow, setAssistantHighlightRow] = useState(null);
+  const [assistantHighlightPos, setAssistantHighlightPos] = useState(null); // NEW: highlighted position within row
+  const [expandedRow, setExpandedRow] = useState(null); // NEW: which row is expanded in box visualizer
   const [unsortedDateFilter, setUnsortedDateFilter] = useState('all');
   const [carouselTouchStartIndex, setCarouselTouchStartIndex] = useState(0);
   
@@ -1031,41 +1057,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   {/* Shiny holo overlay */}
                   {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '8px' }} />}
                   {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '8px' }} />}
-                  {/* Holo / Rev Holo text badge indicators */}
-                  {card.printing === 'Holofoil' && (
-                    <span style={{
-                      position: 'absolute',
-                      top: '4px',
-                      right: '4px',
-                      background: 'rgba(217, 119, 6, 0.95)',
-                      color: '#fff',
-                      fontSize: '0.55rem',
-                      fontWeight: 900,
-                      letterSpacing: '0.05em',
-                      padding: '1px 4px',
-                      borderRadius: '3px',
-                      zIndex: 10,
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                      textTransform: 'uppercase'
-                    }}>Holo</span>
-                  )}
-                  {card.printing === 'Reverse Holofoil' && (
-                    <span style={{
-                      position: 'absolute',
-                      top: '4px',
-                      right: '4px',
-                      background: 'rgba(75, 85, 99, 0.95)',
-                      color: '#fff',
-                      fontSize: '0.55rem',
-                      fontWeight: 900,
-                      letterSpacing: '0.05em',
-                      padding: '1px 4px',
-                      borderRadius: '3px',
-                      zIndex: 10,
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                      textTransform: 'uppercase'
-                    }}>Rev Holo</span>
-                  )}
+                  {/* Finish badge (shared style) */}
+                  <PrintingBadge printing={card.printing} />
                   <div style={{
                     position: 'absolute',
                     bottom: 0, left: 0, right: 0,
@@ -1236,7 +1229,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       const response = await fetch('/api/collection');
       if (response.ok) {
         const allCards = await response.json();
-        
+        setAllCards(allCards);
+
         // Unsorted cards: location_id is null or empty
         const unsorted = allCards.filter(c => !c.location_id);
         setUnsortedCards(unsorted);
@@ -1407,7 +1401,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       const maxBinderCapacity = maxPages * pocketsCount;
 
       const maxRows = selectedLoc.max_rows || 3;
-      const maxBoxCapacity = maxRows * 40; // 40 cards per row max
+      const rowCapacity = parseAdvancedConfig(selectedLoc).rowCapacity || 40;
+      const maxBoxCapacity = maxRows * rowCapacity;
 
       let excessCount = 0;
 
@@ -1430,8 +1425,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           }
         } else if (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand') {
           if (index < maxBoxCapacity) {
-            const rowNum = Math.floor(index / 40) + 1;
-            const seq = (index % 40) + 1;
+            const rowNum = Math.floor(index / rowCapacity) + 1;
+            const seq = (index % rowCapacity) + 1;
             sub1 = `Row ${rowNum}`;
             sub2 = String(seq);
           } else {
@@ -1761,6 +1756,21 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   const handleUpdateLocation = async () => {
     if (!editName) return;
+
+    // Merge existing config with new box-specific fields
+    const existingConfig = parseAdvancedConfig(selectedLoc);
+    const isBoxType = (editType === 'Box' || editType === 'Toploader Box' || editType === 'Graded Slab Box' || editType === 'Display Shelf / Stand');
+    let newDescription = selectedLoc.description || '';
+    if (isBoxType) {
+      const assignedSetsArray = editAssignedSets.trim() ? editAssignedSets.split('\n').map(s => s.trim()).filter(Boolean) : [];
+      const updatedConfig = {
+        ...existingConfig,
+        rowCapacity: editRowCapacity || 40,
+        assignedSets: assignedSetsArray
+      };
+      newDescription = JSON.stringify(updatedConfig);
+    }
+
     try {
       const response = await fetch(`/api/locations/${selectedLoc.id}`, {
         method: 'PUT',
@@ -1768,11 +1778,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         body: JSON.stringify({
           name: editName,
           type: editType,
+          description: newDescription,
           sort_order: editSortOrder,
           max_pages: (editType === 'Binder' || editType === 'Toploader Binder') ? parseInt(editMaxPages, 10) : 30,
           page_style: (editType === 'Binder' || editType === 'Toploader Binder') ? editPageStyle : '3x3',
-          max_rows: (editType === 'Box' || editType === 'Toploader Box' || editType === 'Graded Slab Box' || editType === 'Display Shelf / Stand') ? parseInt(editMaxRows, 10) : 3,
-          max_capacity: (editType !== 'Binder' && editType !== 'Toploader Binder' && editType !== 'Box' && editType !== 'Toploader Box' && editType !== 'Graded Slab Box' && editType !== 'Display Shelf / Stand') ? parseInt(editMaxCapacity, 10) : 1000,
+          max_rows: isBoxType ? (parseInt(editMaxRowsStr, 10) || editMaxRows || 3) : 3,
+          max_capacity: (editType !== 'Binder' && editType !== 'Toploader Binder' && !isBoxType) ? parseInt(editMaxCapacity, 10) : 1000,
           foil_sorting: editFoilSorting
         })
       });
@@ -1838,8 +1849,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           }
         } else if (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand') {
           const maxRows = selectedLoc.max_rows || 3;
-          const rowNum = Math.floor(targetIndex / 40) + 1;
-          const seq = (targetIndex % 40) + 1;
+          const rowCapacity = config.rowCapacity || 40;
+          const rowNum = Math.floor(targetIndex / rowCapacity) + 1;
+          const seq = (targetIndex % rowCapacity) + 1;
 
           if (rowNum <= maxRows) {
             return {
@@ -1878,10 +1890,11 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       }
     } else if (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand') {
       const maxRows = selectedLoc.max_rows || 3;
+      const rowCapacity = config.rowCapacity || 40;
       for (let r = 1; r <= maxRows; r++) {
         const rowName = `Row ${r}`;
         const existingInRow = locationCards.filter(c => c.sub_location_1 === rowName);
-        if (existingInRow.length < 40) {
+        if (existingInRow.length < rowCapacity) {
           const nextSeq = existingInRow.length + 1;
           return { sub1: rowName, sub2: String(nextSeq), label: `${rowName}, Pos ${nextSeq}` };
         }
@@ -2041,9 +2054,17 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       setEditSortOrder(selectedLoc.sort_order || 'custom');
                       setEditMaxPages(selectedLoc.max_pages || 30);
                       setEditPageStyle(selectedLoc.page_style || '3x3');
-                      setEditMaxRows(selectedLoc.max_rows || 3);
+                      const rows = selectedLoc.max_rows || 3;
+                      setEditMaxRows(rows);
+                      setEditMaxRowsStr(String(rows));
                       setEditMaxCapacity(selectedLoc.max_capacity || 1000);
                       setEditFoilSorting(selectedLoc.foil_sorting || 'normals_first');
+                      // Load box-specific config from description JSON
+                      const cfg = parseAdvancedConfig(selectedLoc);
+                      const rowCap = cfg.rowCapacity || 40;
+                      setEditRowCapacity(rowCap);
+                      setEditRowCapacityStr(String(rowCap));
+                      setEditAssignedSets((cfg.assignedSets || []).join('\n'));
                       setIsEditing(true);
                     }}
                     style={{ width: '26px', height: '26px', padding: 0, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem' }}
@@ -2309,40 +2330,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                   {/* Shiny holo overlay */}
                                   {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '8px' }} />}
                                   {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '8px' }} />}
-                                  {/* Holo / Rev Holo text badge indicators */}
-                                  {card.printing === 'Holofoil' && (
-                                    <span style={{
-                                      position: 'absolute',
-                                      top: '4px',
-                                      right: '4px',
-                                      background: 'rgba(217, 119, 6, 0.95)',
-                                      color: '#fff',
-                                      fontSize: '0.55rem',
-                                      fontWeight: 900,
-                                      letterSpacing: '0.05em',
-                                      padding: '1px 4px',
-                                      borderRadius: '3px',
-                                      zIndex: 10,
-                                      boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                                      textTransform: 'uppercase'
-                                    }}>Holo</span>
-                                  )}
-                                  {card.printing === 'Reverse Holofoil' && (
-                                    <span style={{
-                                      position: 'absolute',
-                                      top: '4px',
-                                      right: '4px',
-                                      background: 'rgba(75, 85, 99, 0.95)',
-                                      color: '#fff',
-                                      fontSize: '0.55rem',
-                                      fontWeight: 900,
-                                      letterSpacing: '0.05em',
-                                      padding: '1px 4px',
-                                      borderRadius: '3px',
-                                      zIndex: 10,
-                                      boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                                    }}>Rev Holo</span>
-                                  )}
+                                  {/* Finish badge (shared style) */}
+                                  <PrintingBadge printing={card.printing} />
                                   
                                   {/* Card Rarity Indicator Badge */}
                                   <span style={{
@@ -2378,7 +2367,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                     borderBottomLeftRadius: '4px',
                                     borderBottomRightRadius: '4px'
                                   }}>
-                                    {getCardDisplayName(card.name, card.language)} (x{card.quantity})
+                                    {getCardDisplayName(card.name, card.language)}{card.quantity > 1 ? ` ×${card.quantity}` : ''}
                                   </div>
                                 </div>
                               ) : (
@@ -2532,6 +2521,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               }
 
               const recommended = findNextRecommendedSlot(card);
+              const bestContainer = suggestBestContainer(card, locations, locationProfiles);
+              const suggestsElsewhere = bestContainer && bestContainer.location.id !== selectedLoc?.id;
 
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -2596,6 +2587,24 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         <div>Cond: <strong style={{ color: '#fff' }}>{card.condition}</strong></div>
                         <div>Value: <strong style={{ color: 'var(--accent-yellow)' }}>${(card.price_trend || 0).toFixed(2)}</strong></div>
                       </div>
+
+                      {suggestsElsewhere && (
+                        <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.25)', padding: '0.4rem 0.5rem', borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          <span style={{ fontSize: '0.55rem', color: 'var(--accent-blue)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>💡 Best fit: {bestContainer.location.name}</span>
+                          <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>{bestContainer.reason} • {bestContainer.free} free</span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={async () => {
+                              await handleRelocateCardToContainer(card.entry_id, bestContainer.location);
+                              if (idx >= queue.length - 1) setAssistantIndex(0);
+                            }}
+                            style={{ width: '100%', marginTop: '2px', fontSize: '0.62rem', padding: '0.22rem', height: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                          >
+                            Send to {bestContainer.location.name}
+                          </button>
+                        </div>
+                      )}
 
                       {recommended ? (() => {
                         const sortLabels = { 'custom': 'Custom', 'name-asc': 'A-Z', 'price-desc': 'Value', 'set-number': 'Set & Number', 'set-number-printing': 'Set/Number/Printing', 'type-name': 'Energy Type' };
@@ -3320,17 +3329,64 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
             {/* Box-specific fields */}
             {(editType === 'Box' || editType === 'Toploader Box' || editType === 'Graded Slab Box' || editType === 'Display Shelf / Stand') && (
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Rows / Shelves Count</label>
-                <input 
-                  type="number" 
-                  className="input-control" 
-                  value={editMaxRows} 
-                  onChange={(e) => setEditMaxRows(parseInt(e.target.value, 10) || 3)} 
-                  min="1" max="20"
-                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-                />
-              </div>
+              <>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Rows / Shelves Count</label>
+                  <input 
+                    type="text"
+                    inputMode="numeric"
+                    className="input-control" 
+                    value={editMaxRowsStr}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/[^0-9]/g, '');
+                      setEditMaxRowsStr(raw);
+                      const parsed = parseInt(raw, 10);
+                      if (!isNaN(parsed) && parsed >= 1 && parsed <= 20) setEditMaxRows(parsed);
+                    }}
+                    onBlur={() => {
+                      const parsed = parseInt(editMaxRowsStr, 10);
+                      if (isNaN(parsed) || parsed < 1) { setEditMaxRows(3); setEditMaxRowsStr('3'); }
+                      else if (parsed > 20) { setEditMaxRows(20); setEditMaxRowsStr('20'); }
+                    }}
+                    placeholder="e.g. 3"
+                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Cards Per Row (Capacity)</label>
+                  <input 
+                    type="text"
+                    inputMode="numeric"
+                    className="input-control" 
+                    value={editRowCapacityStr}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/[^0-9]/g, '');
+                      setEditRowCapacityStr(raw);
+                      const parsed = parseInt(raw, 10);
+                      if (!isNaN(parsed) && parsed >= 1) setEditRowCapacity(parsed);
+                    }}
+                    onBlur={() => {
+                      const parsed = parseInt(editRowCapacityStr, 10);
+                      if (isNaN(parsed) || parsed < 1) { setEditRowCapacity(40); setEditRowCapacityStr('40'); }
+                    }}
+                    placeholder="e.g. 40"
+                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
+                  />
+                  <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginTop: '2px', display: 'block' }}>How many cards physically fit in each row</span>
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Assigned Sets (one per line)</label>
+                  <textarea
+                    className="input-control"
+                    value={editAssignedSets}
+                    onChange={(e) => setEditAssignedSets(e.target.value)}
+                    placeholder={"e.g.\nBase Set\nJungle\nFossil"}
+                    rows={4}
+                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.7rem', resize: 'vertical', minHeight: '70px', fontFamily: 'inherit', lineHeight: 1.4 }}
+                  />
+                  <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginTop: '2px', display: 'block' }}>The assistant uses these sets to recommend this box for matching cards</span>
+                </div>
+              </>
             )}
 
             {/* Capacity-specific fields */}
@@ -3435,9 +3491,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         </span>
                         <span style={{
                           fontSize: '0.55rem',
-                          background: c.printing === 'Holofoil' ? 'rgba(217, 119, 6, 0.95)' : c.printing === 'Reverse Holofoil' ? 'rgba(75, 85, 99, 0.95)' : 'rgba(255,255,255,0.05)',
-                          color: '#fff',
-                          padding: '1px 4px',
+                          ...getPrintingBadgeStyle(c.printing),
+                          padding: '1px 5px',
                           borderRadius: '3px',
                           fontWeight: 700,
                           textTransform: 'uppercase'

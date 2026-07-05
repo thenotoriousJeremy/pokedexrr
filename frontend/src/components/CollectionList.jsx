@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Search, Download, Trash2, Edit2, X, MapPin, LayoutGrid, List, Database, Upload, ChevronDown } from 'lucide-react';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
+import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
+import PriceHistoryChart from './PriceHistoryChart';
 import DeckBuilder from './DeckBuilder';
 
 function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCardFilter, setSelectedCardFilter }) {
@@ -456,9 +457,12 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
             const glowClass = isUltra ? 'rarity-glow-ultra' : '';
 
             return (
-              <div key={item.entry_id} className="tcg-card" onClick={() => setInspectorCard(item)}>
+              <div key={item.entry_id} className="tcg-card tilt-card-wrapper" onClick={() => setInspectorCard(item)}>
                 <div className={`tcg-card-inner ${glowClass}`}>
                   <img src={item.image_url} alt={item.name} className="tcg-card-image" loading="lazy" />
+                  {getFoilOverlayClass(item.printing) && (
+                    <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
+                  )}
                   <div className="tcg-card-quantity-tag">x{item.quantity}</div>
                   
                   {/* Overlay Tags */}
@@ -493,13 +497,10 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                         fontWeight: 800,
                         padding: '2px 5px',
                         borderRadius: '3px',
-                        background: item.printing.includes('Holo') ? 'rgba(234, 179, 8, 0.9)' : 'rgba(59, 130, 246, 0.9)',
-                        color: '#000',
+                        ...getPrintingBadgeStyle(item.printing),
                         border: '1px solid rgba(255, 255, 255, 0.2)'
                       }}>
-                        {item.printing === 'Reverse Holofoil' ? 'REV' : 
-                         item.printing === 'Holofoil' ? 'HOLO' : 
-                         item.printing === '1st Edition' ? '1ST' : 'PRM'}
+                        {getPrintingBadgeLabel(item.printing)}
                       </span>
                     )}
                   </div>
@@ -531,14 +532,10 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                   <tr key={item.entry_id}>
                     <td>
                       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                        <div style={{ position: 'relative', width: '36px', height: '50px', flexShrink: 0 }}>
+                        <div style={{ position: 'relative', width: '36px', height: '50px', flexShrink: 0, overflow: 'hidden', borderRadius: '4px' }}>
                           <img src={item.image_url} alt={item.name} className="collection-row-thumbnail" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px' }} />
-                          {((item.printing || '').toLowerCase().includes('holo') || (item.printing || '').toLowerCase().includes('foil')) && (
-                            <div style={{
-                              position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-                              background: 'linear-gradient(135deg, rgba(255,255,255,0.25) 0%, transparent 50%, rgba(255,255,255,0.15) 100%)',
-                              pointerEvents: 'none', zIndex: 2, mixBlendMode: 'overlay', borderRadius: '4px'
-                            }} />
+                          {getFoilOverlayClass(item.printing) && (
+                            <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: '4px' }} />
                           )}
                         </div>
                         <div style={{ minWidth: 0, flex: 1 }}>
@@ -562,7 +559,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                     </td>
                     <td style={{ textAlign: 'right', verticalAlign: 'top', paddingTop: '0.6rem' }}>
                       <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.85rem' }}>x{item.quantity}</div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>${(item.price_trend || 0).toFixed(2)}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>${formatPrice(item.price_trend)}</div>
                     </td>
                   </tr>
                 ))}
@@ -814,33 +811,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
               </div>
 
               {/* Price History Area Chart */}
-              {loadingHistory ? (
-                <div className="spinner" style={{ height: '30px', margin: '0.5rem auto' }}></div>
-              ) : priceHistory.length > 0 && (
-                <div style={{ width: '100%', background: 'rgba(0,0,0,0.15)', padding: '0.6rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', marginBottom: '6px', letterSpacing: '0.05em' }}>Price History (30 Days)</div>
-                  <div style={{ width: '100%', height: '65px' }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={priceHistory} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
-                        <defs>
-                          <linearGradient id="priceGlow" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="var(--accent-yellow)" stopOpacity={0.25}/>
-                            <stop offset="95%" stopColor="var(--accent-yellow)" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <XAxis dataKey="recorded_at" hide />
-                        <YAxis domain={['auto', 'auto']} stroke="var(--text-secondary)" style={{ fontSize: '0.55rem' }} width={30} />
-                        <Tooltip 
-                          contentStyle={{ background: 'rgba(0,0,0,0.85)', border: '1px solid var(--border-glass)', borderRadius: '4px', fontSize: '0.7rem', color: '#fff' }}
-                          labelFormatter={(label) => new Date(label).toLocaleDateString()}
-                          formatter={(val) => [`$${val.toFixed(2)}`, 'Market']}
-                        />
-                        <Area type="monotone" dataKey="price" stroke="var(--accent-yellow)" strokeWidth={1.5} fillOpacity={1} fill="url(#priceGlow)" />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              )}
+              <PriceHistoryChart data={priceHistory} loading={loadingHistory} />
 
               {/* Specifications Details Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem 1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-glass)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>
