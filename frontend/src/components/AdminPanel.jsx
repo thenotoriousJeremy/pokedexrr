@@ -70,8 +70,8 @@ function AdminPanel({ showToast }) {
       showToast('Username must be at least 3 characters.');
       return;
     }
-    if (newPassword.length < 5) {
-      showToast('Password must be at least 5 characters.');
+    if (newPassword.length < 8) {
+      showToast('Password must be at least 8 characters.');
       return;
     }
 
@@ -135,8 +135,8 @@ function AdminPanel({ showToast }) {
   const handleChangePassword = async (e) => {
     e.preventDefault();
     if (!targetUser) return;
-    if (updatePassword.length < 5) {
-      showToast('Password must be at least 5 characters.');
+    if (updatePassword.length < 8) {
+      showToast('Password must be at least 8 characters.');
       return;
     }
 

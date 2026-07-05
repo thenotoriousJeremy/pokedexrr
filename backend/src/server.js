@@ -1,5 +1,8 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const crypto = require('crypto');
@@ -8,6 +11,10 @@ const tcgApi = require('./tcgApi');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// CSP is left to be configured deliberately for this app's asset setup rather than
+// enabling helmet's restrictive default, which can silently break asset loading.
+app.use(helmet({ contentSecurityPolicy: false }));
 
 // Restrict cross-origin access to known frontend origins. Defaults cover the
 // Vite dev server; production deployments should set CORS_ORIGIN explicitly.
@@ -48,6 +55,13 @@ db.initDb()
     setTimeout(() => {
       tcgApi.updateCollectionPrices();
     }, 30000);
+
+    // Periodically purge expired sessions so the table doesn't grow unbounded
+    setInterval(() => {
+      db.run(`DELETE FROM sessions WHERE expires_at <= DATETIME('now')`).catch(err => {
+        console.error('Failed to purge expired sessions:', err);
+      });
+    }, 1000 * 60 * 60 * 24);
   })
   .catch(err => {
     console.error('Failed to initialize database:', err);
@@ -58,10 +72,23 @@ db.initDb()
 function verifyPassword(password, storedHash) {
   if (!storedHash) return false;
   const parts = storedHash.split(':');
-  if (parts.length !== 2) return false;
-  const [salt, hash] = parts;
-  const verifyHash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
-  return hash === verifyHash;
+
+  let iterations, salt, hash;
+  if (parts.length === 3) {
+    [iterations, salt, hash] = parts;
+    iterations = parseInt(iterations, 10);
+  } else if (parts.length === 2) {
+    // Legacy hashes created before the iteration count was stored per-hash.
+    iterations = 10000;
+    [salt, hash] = parts;
+  } else {
+    return false;
+  }
+
+  const storedBuf = Buffer.from(hash, 'hex');
+  const verifyBuf = crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512');
+  if (storedBuf.length !== verifyBuf.length) return false;
+  return crypto.timingSafeEqual(storedBuf, verifyBuf);
 }
 
 function resolveCardPrice(card) {
@@ -252,7 +279,8 @@ async function authenticateToken(req, res, next) {
     };
     next();
   } catch (error) {
-    res.status(500).json({ error: 'Authentication error', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Authentication error' });
   }
 }
 
@@ -271,8 +299,8 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
   if (cleanUsername.length < 3) {
     return res.status(400).json({ error: 'Username must be at least 3 characters' });
   }
-  if (password.length < 5) {
-    return res.status(400).json({ error: 'Password must be at least 5 characters' });
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
 
   try {
@@ -302,7 +330,8 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to register', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to register' });
   }
 });
 
@@ -335,7 +364,8 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({ error: 'Login failed', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Login failed' });
   }
 });
 
@@ -350,7 +380,8 @@ app.post('/api/auth/logout', authenticateToken, async (req, res) => {
     }
     res.json({ message: 'Logged out successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Logout failed', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Logout failed' });
   }
 });
 
@@ -365,8 +396,8 @@ app.put('/api/auth/settings', authenticateToken, async (req, res) => {
 
   try {
     if (password !== undefined) {
-      if (password.length < 5) {
-        return res.status(400).json({ error: 'Password must be at least 5 characters' });
+      if (password.length < 8) {
+        return res.status(400).json({ error: 'Password must be at least 8 characters' });
       }
       const currentUser = await db.get(`SELECT password_hash FROM users WHERE id = ?`, [req.user.id]);
       if (!current_password || !verifyPassword(current_password, currentUser.password_hash)) {
@@ -403,7 +434,8 @@ app.put('/api/auth/settings', authenticateToken, async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update settings', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update settings' });
   }
 });
 
@@ -524,7 +556,8 @@ app.get('/api/shared/:share_token', async (req, res) => {
     });
 
   } catch (error) {
-    res.status(500).json({ error: 'Failed to retrieve shared collection', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve shared collection' });
   }
 });
 
@@ -574,7 +607,8 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
 
     res.json(usersWithStats);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to retrieve users list', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve users list' });
   }
 });
 
@@ -589,8 +623,8 @@ app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =
   if (cleanUsername.length < 3) {
     return res.status(400).json({ error: 'Username must be at least 3 characters' });
   }
-  if (password.length < 5) {
-    return res.status(400).json({ error: 'Password must be at least 5 characters' });
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
   if (role !== 'member' && role !== 'admin') {
     return res.status(400).json({ error: 'Invalid role specification' });
@@ -612,7 +646,8 @@ app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =
 
     res.status(201).json({ message: `User "${cleanUsername}" created successfully.` });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to create user', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to create user' });
   }
 });
 
@@ -628,8 +663,8 @@ app.put('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res
     }
 
     if (password !== undefined) {
-      if (password.length < 5) {
-        return res.status(400).json({ error: 'Password must be at least 5 characters' });
+      if (password.length < 8) {
+        return res.status(400).json({ error: 'Password must be at least 8 characters' });
       }
       const newHash = db.hashPassword(password);
       await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, id]);
@@ -648,7 +683,8 @@ app.put('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res
 
     res.json({ message: 'User updated successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update user', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update user' });
   }
 });
 
@@ -673,12 +709,17 @@ app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, 
 
     res.json({ message: `User "${targetUser.username}" and all their card collections/locations have been permanently deleted.` });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to delete user', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to delete user' });
   }
 });
 
-// Generate a random collection of various cards for admins database so we can test
+// Generate a random collection of various cards for admins database so we can test.
+// Dev/test-data helper only — unreachable once NODE_ENV=production.
 app.post('/api/admin/seed-cards', authenticateToken, requireAdmin, async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: 'Not available in production' });
+  }
   try {
     // 1. Get or create Binder and Box locations for admin
     let binder = await db.get(`SELECT id, page_style FROM locations WHERE user_id = ? AND type = 'Binder' LIMIT 1`, [req.user.id]);
@@ -772,7 +813,8 @@ app.post('/api/admin/seed-cards', authenticateToken, requireAdmin, async (req, r
 
     res.json({ message: `Successfully seeded test collection with ${addedCount} cards for admin user!` });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to seed test cards', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to seed test cards' });
   }
 });
 
@@ -785,7 +827,8 @@ app.get('/api/search', authenticateToken, async (req, res) => {
     const results = await tcgApi.searchCards(name, number, set, req.user.tcg_api_key);
     res.json(results);
   } catch (error) {
-    res.status(500).json({ error: 'Search failed', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Search failed' });
   }
 });
 
@@ -852,7 +895,8 @@ app.get('/api/collection', authenticateToken, async (req, res) => {
     
     res.json(formatted);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to retrieve collection', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve collection' });
   }
 });
 
@@ -987,7 +1031,8 @@ app.post('/api/collection', authenticateToken, async (req, res) => {
 
     res.status(201).json({ message: 'Card added to collection', id: lastInsertedId });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to add card', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to add card' });
   }
 });
 
@@ -1122,7 +1167,8 @@ app.put('/api/collection/:id', authenticateToken, async (req, res) => {
     
     res.json({ message: 'Collection entry updated successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update entry', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update entry' });
   }
 });
 
@@ -1136,7 +1182,8 @@ app.delete('/api/collection/:id', authenticateToken, async (req, res) => {
     }
     res.json({ message: 'Card removed from collection' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to remove card', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to remove card' });
   }
 });
 
@@ -1152,7 +1199,8 @@ app.get('/api/locations', authenticateToken, async (req, res) => {
     `, [req.user.id]);
     res.json(locations);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to retrieve locations', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve locations' });
   }
 });
 
@@ -1195,7 +1243,8 @@ app.post('/api/locations', authenticateToken, async (req, res) => {
     ]);
     res.status(201).json({ message: 'Location created', id: result.lastID });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to create location', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to create location' });
   }
 });
 
@@ -1243,7 +1292,8 @@ app.put('/api/locations/:id', authenticateToken, async (req, res) => {
     ]);
     res.json({ message: 'Location updated' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update location', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update location' });
   }
 });
 
@@ -1261,7 +1311,8 @@ app.delete('/api/locations/:id', authenticateToken, async (req, res) => {
     await db.run(`DELETE FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     res.json({ message: 'Location deleted successfully (any stored cards moved to Unsorted)' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to delete location', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to delete location' });
   }
 });
 
@@ -1490,7 +1541,8 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
       setProgress: setProgress.slice(0, 4)
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to compute statistics', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to compute statistics' });
   }
 });
 
@@ -1559,7 +1611,8 @@ app.get('/api/stats/history', authenticateToken, async (req, res) => {
 
     res.json(historyData);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to compute timeline history', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to compute timeline history' });
   }
 });
 
@@ -1622,13 +1675,20 @@ app.get('/api/export', authenticateToken, async (req, res) => {
       'Market Price', 'Location Container', 'Sub-Location Page/Row', 'Sub-Location Slot/Section', 'Added At'
     ];
 
+    // Neutralize leading =, +, -, @ so spreadsheet apps don't interpret free-text
+    // fields (card/location names) as formulas when the export is opened.
+    const csvCell = (value) => {
+      const str = String(value ?? '');
+      return /^[=+\-@]/.test(str) ? `'${str}` : str;
+    };
+
     let csvContent = headers.join(',') + '\n';
-    
+
     rows.forEach(r => {
       const line = [
         r.card_id,
-        `"${r.card_name.replace(/"/g, '""')}"`,
-        `"${r.set_name.replace(/"/g, '""')}"`,
+        `"${csvCell(r.card_name).replace(/"/g, '""')}"`,
+        `"${csvCell(r.set_name).replace(/"/g, '""')}"`,
         r.set_id,
         r.card_number,
         r.rarity,
@@ -1638,9 +1698,9 @@ app.get('/api/export', authenticateToken, async (req, res) => {
         r.language,
         r.purchase_price || 0,
         r.market_price || 0,
-        r.location_name ? `"${r.location_name.replace(/"/g, '""')}"` : 'Unassigned',
-        r.sub_location_1 ? `"${r.sub_location_1.replace(/"/g, '""')}"` : '',
-        r.sub_location_2 ? `"${r.sub_location_2.replace(/"/g, '""')}"` : '',
+        r.location_name ? `"${csvCell(r.location_name).replace(/"/g, '""')}"` : 'Unassigned',
+        r.sub_location_1 ? `"${csvCell(r.sub_location_1).replace(/"/g, '""')}"` : '',
+        r.sub_location_2 ? `"${csvCell(r.sub_location_2).replace(/"/g, '""')}"` : '',
         r.added_at
       ];
       csvContent += line.join(',') + '\n';
@@ -1648,7 +1708,8 @@ app.get('/api/export', authenticateToken, async (req, res) => {
 
     res.send(csvContent);
   } catch (error) {
-    res.status(500).json({ error: 'Export failed', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Export failed' });
   }
 });
 
@@ -1804,7 +1865,7 @@ app.post('/api/import', authenticateToken, async (req, res) => {
     res.json({ success: true, message: `Successfully imported ${importedCount} cards.` });
   } catch (error) {
     console.error('Import failed:', error);
-    res.status(500).json({ error: 'Import failed', message: error.message });
+    res.status(500).json({ error: 'Import failed' });
   }
 });
 
@@ -1849,7 +1910,8 @@ app.get('/api/cards/:id/price-history', authenticateToken, async (req, res) => {
 
     res.json(history);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to retrieve price history', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve price history' });
   }
 });
 
@@ -1875,7 +1937,8 @@ app.get('/api/decks', authenticateToken, async (req, res) => {
     const rows = await db.all(query, [req.user.id]);
     res.json(rows);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to retrieve decks', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve decks' });
   }
 });
 
@@ -1893,7 +1956,8 @@ app.post('/api/decks', authenticateToken, async (req, res) => {
     );
     res.status(201).json({ message: 'Deck created successfully', id: result.lastID });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to create deck', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to create deck' });
   }
 });
 
@@ -1937,7 +2001,8 @@ app.get('/api/decks/:id', authenticateToken, async (req, res) => {
       cards: formatted
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to retrieve deck details', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve deck details' });
   }
 });
 
@@ -1962,7 +2027,8 @@ app.put('/api/decks/:id', authenticateToken, async (req, res) => {
 
     res.json({ message: 'Deck updated successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update deck', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update deck' });
   }
 });
 
@@ -1982,7 +2048,8 @@ app.delete('/api/decks/:id', authenticateToken, async (req, res) => {
 
     res.json({ message: 'Deck deleted successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to delete deck', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to delete deck' });
   }
 });
 
@@ -2027,7 +2094,8 @@ app.post('/api/decks/:id/cards', authenticateToken, async (req, res) => {
 
     res.json({ message: 'Card added/updated in deck successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to add card to deck', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to add card to deck' });
   }
 });
 
@@ -2044,7 +2112,8 @@ app.delete('/api/decks/:id/cards/:card_id', authenticateToken, async (req, res) 
     await db.run(`DELETE FROM deck_cards WHERE deck_id = ? AND card_id = ?`, [id, card_id]);
     res.json({ message: 'Card removed from deck successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to remove card from deck', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to remove card from deck' });
   }
 });
 
@@ -2062,7 +2131,8 @@ app.put('/api/decks/:id/checkout', authenticateToken, async (req, res) => {
     );
     res.json({ message: 'Deck checked out successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to checkout deck', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to checkout deck' });
   }
 });
 
@@ -2080,7 +2150,8 @@ app.put('/api/decks/:id/return', authenticateToken, async (req, res) => {
     );
     res.json({ message: 'Deck returned to storage successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to return deck', message: error.message });
+    console.error(error);
+    res.status(500).json({ error: 'Failed to return deck' });
   }
 });
 

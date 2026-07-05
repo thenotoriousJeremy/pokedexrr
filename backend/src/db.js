@@ -49,11 +49,14 @@ function all(sql, params = []) {
   });
 }
 
-// Password hashing utility for seeding
+// Password hashing utility. The iteration count is stored alongside the hash
+// (rather than hardcoded at verify-time) so it can be raised in the future
+// without invalidating passwords hashed under a lower count.
+const PBKDF2_ITERATIONS = 210000;
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
-  return `${salt}:${hash}`;
+  const hash = crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, 64, 'sha512').toString('hex');
+  return `${PBKDF2_ITERATIONS}:${salt}:${hash}`;
 }
 
 // Initialize tables

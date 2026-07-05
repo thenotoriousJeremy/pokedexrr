@@ -21,8 +21,8 @@ function Login({ onLoginSuccess }) {
         setLoading(false);
         return;
       }
-      if (password.length < 5) {
-        setError('Password must be at least 5 characters.');
+      if (password.length < 8) {
+        setError('Password must be at least 8 characters.');
         setLoading(false);
         return;
       }

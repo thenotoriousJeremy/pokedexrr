@@ -72,8 +72,8 @@ function Settings({ user, onUpdateUser, showToast }) {
       showToast('Please enter your current password.');
       return;
     }
-    if (password.length < 5) {
-      showToast('Password must be at least 5 characters.');
+    if (password.length < 8) {
+      showToast('Password must be at least 8 characters.');
       return;
     }
     if (password !== confirmPassword) {
@@ -378,7 +378,7 @@ function Settings({ user, onUpdateUser, showToast }) {
               <input 
                 type="password" 
                 className="input-control" 
-                placeholder="At least 5 characters"
+                placeholder="At least 8 characters"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
