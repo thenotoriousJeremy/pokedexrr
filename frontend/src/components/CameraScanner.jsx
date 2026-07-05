@@ -3,117 +3,11 @@ import { Camera, RefreshCw, AlertTriangle, Plus, X, Search, Sparkles, Settings, 
 import Tesseract from 'tesseract.js';
 import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
-
-const POKEMON_JP_TO_EN = {
-  'カイリュー': 'Dragonite',
-  'ハクリュー': 'Dragonair',
-  'ミニリュウ': 'Dratini',
-  'リザードン': 'Charizard',
-  'カメックス': 'Blastoise',
-  'フシギバナ': 'Venusaur',
-  'ピカチュウ': 'Pikachu',
-  'ライチュウ': 'Raichu',
-  'ギャラドス': 'Gyarados',
-  'フーディン': 'Alakazam',
-  'カイリキー': 'Machamp',
-  'ゲンガー': 'Gengar',
-  'ミュウツー': 'Mewtwo',
-  'ミュウ': 'Mew',
-  'ルギア': 'Lugia',
-  'ホウオウ': 'Ho-Oh',
-  'セレビィ': 'Celebi',
-  'ドンメル': 'Numel',
-  'バクーダ': 'Camerupt',
-  'コダック': 'Psyduck',
-  'メタモン': 'Ditto',
-  'ニャース': 'Meowth',
-  'カビゴン': 'Snorlax',
-  'ルカリオ': 'Lucario',
-  'ゲッコウガ': 'Greninja',
-  'ヒトカゲ': 'Charmander',
-  'フシギダネ': 'Bulbasaur',
-  'ゼニガメ': 'Squirtle',
-  'イーブイ': 'Eevee',
-  'シャワーズ': 'Vaporeon',
-  'サンダース': 'Jolteon',
-  'ブースター': 'Flareon',
-  'エーフィ': 'Espeon',
-  'ブラッキー': 'Umbreon',
-  'トゲピー': 'Togepi',
-  'クロバット': 'Crobat',
-  'デンリュウ': 'Ampharos',
-  'ハッサム': 'Scizor',
-  'ヘラクロス': 'Heracross',
-  'サナギラス': 'Pupitar',
-  'バンギラス': 'Tyranitar',
-  'スイクン': 'Suicune',
-  'ライコウ': 'Raikou',
-  'エンテイ': 'Entei',
-  'ニャオハ': 'Sprigatito',
-  'ホゲータ': 'Fuecoco',
-  'クワッス': 'Quaxly'
-};
-
-const translateJapaneseName = (rawJpName) => {
-  let jp = rawJpName.replace(/[^\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\uFF00-\uFFEF\u4E00-\u9FAF]/g, '').trim();
-  if (!jp) return '';
-
-  let prefix = '';
-  if (jp.startsWith('わるい')) {
-    prefix = 'Dark ';
-    jp = jp.substring(3);
-  } else if (jp.startsWith('やさしい')) {
-    prefix = 'Light ';
-    jp = jp.substring(4);
-  } else if (jp.startsWith('ひかる')) {
-    prefix = 'Shining ';
-    jp = jp.substring(3);
-  } else if (jp.startsWith('サカキの')) {
-    prefix = "Giovanni's ";
-    jp = jp.substring(4);
-  } else if (jp.startsWith('タケシの')) {
-    prefix = "Brock's ";
-    jp = jp.substring(4);
-  } else if (jp.startsWith('カスミの')) {
-    prefix = "Misty's ";
-    jp = jp.substring(4);
-  } else if (jp.startsWith('マチスの')) {
-    prefix = "Lt. Surge's ";
-    jp = jp.substring(4);
-  } else if (jp.startsWith('エリカの')) {
-    prefix = "Erika's ";
-    jp = jp.substring(4);
-  } else if (jp.startsWith('ナツメの')) {
-    prefix = "Sabrina's ";
-    jp = jp.substring(4);
-  } else if (jp.startsWith('キョウの')) {
-    prefix = "Koga's ";
-    jp = jp.substring(4);
-  } else if (jp.startsWith('カツラの')) {
-    prefix = "Blaine's ";
-    jp = jp.substring(4);
-  }
-
-  let baseName = POKEMON_JP_TO_EN[jp];
-  if (!baseName) {
-    const foundKey = Object.keys(POKEMON_JP_TO_EN).find(k => jp.includes(k) || k.includes(jp));
-    if (foundKey) {
-      baseName = POKEMON_JP_TO_EN[foundKey];
-    }
-  }
-
-  if (baseName) {
-    return prefix + baseName;
-  }
-  return '';
-};
+import { translateJapaneseName } from '../utils/pokemonTranslation';
+import { formatPrice } from '../utils/formatPrice';
+import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 
 function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
-  const formatPrice = (p) => {
-    if (p === null || p === undefined) return '0.00';
-    const num = parseFloat(p);
-    return isNaN(num) ? '0.00' : num.toFixed(2);
-  };
 
   const [stream, setStream] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -145,6 +39,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const streamRef = useRef(null);
 
   // Drawer states
   const [selectedCard, setSelectedCard] = useState(null);
@@ -165,11 +60,17 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [subLocation1, setSubLocation1] = useState('');
   const [subLocation2, setSubLocation2] = useState('');
 
+  // Keep a ref mirroring the latest stream so the unmount cleanup below (whose
+  // closure is fixed from the first render) can always stop the live tracks.
+  useEffect(() => {
+    streamRef.current = stream;
+  }, [stream]);
+
   // Clean up camera stream on unmount
   useEffect(() => {
     fetchLocations();
     return () => {
-      stopCamera();
+      streamRef.current?.getTracks().forEach(track => track.stop());
     };
   }, []);
 
@@ -1345,34 +1246,21 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label>Condition</label>
                       <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)}>
-                        <option value="Near Mint">Near Mint</option>
-                        <option value="Lightly Played">Lightly Played</option>
-                        <option value="Moderately Played">Moderately Played</option>
-                        <option value="Heavily Played">Heavily Played</option>
-                        <option value="Damaged">Damaged</option>
+                        {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
 
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label>Printing</label>
                       <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)}>
-                        <option value="Normal">Normal</option>
-                        <option value="Holofoil">Holofoil</option>
-                        <option value="Reverse Holofoil">Reverse Holofoil</option>
-                        <option value="1st Edition">1st Edition</option>
-                        <option value="Promo">Promo</option>
+                        {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
                       </select>
                     </div>
 
                     <div className="form-group quick-add-full-width" style={{ marginBottom: 0 }}>
                       <label>Language</label>
                       <select className="select-control" value={language} onChange={(e) => setLanguage(e.target.value)}>
-                        <option value="English">English</option>
-                        <option value="Japanese">Japanese</option>
-                        <option value="German">German</option>
-                        <option value="French">French</option>
-                        <option value="Spanish">Spanish</option>
-                        <option value="Italian">Italian</option>
+                        {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
                       </select>
                     </div>
                   </div>

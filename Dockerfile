@@ -39,8 +39,9 @@ RUN npm ci --omit=dev
 # Copy backend source files
 COPY backend/src/ ./src/
 
-# Copy compiled frontend assets from Stage 1 into the backend public folder
-COPY --from=frontend-builder /app/frontend/dist ./dist
+# Copy compiled frontend assets from Stage 1 to the location server.js expects
+# (../../frontend/dist relative to backend/src, i.e. /app/frontend/dist)
+COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
 # Expose port
 EXPOSE 3001

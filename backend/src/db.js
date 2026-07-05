@@ -16,6 +16,8 @@ const dbConnection = new sqlite3.Database(dbPath, (err) => {
     console.error('Error opening database:', err.message);
   } else {
     console.log('Database connection established successfully.');
+    // sqlite3 does not enforce FOREIGN KEY constraints unless explicitly enabled per-connection.
+    dbConnection.run('PRAGMA foreign_keys = ON');
   }
 });
 
@@ -47,11 +49,14 @@ function all(sql, params = []) {
   });
 }
 
-// Password hashing utility for seeding
+// Password hashing utility. The iteration count is stored alongside the hash
+// (rather than hardcoded at verify-time) so it can be raised in the future
+// without invalidating passwords hashed under a lower count.
+const PBKDF2_ITERATIONS = 210000;
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
-  return `${salt}:${hash}`;
+  const hash = crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, 64, 'sha512').toString('hex');
+  return `${PBKDF2_ITERATIONS}:${salt}:${hash}`;
 }
 
 // Initialize tables
@@ -299,15 +304,20 @@ async function initDb() {
   const userCount = await get(`SELECT COUNT(*) as count FROM users`);
   let adminId = null;
   if (userCount.count === 0) {
-    console.log('Creating default admin user...');
-    const defaultPassHash = hashPassword('admin');
+    const generatedPassword = process.env.DEFAULT_ADMIN_PASSWORD || crypto.randomBytes(9).toString('base64url');
+    const defaultPassHash = hashPassword(generatedPassword);
     const defaultShareToken = crypto.randomBytes(16).toString('hex');
     const result = await run(`
       INSERT INTO users (username, password_hash, role, share_token, share_enabled)
       VALUES (?, ?, ?, ?, ?)
     `, ['admin', defaultPassHash, 'admin', defaultShareToken, 0]);
     adminId = result.lastID;
-    console.log(`Seeded default admin user with ID: ${adminId}`);
+    console.log('=========================================');
+    console.log(`Created default admin user. ID: ${adminId}`);
+    console.log(`  username: admin`);
+    console.log(`  password: ${generatedPassword}`);
+    console.log('Log in and change this password immediately via Settings.');
+    console.log('=========================================');
   } else {
     const adminUser = await get(`SELECT id FROM users WHERE username = ?`, ['admin']);
     if (adminUser) {

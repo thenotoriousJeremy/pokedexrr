@@ -1,69 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { MapPin, Plus, Trash2, Library, BookOpen, Layers, Archive, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
-
-const POKEMON_TYPE_ORDER = {
-  'Grass': 1,
-  'Fire': 2,
-  'Water': 3,
-  'Lightning': 4,
-  'Psychic': 5,
-  'Fighting': 6,
-  'Darkness': 7,
-  'Metal': 8,
-  'Fairy': 9,
-  'Dragon': 10,
-  'Colorless': 11,
-  'Unknown': 100
-};
-
-const getPrintingRank = (printing, foilSorting) => {
-  const isFoilsFirst = foilSorting === 'foils_first';
-  if (isFoilsFirst) {
-    const MAP = {
-      'Reverse Holofoil': 1,
-      'Holofoil': 2,
-      'Normal': 3,
-      '1st Edition': 4,
-      'Promo': 5
-    };
-    return MAP[printing] || 10;
-  }
-  const MAP = {
-    'Normal': 1,
-    'Reverse Holofoil': 2,
-    'Holofoil': 3,
-    '1st Edition': 4,
-    'Promo': 5
-  };
-  return MAP[printing] || 10;
-};
-
-const getCardRarityBorder = (rarity) => {
-  const r = (rarity || '').toLowerCase();
-  if (r.includes('secret') || r.includes('ultra') || r.includes('hyper') || r.includes('illustration') || r.includes('double rare') || r.includes('shiny rare') || r.includes('classic collection')) {
-    return {
-      border: '2.5px solid #f59e0b',
-      boxShadow: '0 0 12px rgba(245, 158, 11, 0.95), inset 0 0 6px rgba(245, 158, 11, 0.5)'
-    };
-  }
-  if (r.includes('rare') || r.includes('promo')) {
-    return {
-      border: '2px solid #e2e8f0',
-      boxShadow: '0 0 8px rgba(255, 255, 255, 0.85), inset 0 0 4px rgba(255, 255, 255, 0.4)'
-    };
-  }
-  if (r.includes('uncommon')) {
-    return {
-      border: '1.5px solid #3b82f6',
-      boxShadow: '0 0 6px rgba(59, 130, 246, 0.8)'
-    };
-  }
-  return {
-    border: '1px solid rgba(255, 255, 255, 0.3)',
-    boxShadow: 'none'
-  };
-};
+import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
+import { sortCardsByOrder } from '../utils/cardSort';
+import { getPageNum, getSlotNum } from '../utils/locationCoords';
+import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 
 function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, setSelectedCardFilter, setActiveTab }) {
   const isMobile = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
@@ -119,7 +60,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [unsortedCards, setUnsortedCards] = useState([]);
   const [unsortedSearch, setUnsortedSearch] = useState('');
   const [unsortedSortOrder, setUnsortedSortOrder] = useState('name-asc');
-  const [newBoxRowName, setNewBoxRowName] = useState('');
   const [unsortedViewMode, setUnsortedViewMode] = useState('list'); // 'list' or 'assistant'
   const [assistantIndex, setAssistantIndex] = useState(0);
   const [assistantHighlightRow, setAssistantHighlightRow] = useState(null); // NEW: highlighted row for box visualizer
@@ -212,8 +152,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     if (!activeMoveCard) return;
 
     const sourceCard = activeMoveCard;
-    const getPageNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
-    const getSlotNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
     const targetCard = locationCards.find(c => getPageNum(c.sub_location_1) === pageNum && getSlotNum(c.sub_location_2) === slotNum);
 
     if (targetCard) {
@@ -427,7 +365,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     const lastCard = existingInRow[existingInRow.length - 1];
     const newPos = lastCard ? lastCard.position + 1000 : 1000;
 
-    await moveCardToLocation(entryId, activeLocationId, rowName, `Section ${targetSeq}`, newPos);
+    await moveCardToLocation(entryId, activeLocationId, rowName, String(targetSeq), newPos);
     setActiveMoveCard(null);
   };
 
@@ -1462,51 +1400,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
     try {
       showToast('Sorting container...');
-      const sorted = [...locationCards];
-      if (orderMode === 'name-asc') {
-        sorted.sort((a, b) => a.name.localeCompare(b.name));
-      } else if (orderMode === 'price-desc') {
-        sorted.sort((a, b) => (b.price_trend || 0) - (a.price_trend || 0));
-      } else if (orderMode === 'set-number') {
-        sorted.sort((a, b) => {
-          const setA = a.set_name || '';
-          const setB = b.set_name || '';
-          const cmp = setA.localeCompare(setB);
-          if (cmp !== 0) return cmp;
-          const numA = parseInt(a.number || '0', 10) || 0;
-          const numB = parseInt(b.number || '0', 10) || 0;
-          return numA - numB;
-        });
-      } else if (orderMode === 'type-name') {
-        sorted.sort((a, b) => {
-          const typeA = (a.types && a.types[0]) || 'Unknown';
-          const typeB = (b.types && b.types[0]) || 'Unknown';
-          const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
-          const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
-          if (orderA !== orderB) return orderA - orderB;
-          return a.name.localeCompare(b.name);
-        });
-      } else if (orderMode === 'set-number-printing') {
-        sorted.sort((a, b) => {
-          const setA = a.set_name || '';
-          const setB = b.set_name || '';
-          const cmpSet = setA.localeCompare(setB);
-          if (cmpSet !== 0) return cmpSet;
-
-          const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
-          const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
-          if (printA !== printB) return printA - printB;
-
-          const numA = parseInt(a.number || '0', 10) || 0;
-          const numB = parseInt(b.number || '0', 10) || 0;
-          if (numA !== numB) return numA - numB;
-
-          const cmpNum = (a.number || '').localeCompare(b.number || '');
-          if (cmpNum !== 0) return cmpNum;
-
-          return a.name.localeCompare(b.name);
-        });
-      }
+      const sorted = sortCardsByOrder([...locationCards], orderMode, selectedLoc?.foil_sorting);
 
       const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
       const maxPages = selectedLoc.max_pages || 30;
@@ -1598,8 +1492,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                        unsortedCards.find(c => c.entry_id === entryId);
     if (!sourceCard) return;
 
-    const getPageNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
-    const getSlotNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
     const targetCard = locationCards.find(c => getPageNum(c.sub_location_1) === targetPageNum && getSlotNum(c.sub_location_2) === targetSlot);
 
     if (targetCard) {
@@ -1733,7 +1625,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     const lastCard = existingInRow[existingInRow.length - 1];
     const newPos = lastCard ? lastCard.position + 1000 : 1000;
     
-    await moveCardToLocation(entryId, selectedLoc.id, rowName, `Section ${targetSeq}`, newPos);
+    await moveCardToLocation(entryId, selectedLoc.id, rowName, String(targetSeq), newPos);
   };
 
 
@@ -1907,8 +1799,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     const config = parseAdvancedConfig(selectedLoc);
     const sortingPref = selectedLoc.sort_order || 'name-asc';
 
-    const getPageNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
-    const getSlotNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
 
     if (sortingPref !== 'custom') {
       const combined = [...locationCards];
@@ -1917,49 +1807,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         combined.push(card);
       }
 
-      if (sortingPref === 'name-asc') {
-        combined.sort((a, b) => a.name.localeCompare(b.name));
-      } else if (sortingPref === 'price-desc') {
-        combined.sort((a, b) => (b.price_trend || 0) - (a.price_trend || 0));
-      } else if (sortingPref === 'set-number') {
-        combined.sort((a, b) => {
-          const cmpSet = (a.set_name || '').localeCompare(b.set_name || '');
-          if (cmpSet !== 0) return cmpSet;
-          const numA = parseInt(a.number || '0', 10) || 0;
-          const numB = parseInt(b.number || '0', 10) || 0;
-          if (numA !== numB) return numA - numB;
-          return (a.number || '').localeCompare(b.number || '');
-        });
-      } else if (sortingPref === 'set-number-printing') {
-        combined.sort((a, b) => {
-          const setA = a.set_name || '';
-          const setB = b.set_name || '';
-          const cmpSet = setA.localeCompare(setB);
-          if (cmpSet !== 0) return cmpSet;
-
-          const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
-          const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
-          if (printA !== printB) return printA - printB;
-
-          const numA = parseInt(a.number || '0', 10) || 0;
-          const numB = parseInt(b.number || '0', 10) || 0;
-          if (numA !== numB) return numA - numB;
-
-          const cmpNum = (a.number || '').localeCompare(b.number || '');
-          if (cmpNum !== 0) return cmpNum;
-
-          return a.name.localeCompare(b.name);
-        });
-      } else if (sortingPref === 'type-name') {
-        combined.sort((a, b) => {
-          const typeA = (a.types && a.types[0]) || 'Unknown';
-          const typeB = (b.types && b.types[0]) || 'Unknown';
-          const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
-          const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
-          if (orderA !== orderB) return orderA - orderB;
-          return a.name.localeCompare(b.name);
-        });
-      }
+      sortCardsByOrder(combined, sortingPref, selectedLoc?.foil_sorting);
 
       const targetIndex = combined.findIndex(c => c.entry_id === card.entry_id);
       if (targetIndex !== -1) {
@@ -2054,6 +1902,89 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   };
 
   const selectedLoc = locations.find(l => l.id === activeLocationId);
+
+  // Memoized so the binder visualizer doesn't recompute virtual slot indices for
+  // the whole location on every render (e.g. while typing in an unrelated search box).
+  const binderPocketsCount = useMemo(() => {
+    if (!selectedLoc) return 9;
+    return selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
+  }, [selectedLoc?.page_style]);
+
+  const binderVirtualIndices = useMemo(() => {
+    const map = new Map();
+    let currentSlot = 0;
+    locationCards.forEach((card, i) => {
+      if (i === 0) {
+        const p = parseInt((card.sub_location_1 || '').replace(/\D/g, ''), 10) || 1;
+        const s = parseInt((card.sub_location_2 || '').replace(/\D/g, ''), 10) || 1;
+        currentSlot = Math.max(0, (p - 1) * binderPocketsCount + (s - 1));
+      } else {
+        const prev = locationCards[i - 1];
+        const diff = card.position - prev.position;
+        const gap = Math.max(0, Math.floor(diff / 1000) - 1);
+        currentSlot = currentSlot + 1 + gap;
+      }
+      map.set(card.entry_id, currentSlot);
+    });
+    return map;
+  }, [locationCards, binderPocketsCount]);
+
+  const getAssistantQueue = () => {
+    let queue = [...unsortedCards].filter(c => {
+      const matchesSearch = c.name.toLowerCase().includes(unsortedSearch.toLowerCase()) ||
+                           (c.set_name || '').toLowerCase().includes(unsortedSearch.toLowerCase());
+      if (!matchesSearch) return false;
+
+      if (unsortedDateFilter === 'today') {
+        const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
+        const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
+        return addedTime >= todayMidnight;
+      }
+      if (unsortedDateFilter === 'yesterday') {
+        const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
+        const yesterdayMidnight = todayMidnight - 24 * 60 * 60 * 1000;
+        const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
+        return addedTime >= yesterdayMidnight && addedTime < todayMidnight;
+      }
+      if (unsortedDateFilter === 'week') {
+        const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
+        return addedTime >= sevenDaysAgo;
+      }
+      return true;
+    });
+
+    sortCardsByOrder(queue, unsortedSortOrder, selectedLoc?.foil_sorting);
+
+    if (unsortedDateFilter === 'batch10') {
+      queue = queue.slice(0, 10);
+    } else if (unsortedDateFilter === 'batch50') {
+      queue = queue.slice(0, 50);
+    }
+
+    let idx = assistantIndex;
+    if (idx >= queue.length) {
+      idx = Math.max(0, queue.length - 1);
+    }
+    const card = queue[idx];
+    return { queue, idx, card };
+  };
+
+  // Keep the box-row highlight in sync with the current assistant card as a proper
+  // effect instead of scheduling setState from inside render (which used to flicker
+  // under StrictMode's double-render).
+  useEffect(() => {
+    if (unsortedViewMode !== 'assistant') return;
+    const { card } = getAssistantQueue();
+    if (!card) {
+      setAssistantHighlightRow(null);
+      return;
+    }
+    const recommended = findNextRecommendedSlot(card);
+    const isBoxContainer = selectedLoc && (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand');
+    setAssistantHighlightRow(isBoxContainer && recommended ? recommended.sub1 : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unsortedViewMode, unsortedCards, unsortedSearch, unsortedDateFilter, unsortedSortOrder, assistantIndex, selectedLoc, locationCards]);
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: `1fr ${isRightSidebarOpen ? '320px' : '0px'}`, gap: isRightSidebarOpen ? '1.25rem' : '0', height: 'calc(100vh - 120px)', minHeight: '650px', transition: 'grid-template-columns 0.3s ease' }} className="storage-workspace-grid">
@@ -2176,24 +2107,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             ) : (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') ? (
               /* Binder Double Page Book Visualizer (Left & Right Pages side-by-side) */
               (() => {
-                const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
-                
-                // Calculate virtual indices dynamically
-                const virtualIndices = new Map();
-                let currentSlot = 0;
-                locationCards.forEach((card, i) => {
-                  if (i === 0) {
-                    const p = parseInt((card.sub_location_1 || '').replace(/\D/g, ''), 10) || 1;
-                    const s = parseInt((card.sub_location_2 || '').replace(/\D/g, ''), 10) || 1;
-                    currentSlot = Math.max(0, (p - 1) * pocketsCount + (s - 1));
-                  } else {
-                    const prev = locationCards[i - 1];
-                    const diff = card.position - prev.position;
-                    const gap = Math.max(0, Math.floor(diff / 1000) - 1);
-                    currentSlot = currentSlot + 1 + gap;
-                  }
-                  virtualIndices.set(card.entry_id, currentSlot);
-                });
+                const pocketsCount = binderPocketsCount;
+                const virtualIndices = binderVirtualIndices;
 
                 const isFirstPageSolo = selectedLoc ? !!parseAdvancedConfig(selectedLoc).firstPageSolo : false;
 
@@ -2434,29 +2349,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                     position: 'absolute',
                                     bottom: '22px',
                                     left: '4px',
-                                    background: card.rarity && (
-                                      card.rarity.toLowerCase().includes('secret') || 
-                                      card.rarity.toLowerCase().includes('ultra') || 
-                                      card.rarity.toLowerCase().includes('hyper') || 
-                                      card.rarity.toLowerCase().includes('illustration') || 
-                                      card.rarity.toLowerCase().includes('double rare') || 
-                                      card.rarity.toLowerCase().includes('shiny rare') ||
-                                      card.rarity.toLowerCase().includes('classic collection')
-                                    ) ? '#f59e0b' 
-                                      : (card.rarity && (card.rarity.toLowerCase().includes('rare') || card.rarity.toLowerCase().includes('promo'))) 
-                                      ? '#e2e8f0' 
-                                      : (card.rarity && card.rarity.toLowerCase().includes('uncommon')) 
-                                      ? '#3b82f6' 
-                                      : 'rgba(156, 163, 175, 0.75)',
-                                    color: card.rarity && (card.rarity.toLowerCase().includes('rare') || card.rarity.toLowerCase().includes('promo')) && !(
-                                      card.rarity.toLowerCase().includes('secret') || 
-                                      card.rarity.toLowerCase().includes('ultra') || 
-                                      card.rarity.toLowerCase().includes('hyper') || 
-                                      card.rarity.toLowerCase().includes('illustration') || 
-                                      card.rarity.toLowerCase().includes('double rare') || 
-                                      card.rarity.toLowerCase().includes('shiny rare') ||
-                                      card.rarity.toLowerCase().includes('classic collection')
-                                    ) ? '#000' : '#fff',
+                                    ...getRarityBadgeStyle(card.rarity),
                                     fontSize: '0.55rem',
                                     fontWeight: 900,
                                     padding: '1px 3px',
@@ -2466,16 +2359,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                     textTransform: 'uppercase',
                                     letterSpacing: '0.5px'
                                   }}>
-                                    {(() => {
-                                      const r = (card.rarity || '').toLowerCase();
-                                      if (r.includes('secret') || r.includes('ultra') || r.includes('hyper') || r.includes('illustration')) return 'ULTRA';
-                                      if (r.includes('double rare')) return 'DR';
-                                      if (r.includes('shiny rare')) return 'SR';
-                                      if (r.includes('rare')) return 'RARE';
-                                      if (r.includes('promo')) return 'PROMO';
-                                      if (r.includes('uncommon')) return 'UNC';
-                                      return 'COM';
-                                    })()}
+                                    {getRarityBadgeLabel(card.rarity)}
                                   </span>
 
                                   <div style={{
@@ -2523,8 +2407,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   );
                 };
 
-                const getPageNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
-                const getSlotNum = (str) => parseInt((str || '').replace(/\D/g, ''), 10) || 0;
 
                 return (
                   <div 
@@ -2640,95 +2522,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         {unsortedCards.length > 0 ? (
           unsortedViewMode === 'assistant' ? (
             (() => {
-              let queue = [...unsortedCards].filter(c => {
-                const matchesSearch = c.name.toLowerCase().includes(unsortedSearch.toLowerCase()) || 
-                                     (c.set_name || '').toLowerCase().includes(unsortedSearch.toLowerCase());
-                if (!matchesSearch) return false;
-
-                if (unsortedDateFilter === 'today') {
-                  const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
-                  const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
-                  return addedTime >= todayMidnight;
-                }
-                if (unsortedDateFilter === 'yesterday') {
-                  const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
-                  const yesterdayMidnight = todayMidnight - 24 * 60 * 60 * 1000;
-                  const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
-                  return addedTime >= yesterdayMidnight && addedTime < todayMidnight;
-                }
-                if (unsortedDateFilter === 'week') {
-                  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-                  const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
-                  return addedTime >= sevenDaysAgo;
-                }
-                return true;
-              });
-
-              queue.sort((a, b) => {
-                if (unsortedSortOrder === 'scanned-desc') {
-                  const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
-                  const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
-                  if (timeA !== timeB) return timeB - timeA;
-                  return b.entry_id - a.entry_id;
-                }
-                if (unsortedSortOrder === 'scanned-asc') {
-                  const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
-                  const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
-                  if (timeA !== timeB) return timeA - timeB;
-                  return a.entry_id - b.entry_id;
-                }
-                if (unsortedSortOrder === 'name-asc') {
-                  return a.name.localeCompare(b.name);
-                }
-                if (unsortedSortOrder === 'price-desc') {
-                  return (b.price_trend || 0) - (a.price_trend || 0);
-                }
-                if (unsortedSortOrder === 'set-number') {
-                  const cmp = (a.set_name || '').localeCompare(b.set_name || '');
-                  if (cmp !== 0) return cmp;
-                  return (parseInt(a.number || '0') || 0) - (parseInt(b.number || '0') || 0);
-                }
-                if (unsortedSortOrder === 'type-name') {
-                  const typeA = (a.types && a.types[0]) || 'Unknown';
-                  const typeB = (b.types && b.types[0]) || 'Unknown';
-                  const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
-                  const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
-                  if (orderA !== orderB) return orderA - orderB;
-                  return a.name.localeCompare(b.name);
-                }
-                if (unsortedSortOrder === 'set-number-printing') {
-                  const setA = a.set_name || '';
-                  const setB = b.set_name || '';
-                  const cmpSet = setA.localeCompare(setB);
-                  if (cmpSet !== 0) return cmpSet;
-
-                  const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
-                  const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
-                  if (printA !== printB) return printA - printB;
-
-                  const numA = parseInt(a.number || '0', 10) || 0;
-                  const numB = parseInt(b.number || '0', 10) || 0;
-                  if (numA !== numB) return numA - numB;
-
-                  const cmpNum = (a.number || '').localeCompare(b.number || '');
-                  if (cmpNum !== 0) return cmpNum;
-
-                  return a.name.localeCompare(b.name);
-                }
-                return 0;
-              });
-
-              if (unsortedDateFilter === 'batch10') {
-                queue = queue.slice(0, 10);
-              } else if (unsortedDateFilter === 'batch50') {
-                queue = queue.slice(0, 50);
-              }
-
-              let idx = assistantIndex;
-              if (idx >= queue.length) {
-                idx = Math.max(0, queue.length - 1);
-              }
-              const card = queue[idx];
+              const { queue, idx, card } = getAssistantQueue();
               if (!card) {
                 return (
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginTop: '1rem', fontStyle: 'italic' }}>
@@ -2807,17 +2601,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         const sortLabels = { 'custom': 'Custom', 'name-asc': 'A-Z', 'price-desc': 'Value', 'set-number': 'Set & Number', 'set-number-printing': 'Set/Number/Printing', 'type-name': 'Energy Type' };
                         const sortScheme = sortLabels[selectedLoc?.sort_order] || 'Default';
                         
-                        // Auto-highlight the recommended row for box containers
+                        // Row highlight is kept in sync by the useEffect above, not here.
                         const isBoxContainer = selectedLoc && (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand');
-                        const recommendedRowName = isBoxContainer ? recommended.sub1 : null;
-                        
-                        // Set the highlight whenever we show this card (effect-like, inline)
-                        if (recommendedRowName && assistantHighlightRow !== recommendedRowName) {
-                          setTimeout(() => setAssistantHighlightRow(recommendedRowName), 0);
-                        } else if (!isBoxContainer && assistantHighlightRow) {
-                          setTimeout(() => setAssistantHighlightRow(null), 0);
-                        }
-                        
+
                         return (
                         <div style={{ background: 'rgba(255, 71, 71, 0.05)', border: '1px solid rgba(255, 71, 71, 0.15)', padding: '0.4rem', borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'center' }}>
                           <span style={{ fontSize: '0.55rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Recommended Target ({sortScheme})</span>
@@ -2946,59 +2732,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   return true;
                 });
 
-                filteredUnsorted.sort((a, b) => {
-                  if (unsortedSortOrder === 'scanned-desc') {
-                    const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
-                    const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
-                    if (timeA !== timeB) return timeB - timeA;
-                    return b.entry_id - a.entry_id;
-                  }
-                  if (unsortedSortOrder === 'scanned-asc') {
-                    const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
-                    const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
-                    if (timeA !== timeB) return timeA - timeB;
-                    return a.entry_id - b.entry_id;
-                  }
-                  if (unsortedSortOrder === 'name-asc') {
-                    return a.name.localeCompare(b.name);
-                  }
-                  if (unsortedSortOrder === 'price-desc') {
-                    return (b.price_trend || 0) - (a.price_trend || 0);
-                  }
-                  if (unsortedSortOrder === 'set-number') {
-                    const cmp = (a.set_name || '').localeCompare(b.set_name || '');
-                    if (cmp !== 0) return cmp;
-                    return (parseInt(a.number || '0') || 0) - (parseInt(b.number || '0') || 0);
-                  }
-                  if (unsortedSortOrder === 'type-name') {
-                    const typeA = (a.types && a.types[0]) || 'Unknown';
-                    const typeB = (b.types && b.types[0]) || 'Unknown';
-                    const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
-                    const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
-                    if (orderA !== orderB) return orderA - orderB;
-                    return a.name.localeCompare(b.name);
-                  }
-                  if (unsortedSortOrder === 'set-number-printing') {
-                    const setA = a.set_name || '';
-                    const setB = b.set_name || '';
-                    const cmpSet = setA.localeCompare(setB);
-                    if (cmpSet !== 0) return cmpSet;
-
-                    const printA = getPrintingRank(a.printing, selectedLoc?.foil_sorting);
-                    const printB = getPrintingRank(b.printing, selectedLoc?.foil_sorting);
-                    if (printA !== printB) return printA - printB;
-
-                    const numA = parseInt(a.number || '0', 10) || 0;
-                    const numB = parseInt(b.number || '0', 10) || 0;
-                    if (numA !== numB) return numA - numB;
-
-                    const cmpNum = (a.number || '').localeCompare(b.number || '');
-                    if (cmpNum !== 0) return cmpNum;
-
-                    return a.name.localeCompare(b.name);
-                  }
-                  return 0;
-                });
+                sortCardsByOrder(filteredUnsorted, unsortedSortOrder, selectedLoc?.foil_sorting);
 
                 if (unsortedDateFilter === 'batch10') {
                   filteredUnsorted = filteredUnsorted.slice(0, 10);
@@ -3174,32 +2908,19 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   <div className="form-group">
                     <label>Condition</label>
                     <select className="select-control" value={quickCond} onChange={(e) => setQuickCond(e.target.value)}>
-                      <option value="Near Mint">Near Mint</option>
-                      <option value="Lightly Played">Lightly Played</option>
-                      <option value="Moderately Played">Moderately Played</option>
-                      <option value="Heavily Played">Heavily Played</option>
-                      <option value="Damaged">Damaged</option>
+                      {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
                   <div className="form-group">
                     <label>Printing</label>
                     <select className="select-control" value={quickPrint} onChange={(e) => setQuickPrint(e.target.value)}>
-                      <option value="Normal">Normal</option>
-                      <option value="Holofoil">Holofoil</option>
-                      <option value="Reverse Holofoil">Reverse Holofoil</option>
-                      <option value="1st Edition">1st Edition</option>
-                      <option value="Promo">Promo</option>
+                      {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
                     </select>
                   </div>
                   <div className="form-group">
                     <label>Language</label>
                     <select className="select-control" value={quickLang} onChange={(e) => setQuickLang(e.target.value)}>
-                      <option value="English">English</option>
-                      <option value="Japanese">Japanese</option>
-                      <option value="German">German</option>
-                      <option value="French">French</option>
-                      <option value="Spanish">Spanish</option>
-                      <option value="Italian">Italian</option>
+                      {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
                     </select>
                   </div>
                 </div>

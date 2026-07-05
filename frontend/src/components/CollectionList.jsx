@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Search, Download, Trash2, Edit2, X, MapPin, LayoutGrid, List, Database, Upload, ChevronDown } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 import { getCardDisplayName } from '../utils/langHelper';
+import { formatPrice } from '../utils/formatPrice';
+import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 import DeckBuilder from './DeckBuilder';
 
 function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCardFilter, setSelectedCardFilter }) {
@@ -232,20 +234,23 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
   };
 
   // Extract unique rarities from collection for filters
-  const uniqueRarities = Array.from(new Set(collection.map(item => item.rarity).filter(Boolean)));
+  const uniqueRarities = useMemo(
+    () => Array.from(new Set(collection.map(item => item.rarity).filter(Boolean))),
+    [collection]
+  );
 
   // Filter logic
-  const filteredCollection = collection.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(searchFilter.toLowerCase()) || 
+  const filteredCollection = useMemo(() => collection.filter(item => {
+    const matchesSearch = item.name.toLowerCase().includes(searchFilter.toLowerCase()) ||
                           (item.set_name || '').toLowerCase().includes(searchFilter.toLowerCase()) ||
                           (item.number || '').includes(searchFilter);
-    const matchesLocation = locationFilter === '' ? true : 
-                            locationFilter === 'unassigned' ? !item.location_id : 
+    const matchesLocation = locationFilter === '' ? true :
+                            locationFilter === 'unassigned' ? !item.location_id :
                             item.location_id == locationFilter;
     const matchesRarity = rarityFilter === '' ? true : item.rarity === rarityFilter;
     const matchesCondition = conditionFilter === '' ? true : item.condition === conditionFilter;
     const matchesPrinting = printingFilter === '' ? true : item.printing === printingFilter;
-    
+
     const price = item.price_trend || 0;
     const matchesMinPrice = minPriceFilter === '' ? true : price >= parseFloat(minPriceFilter);
     const matchesMaxPrice = maxPriceFilter === '' ? true : price <= parseFloat(maxPriceFilter);
@@ -267,7 +272,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
     } else { // 'added-newest'
       return new Date(b.added_at || 0) - new Date(a.added_at || 0);
     }
-  });
+  }), [collection, searchFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, minPriceFilter, maxPriceFilter, sortBy]);
 
   const selectedLoc = locations.find(l => l.id == editLocationId);
   const isBinder = selectedLoc ? selectedLoc.type === 'Binder' : false;
@@ -395,11 +400,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                   <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Condition</label>
                   <select className="select-control" value={conditionFilter} onChange={(e) => setConditionFilter(e.target.value)}>
                     <option value="">All Conditions</option>
-                    <option value="Near Mint">Near Mint</option>
-                    <option value="Lightly Played">Lightly Played</option>
-                    <option value="Moderately Played">Moderately Played</option>
-                    <option value="Heavily Played">Heavily Played</option>
-                    <option value="Damaged">Damaged</option>
+                    {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
 
@@ -407,11 +408,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                   <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Printing</label>
                   <select className="select-control" value={printingFilter} onChange={(e) => setPrintingFilter(e.target.value)}>
                     <option value="">All Printings</option>
-                    <option value="Normal">Normal</option>
-                    <option value="Holofoil">Holofoil</option>
-                    <option value="Reverse Holofoil">Reverse Holofoil</option>
-                    <option value="1st Edition">1st Edition</option>
-                    <option value="Promo">Promo</option>
+                    {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
 
@@ -511,7 +508,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                   <div className="tcg-card-name">{getCardDisplayName(item.name, item.language)}</div>
                   <div className="tcg-card-meta">
                     <span style={{ fontSize: '0.7rem' }}>{item.set_name} • #{item.number}</span>
-                    <span className="tcg-card-price">${item.price_trend ? item.price_trend.toFixed(2) : '0.00'}</span>
+                    <span className="tcg-card-price">${formatPrice(item.price_trend)}</span>
                   </div>
                 </div>
               </div>
@@ -647,34 +644,21 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                 <div className="form-group">
                   <label>Condition</label>
                   <select className="select-control" value={editCondition} onChange={(e) => setEditCondition(e.target.value)}>
-                    <option value="Near Mint">Near Mint</option>
-                    <option value="Lightly Played">Lightly Played</option>
-                    <option value="Moderately Played">Moderately Played</option>
-                    <option value="Heavily Played">Heavily Played</option>
-                    <option value="Damaged">Damaged</option>
+                    {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
 
                 <div className="form-group">
                   <label>Printing</label>
                   <select className="select-control" value={editPrinting} onChange={(e) => setEditPrinting(e.target.value)}>
-                    <option value="Normal">Normal</option>
-                    <option value="Holofoil">Holofoil</option>
-                    <option value="Reverse Holofoil">Reverse Holofoil</option>
-                    <option value="1st Edition">1st Edition</option>
-                    <option value="Promo">Promo</option>
+                    {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
 
                 <div className="form-group">
                   <label>Language</label>
                   <select className="select-control" value={editLanguage} onChange={(e) => setEditLanguage(e.target.value)}>
-                    <option value="English">English</option>
-                    <option value="Japanese">Japanese</option>
-                    <option value="German">German</option>
-                    <option value="French">French</option>
-                    <option value="Spanish">Spanish</option>
-                    <option value="Italian">Italian</option>
+                    {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
                   </select>
                 </div>
               </div>
@@ -684,7 +668,11 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                 
                 <div className="form-group">
                   <label>Storage Container</label>
-                  <select className="select-control" value={editLocationId} onChange={(e) => setEditLocationId(e.target.value)}>
+                  <select className="select-control" value={editLocationId} onChange={(e) => {
+                    setEditLocationId(e.target.value);
+                    setEditSubLocation1('');
+                    setEditSubLocation2('');
+                  }}>
                     <option value="">Unassigned Pile</option>
                     {locations.map((loc) => (
                       <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
@@ -814,13 +802,13 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                 <div>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>TCG MARKET PRICE</div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--accent-yellow)', marginTop: '0.15rem' }}>
-                    ${inspectorCard.price_trend ? inspectorCard.price_trend.toFixed(2) : '0.00'}
+                    ${formatPrice(inspectorCard.price_trend)}
                   </div>
                 </div>
                 <div>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>EST. PURCHASE VALUE</div>
                   <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#fff', marginTop: '0.15rem' }}>
-                    ${inspectorCard.purchase_price ? inspectorCard.purchase_price.toFixed(2) : '0.00'}
+                    ${formatPrice(inspectorCard.purchase_price)}
                   </div>
                 </div>
               </div>

@@ -2,17 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload } from 'lucide-react';
 
 function Settings({ user, onUpdateUser, showToast }) {
+  const [currentPassword, setCurrentPassword] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
   
   const [shareEnabled, setShareEnabled] = useState(user?.share_enabled === 1);
   const [shareLoading, setShareLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const [tcgApiKey, setTcgApiKey] = useState(user?.tcg_api_key || '');
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
-  const token = localStorage.getItem('pokedexrr_token');
 
   const handleImportFile = async (e) => {
     const file = e.target.files[0];
@@ -28,10 +27,7 @@ function Settings({ user, onUpdateUser, showToast }) {
         showToast('Importing collection...');
         const response = await fetch('/api/import', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             format,
             data: fileData
@@ -50,6 +46,10 @@ function Settings({ user, onUpdateUser, showToast }) {
       }
     };
 
+    reader.onerror = () => {
+      showToast('Failed to read the selected file.');
+    };
+
     reader.readAsText(file);
     e.target.value = null;
   };
@@ -63,8 +63,12 @@ function Settings({ user, onUpdateUser, showToast }) {
 
   const handlePasswordChange = async (e) => {
     e.preventDefault();
-    if (password.length < 5) {
-      showToast('Password must be at least 5 characters.');
+    if (!currentPassword) {
+      showToast('Please enter your current password.');
+      return;
+    }
+    if (password.length < 8) {
+      showToast('Password must be at least 8 characters.');
       return;
     }
     if (password !== confirmPassword) {
@@ -77,11 +81,12 @@ function Settings({ user, onUpdateUser, showToast }) {
       const response = await fetch('/api/auth/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
+        body: JSON.stringify({ current_password: currentPassword, password })
       });
 
       if (response.ok) {
         showToast('Password updated successfully.');
+        setCurrentPassword('');
         setPassword('');
         setConfirmPassword('');
       } else {
@@ -93,6 +98,28 @@ function Settings({ user, onUpdateUser, showToast }) {
       showToast('Error updating password.');
     } finally {
       setPasswordLoading(false);
+    }
+  };
+
+  const handleExport = async (format) => {
+    try {
+      const response = await fetch(`/api/export?format=${format}`);
+      if (!response.ok) {
+        showToast('Export failed.');
+        return;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pokedexrr_collection.${format === 'json' ? 'json' : 'csv'}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      showToast('Error exporting collection.');
     }
   };
 
@@ -326,23 +353,45 @@ function Settings({ user, onUpdateUser, showToast }) {
 
           <form onSubmit={handlePasswordChange} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>New Password</label>
-              <input 
-                type="password" 
-                className="input-control" 
-                placeholder="At least 5 characters"
+              <label htmlFor="current-password">Current Password</label>
+              <input
+                id="current-password"
+                type="password"
+                name="current-password"
+                autoComplete="current-password"
+                className="input-control"
+                placeholder="Your current password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                required
+                disabled={passwordLoading}
+              />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label htmlFor="settings-new-password">New Password</label>
+              <input
+                id="settings-new-password"
+                type="password"
+                name="new-password"
+                autoComplete="new-password"
+                className="input-control"
+                placeholder="At least 8 characters"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={passwordLoading}
               />
             </div>
-            
+
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Confirm Password</label>
-              <input 
-                type="password" 
-                className="input-control" 
+              <label htmlFor="settings-confirm-password">Confirm Password</label>
+              <input
+                id="settings-confirm-password"
+                type="password"
+                name="confirm-password"
+                autoComplete="new-password"
+                className="input-control"
                 placeholder="Re-enter password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
@@ -377,10 +426,13 @@ function Settings({ user, onUpdateUser, showToast }) {
             </div>
 
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>X-Api-Key Header Value</label>
-              <input 
-                type="text" 
-                className="input-control" 
+              <label htmlFor="settings-tcg-api-key">X-Api-Key Header Value</label>
+              <input
+                id="settings-tcg-api-key"
+                type="text"
+                name="tcg-api-key"
+                autoComplete="off"
+                className="input-control"
                 placeholder="e.g. xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
                 value={tcgApiKey}
                 onChange={(e) => setTcgApiKey(e.target.value)}
@@ -414,24 +466,24 @@ function Settings({ user, onUpdateUser, showToast }) {
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <a 
-              href={`/api/export?format=csv&token=${token}`} 
-              download 
-              className="btn btn-secondary" 
-              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+            <button
+              type="button"
+              onClick={() => handleExport('csv')}
+              className="btn btn-secondary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
             >
               <Download size={14} />
               <span>Export CSV</span>
-            </a>
-            <a 
-              href={`/api/export?format=json&token=${token}`} 
-              download 
-              className="btn btn-secondary" 
-              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExport('json')}
+              className="btn btn-secondary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
             >
               <Download size={14} />
               <span>Export JSON</span>
-            </a>
+            </button>
 
             <label 
               className="btn btn-primary" 
