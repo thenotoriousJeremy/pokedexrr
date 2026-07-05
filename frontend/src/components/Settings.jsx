@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload } from 'lucide-react';
 
 function Settings({ user, onUpdateUser, showToast }) {
+  const [currentPassword, setCurrentPassword] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
@@ -63,6 +64,10 @@ function Settings({ user, onUpdateUser, showToast }) {
 
   const handlePasswordChange = async (e) => {
     e.preventDefault();
+    if (!currentPassword) {
+      showToast('Please enter your current password.');
+      return;
+    }
     if (password.length < 5) {
       showToast('Password must be at least 5 characters.');
       return;
@@ -77,11 +82,12 @@ function Settings({ user, onUpdateUser, showToast }) {
       const response = await fetch('/api/auth/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
+        body: JSON.stringify({ current_password: currentPassword, password })
       });
 
       if (response.ok) {
         showToast('Password updated successfully.');
+        setCurrentPassword('');
         setPassword('');
         setConfirmPassword('');
       } else {
@@ -93,6 +99,28 @@ function Settings({ user, onUpdateUser, showToast }) {
       showToast('Error updating password.');
     } finally {
       setPasswordLoading(false);
+    }
+  };
+
+  const handleExport = async (format) => {
+    try {
+      const response = await fetch(`/api/export?format=${format}`);
+      if (!response.ok) {
+        showToast('Export failed.');
+        return;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pokedexrr_collection.${format === 'json' ? 'json' : 'csv'}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      showToast('Error exporting collection.');
     }
   };
 
@@ -326,6 +354,22 @@ function Settings({ user, onUpdateUser, showToast }) {
 
           <form onSubmit={handlePasswordChange} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
+              <label htmlFor="current-password">Current Password</label>
+              <input
+                id="current-password"
+                type="password"
+                name="current-password"
+                autoComplete="current-password"
+                className="input-control"
+                placeholder="Your current password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                required
+                disabled={passwordLoading}
+              />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
               <label>New Password</label>
               <input 
                 type="password" 
@@ -414,24 +458,24 @@ function Settings({ user, onUpdateUser, showToast }) {
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <a 
-              href={`/api/export?format=csv&token=${token}`} 
-              download 
-              className="btn btn-secondary" 
-              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+            <button
+              type="button"
+              onClick={() => handleExport('csv')}
+              className="btn btn-secondary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
             >
               <Download size={14} />
               <span>Export CSV</span>
-            </a>
-            <a 
-              href={`/api/export?format=json&token=${token}`} 
-              download 
-              className="btn btn-secondary" 
-              style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExport('json')}
+              className="btn btn-secondary"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}
             >
               <Download size={14} />
               <span>Export JSON</span>
-            </a>
+            </button>
 
             <label 
               className="btn btn-primary" 

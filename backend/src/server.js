@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
 const crypto = require('crypto');
 const db = require('./db');
@@ -8,8 +9,31 @@ const tcgApi = require('./tcgApi');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+// Restrict cross-origin access to known frontend origins. Defaults cover the
+// Vite dev server; production deployments should set CORS_ORIGIN explicitly.
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173,http://localhost:3001')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
+}));
 app.use(express.json());
+
+// Throttle auth endpoints to slow down credential-stuffing/brute-force attempts.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please try again later.' }
+});
 
 // Initialize Database on startup
 db.initDb()
@@ -200,9 +224,6 @@ async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   if (authHeader && authHeader.startsWith('Bearer ')) {
     token = authHeader.split(' ')[1];
-  } else if (req.query && req.query.token) {
-    // Support token in query parameter for downloading files
-    token = req.query.token;
   }
 
   if (!token) {
@@ -240,7 +261,7 @@ async function authenticateToken(req, res, next) {
 // --- USER AUTHENTICATION & PROFILE ENDPOINTS ---
 
 // Register a new user
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authLimiter, async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password are required' });
@@ -286,7 +307,7 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 // Login user
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password are required' });
@@ -340,12 +361,16 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
 
 // Update settings (password, sharing)
 app.put('/api/auth/settings', authenticateToken, async (req, res) => {
-  const { password, share_enabled, regenerate_share_token, tcg_api_key } = req.body;
-  
+  const { current_password, password, share_enabled, regenerate_share_token, tcg_api_key } = req.body;
+
   try {
     if (password !== undefined) {
       if (password.length < 5) {
         return res.status(400).json({ error: 'Password must be at least 5 characters' });
+      }
+      const currentUser = await db.get(`SELECT password_hash FROM users WHERE id = ?`, [req.user.id]);
+      if (!current_password || !verifyPassword(current_password, currentUser.password_hash)) {
+        return res.status(401).json({ error: 'Current password is incorrect' });
       }
       const newHash = db.hashPassword(password);
       await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, req.user.id]);
@@ -1705,7 +1730,8 @@ app.post('/api/import', authenticateToken, async (req, res) => {
       const cardId = card.card_id || card.id;
       if (!cardId) continue;
 
-      // 1. Ensure the card is in the cache
+      // 1. Ensure the card is in the cache. card_cache is shared across all users, so
+      // never trust client-supplied metadata for it beyond a sanitized last-resort placeholder.
       let cached = await db.get(`SELECT id FROM card_cache WHERE id = ?`, [cardId]);
       if (!cached) {
         try {
@@ -1713,38 +1739,40 @@ app.post('/api/import', authenticateToken, async (req, res) => {
           await tcgApi.getCardById(cardId);
         } catch (apiErr) {
           console.error(`Failed to fetch card ${cardId} from TCG API during import:`, apiErr.message);
+          const safeTypes = Array.isArray(card.types) ? JSON.stringify(card.types.filter(t => typeof t === 'string')) : '[]';
+          const safePrice = Number.isFinite(Number(card.market_price || card.price_trend)) ? Math.max(0, Number(card.market_price || card.price_trend)) : 0;
           await db.run(
-            `INSERT OR IGNORE INTO card_cache 
+            `INSERT OR IGNORE INTO card_cache
              (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               cardId,
-              card.card_name || 'Imported Card',
-              card.supertype || 'Pokémon',
+              String(card.card_name || 'Imported Card').slice(0, 200),
+              String(card.supertype || 'Pokémon').slice(0, 50),
               '[]',
-              card.types ? JSON.stringify(card.types) : '[]',
-              card.rarity || 'Common',
-              card.set_id || '',
-              card.set_name || 'Imported Set',
-              card.card_number || card.number || '',
-              card.image_url || '',
-              card.market_price || card.price_trend || 0
+              safeTypes,
+              String(card.rarity || 'Common').slice(0, 50),
+              String(card.set_id || '').slice(0, 50),
+              String(card.set_name || 'Imported Set').slice(0, 200),
+              String(card.card_number || card.number || '').slice(0, 20),
+              '',
+              safePrice
             ]
           );
         }
       }
 
-      // 2. Resolve location_id from location_name
+      // 2. Resolve location_id from location_name, scoped to this user only
       let locationId = null;
       const locName = card.location_name || card.location_container;
       if (locName && locName !== 'Unassigned') {
-        let locRow = await db.get(`SELECT id FROM locations WHERE name = ?`, [locName]);
+        let locRow = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [locName, req.user.id]);
         if (!locRow) {
           let type = 'Other';
           if (card.sub_location_1 && (card.sub_location_1.toLowerCase().includes('page') || card.sub_location_2)) {
             type = 'Binder';
           }
-          const newLoc = await db.run(`INSERT INTO locations (name, type) VALUES (?, ?)`, [locName, type]);
+          const newLoc = await db.run(`INSERT INTO locations (name, type, user_id) VALUES (?, ?, ?)`, [locName, type, req.user.id]);
           locationId = newLoc.lastID;
         } else {
           locationId = locRow.id;
@@ -2067,6 +2095,15 @@ app.get('*', (req, res, next) => {
     return next();
   }
   res.sendFile(path.join(frontendBuildPath, 'index.html'));
+});
+
+// Generic error handler (e.g. rejected CORS origins) — never leak stack traces to clients
+app.use((err, req, res, next) => {
+  if (err && err.message === 'Not allowed by CORS') {
+    return res.status(403).json({ error: 'Origin not allowed' });
+  }
+  console.error(err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 // Start Express Server
