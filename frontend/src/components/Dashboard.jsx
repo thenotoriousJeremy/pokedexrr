@@ -36,8 +36,6 @@ function Dashboard({ statsTrigger, onNavigate }) {
 
   // Clickable Card Inspector State
   const [inspectorCard, setInspectorCard] = useState(null);
-  const [cardHistory, setCardHistory] = useState([]);
-  const [loadingCardHistory, setLoadingCardHistory] = useState(false);
 
   useEffect(() => {
     fetchStats();
@@ -48,12 +46,6 @@ function Dashboard({ statsTrigger, onNavigate }) {
       fetchTimelineHistory();
     }
   }, [timePeriod, stats]);
-
-  useEffect(() => {
-    if (inspectorCard) {
-      fetchCardPriceHistory(inspectorCard.card_id);
-    }
-  }, [inspectorCard]);
 
   const fetchStats = async () => {
     try {
@@ -84,21 +76,6 @@ function Dashboard({ statsTrigger, onNavigate }) {
       console.error('Error loading history timeline:', err);
     } finally {
       setLoadingHistory(false);
-    }
-  };
-
-  const fetchCardPriceHistory = async (cardId) => {
-    try {
-      setLoadingCardHistory(true);
-      const response = await fetch(`/api/cards/${cardId}/price-history`);
-      if (response.ok) {
-        const data = await response.json();
-        setCardHistory(data);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingCardHistory(false);
     }
   };
 
@@ -556,7 +533,7 @@ function Dashboard({ statsTrigger, onNavigate }) {
               </div>
 
               {/* Price History Area Chart */}
-              <PriceHistoryChart data={cardHistory} loading={loadingCardHistory} title="Price Trend History (30 Days)" height={120} />
+              <PriceHistoryChart cardId={inspectorCard.card_id} titlePrefix="Price Trend History" defaultRange="1y" height={120} />
 
               <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                 <div><span style={{ color: 'var(--text-muted)' }}>Condition:</span> <span style={{ color: '#fff' }}>{inspectorCard.condition}</span></div>

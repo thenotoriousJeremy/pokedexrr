@@ -1066,40 +1066,57 @@ router.post('/import', async (req, res) => {
 
 // --- ADVANCED COLLECTOR ENDPOINTS (DEX FEATURES) ---
 
+// Supported chart windows. Maps a range key to its length in days; anything
+// unrecognized (e.g. 'all') returns the full recorded history.
+const PRICE_HISTORY_RANGES = { '1m': 30, '1y': 365, '5y': 1825 };
+
 // Get Card Price History
 router.get('/cards/:id/price-history', async (req, res) => {
   const { id } = req.params;
+  const rangeKey = String(req.query.range || '1y').toLowerCase();
+  const days = PRICE_HISTORY_RANGES[rangeKey]; // undefined => 'all'
   try {
-    let history = await db.all(`
-      SELECT price, recorded_at
-      FROM price_history
-      WHERE card_id = ?
-      ORDER BY recorded_at ASC
-    `, [id]);
+    let history = days
+      ? await db.all(`
+          SELECT price, recorded_at
+          FROM price_history
+          WHERE card_id = ? AND recorded_at >= datetime('now', ?)
+          ORDER BY recorded_at ASC
+        `, [id, `-${days} days`])
+      : await db.all(`
+          SELECT price, recorded_at
+          FROM price_history
+          WHERE card_id = ?
+          ORDER BY recorded_at ASC
+        `, [id]);
 
     const cacheCard = await db.get(`SELECT price_trend FROM card_cache WHERE id = ?`, [id]);
     const currentPrice = (cacheCard && cacheCard.price_trend) || 1.00;
 
-    // Seed mock price points if less than 5 records exist, so charts display immediately
+    // Seed mock price points if too few real records exist for the requested
+    // window, so charts show a meaningful trend immediately. Points span the
+    // whole window and follow a directional drift ending near the current
+    // price, so longer ranges actually show change instead of a flat line.
     if (history.length < 5) {
-      history = [];
+      const spanDays = days || 365;
+      const points = 30;
+      const totalMove = Math.random() * 0.4 + 0.1;   // 10-50% total change
+      const goingUp = Math.random() > 0.4;           // bias slightly upward
+      const startPrice = goingUp
+        ? currentPrice / (1 + totalMove)
+        : currentPrice * (1 + totalMove);
       const now = new Date();
-      for (let i = 9; i >= 0; i--) { // 10 price points
-        const date = new Date(now);
-        date.setDate(now.getDate() - i * 3); // 3 day intervals
-        const fluctuation = (Math.random() - 0.5) * 0.15 * currentPrice; // +/- 15%
-        const price = parseFloat(Math.max(0.10, currentPrice + fluctuation).toFixed(2));
-        history.push({
-          price,
-          recorded_at: date.toISOString()
-        });
+      history = [];
+      for (let i = 0; i < points; i++) {
+        const t = i / (points - 1);                  // 0 -> 1 (oldest -> now)
+        const date = new Date(now.getTime() - (1 - t) * spanDays * 86400000);
+        const base = startPrice + (currentPrice - startPrice) * t;
+        const noise = (Math.random() - 0.5) * 0.06 * currentPrice;
+        const price = parseFloat(Math.max(0.10, base + noise).toFixed(2));
+        history.push({ price, recorded_at: date.toISOString() });
       }
     } else {
-      // Map to standardized format
-      history = history.map(h => ({
-        price: h.price,
-        recorded_at: h.recorded_at
-      }));
+      history = history.map(h => ({ price: h.price, recorded_at: h.recorded_at }));
     }
 
     res.json(history);

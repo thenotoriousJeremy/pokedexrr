@@ -24,9 +24,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
   const [viewMode, setViewMode] = useState('gallery'); // 'gallery' or 'list'
   const [inspectorCard, setInspectorCard] = useState(null);
   const [subTab, setSubTab] = useState('collection'); // 'collection', 'wishlist', 'trade'
-  const [priceHistory, setPriceHistory] = useState([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  
+
   // Search & Filter state
   const [searchFilter, setSearchFilter] = useState('');
   const [locationFilter, setLocationFilter] = useState('');
@@ -98,29 +96,6 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
     fetchCollection();
     fetchLocations();
   }, [statsTrigger, subTab]);
-
-  useEffect(() => {
-    if (inspectorCard) {
-      fetchPriceHistory(inspectorCard.card_id);
-    } else {
-      setPriceHistory([]);
-    }
-  }, [inspectorCard]);
-
-  const fetchPriceHistory = async (cardId) => {
-    try {
-      setLoadingHistory(true);
-      const response = await fetch(`/api/cards/${cardId}/price-history`);
-      if (response.ok) {
-        const data = await response.json();
-        setPriceHistory(data);
-      }
-    } catch (err) {
-      console.error('Error fetching price history:', err);
-    } finally {
-      setLoadingHistory(false);
-    }
-  };
 
   const fetchCollection = async () => {
     try {
@@ -811,7 +786,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
               </div>
 
               {/* Price History Area Chart */}
-              <PriceHistoryChart data={priceHistory} loading={loadingHistory} />
+              <PriceHistoryChart cardId={inspectorCard.card_id} defaultRange="1y" />
 
               {/* Specifications Details Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem 1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-glass)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>
