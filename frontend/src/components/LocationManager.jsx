@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { MapPin, Plus, Trash2, Library, BookOpen, Layers, Archive, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
@@ -60,7 +60,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [unsortedCards, setUnsortedCards] = useState([]);
   const [unsortedSearch, setUnsortedSearch] = useState('');
   const [unsortedSortOrder, setUnsortedSortOrder] = useState('name-asc');
-  const [newBoxRowName, setNewBoxRowName] = useState('');
   const [unsortedViewMode, setUnsortedViewMode] = useState('list'); // 'list' or 'assistant'
   const [assistantIndex, setAssistantIndex] = useState(0);
   const [assistantHighlightRow, setAssistantHighlightRow] = useState(null); // NEW: highlighted row for box visualizer
@@ -1904,6 +1903,32 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   const selectedLoc = locations.find(l => l.id === activeLocationId);
 
+  // Memoized so the binder visualizer doesn't recompute virtual slot indices for
+  // the whole location on every render (e.g. while typing in an unrelated search box).
+  const binderPocketsCount = useMemo(() => {
+    if (!selectedLoc) return 9;
+    return selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
+  }, [selectedLoc?.page_style]);
+
+  const binderVirtualIndices = useMemo(() => {
+    const map = new Map();
+    let currentSlot = 0;
+    locationCards.forEach((card, i) => {
+      if (i === 0) {
+        const p = parseInt((card.sub_location_1 || '').replace(/\D/g, ''), 10) || 1;
+        const s = parseInt((card.sub_location_2 || '').replace(/\D/g, ''), 10) || 1;
+        currentSlot = Math.max(0, (p - 1) * binderPocketsCount + (s - 1));
+      } else {
+        const prev = locationCards[i - 1];
+        const diff = card.position - prev.position;
+        const gap = Math.max(0, Math.floor(diff / 1000) - 1);
+        currentSlot = currentSlot + 1 + gap;
+      }
+      map.set(card.entry_id, currentSlot);
+    });
+    return map;
+  }, [locationCards, binderPocketsCount]);
+
   const getAssistantQueue = () => {
     let queue = [...unsortedCards].filter(c => {
       const matchesSearch = c.name.toLowerCase().includes(unsortedSearch.toLowerCase()) ||
@@ -2082,24 +2107,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             ) : (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') ? (
               /* Binder Double Page Book Visualizer (Left & Right Pages side-by-side) */
               (() => {
-                const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
-                
-                // Calculate virtual indices dynamically
-                const virtualIndices = new Map();
-                let currentSlot = 0;
-                locationCards.forEach((card, i) => {
-                  if (i === 0) {
-                    const p = parseInt((card.sub_location_1 || '').replace(/\D/g, ''), 10) || 1;
-                    const s = parseInt((card.sub_location_2 || '').replace(/\D/g, ''), 10) || 1;
-                    currentSlot = Math.max(0, (p - 1) * pocketsCount + (s - 1));
-                  } else {
-                    const prev = locationCards[i - 1];
-                    const diff = card.position - prev.position;
-                    const gap = Math.max(0, Math.floor(diff / 1000) - 1);
-                    currentSlot = currentSlot + 1 + gap;
-                  }
-                  virtualIndices.set(card.entry_id, currentSlot);
-                });
+                const pocketsCount = binderPocketsCount;
+                const virtualIndices = binderVirtualIndices;
 
                 const isFirstPageSolo = selectedLoc ? !!parseAdvancedConfig(selectedLoc).firstPageSolo : false;
 

@@ -225,11 +225,14 @@ function AdminPanel({ showToast }) {
           </h3>
           <form onSubmit={handleAddUser} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Trainer Username</label>
-              <input 
-                type="text" 
-                className="input-control" 
-                placeholder="Enter username" 
+              <label htmlFor="admin-new-username">Trainer Username</label>
+              <input
+                id="admin-new-username"
+                type="text"
+                name="new-username"
+                autoComplete="off"
+                className="input-control"
+                placeholder="Enter username"
                 value={newUsername}
                 onChange={(e) => setNewUsername(e.target.value)}
                 required
@@ -237,11 +240,14 @@ function AdminPanel({ showToast }) {
               />
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Initial Password</label>
-              <input 
-                type="password" 
-                className="input-control" 
-                placeholder="Min 5 characters" 
+              <label htmlFor="admin-new-password">Initial Password</label>
+              <input
+                id="admin-new-password"
+                type="password"
+                name="new-user-password"
+                autoComplete="new-password"
+                className="input-control"
+                placeholder="Min 8 characters"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 required
@@ -249,8 +255,8 @@ function AdminPanel({ showToast }) {
               />
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Role</label>
-              <select className="select-control" value={newRole} onChange={(e) => setNewRole(e.target.value)} disabled={addLoading}>
+              <label htmlFor="admin-new-role">Role</label>
+              <select id="admin-new-role" className="select-control" value={newRole} onChange={(e) => setNewRole(e.target.value)} disabled={addLoading}>
                 <option value="member">Member</option>
                 <option value="admin">Administrator</option>
               </select>
@@ -269,10 +275,11 @@ function AdminPanel({ showToast }) {
               Manage Users
             </h3>
             <div style={{ position: 'relative', width: '220px' }}>
-              <input 
-                type="text" 
-                className="input-control" 
-                placeholder="Filter trainers..." 
+              <input
+                type="text"
+                className="input-control"
+                placeholder="Filter trainers..."
+                aria-label="Filter trainers"
                 value={filterText}
                 onChange={(e) => setFilterText(e.target.value)}
                 style={{ width: '100%', paddingLeft: '2rem', paddingVertical: '0.35rem', fontSize: '0.85rem' }}
@@ -383,11 +390,14 @@ function AdminPanel({ showToast }) {
             </div>
             <form onSubmit={handleChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>New Password</label>
-                <input 
-                  type="password" 
-                  className="input-control" 
-                  placeholder="Min 5 characters" 
+                <label htmlFor="admin-reset-password">New Password</label>
+                <input
+                  id="admin-reset-password"
+                  type="password"
+                  name="reset-password"
+                  autoComplete="new-password"
+                  className="input-control"
+                  placeholder="Min 8 characters"
                   value={updatePassword}
                   onChange={(e) => setUpdatePassword(e.target.value)}
                   required

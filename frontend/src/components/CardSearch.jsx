@@ -87,7 +87,6 @@ function CardSearch({ onAddSuccess, showToast }) {
     }
     
     // Set default sub-location placeholders based on container type
-    const defaultLoc = locations.find(l => l.id == locationId);
     setSubLocation1('');
     setSubLocation2('');
 

@@ -9,7 +9,6 @@ function Settings({ user, onUpdateUser, showToast }) {
   
   const [shareEnabled, setShareEnabled] = useState(user?.share_enabled === 1);
   const [shareLoading, setShareLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const [tcgApiKey, setTcgApiKey] = useState(user?.tcg_api_key || '');
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
@@ -370,10 +369,13 @@ function Settings({ user, onUpdateUser, showToast }) {
             </div>
 
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>New Password</label>
-              <input 
-                type="password" 
-                className="input-control" 
+              <label htmlFor="settings-new-password">New Password</label>
+              <input
+                id="settings-new-password"
+                type="password"
+                name="new-password"
+                autoComplete="new-password"
+                className="input-control"
                 placeholder="At least 8 characters"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -381,12 +383,15 @@ function Settings({ user, onUpdateUser, showToast }) {
                 disabled={passwordLoading}
               />
             </div>
-            
+
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Confirm Password</label>
-              <input 
-                type="password" 
-                className="input-control" 
+              <label htmlFor="settings-confirm-password">Confirm Password</label>
+              <input
+                id="settings-confirm-password"
+                type="password"
+                name="confirm-password"
+                autoComplete="new-password"
+                className="input-control"
                 placeholder="Re-enter password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
@@ -421,10 +426,13 @@ function Settings({ user, onUpdateUser, showToast }) {
             </div>
 
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>X-Api-Key Header Value</label>
-              <input 
-                type="text" 
-                className="input-control" 
+              <label htmlFor="settings-tcg-api-key">X-Api-Key Header Value</label>
+              <input
+                id="settings-tcg-api-key"
+                type="text"
+                name="tcg-api-key"
+                autoComplete="off"
+                className="input-control"
                 placeholder="e.g. xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
                 value={tcgApiKey}
                 onChange={(e) => setTcgApiKey(e.target.value)}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Search, Download, Trash2, Edit2, X, MapPin, LayoutGrid, List, Database, Upload, ChevronDown } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 import { getCardDisplayName } from '../utils/langHelper';
@@ -234,20 +234,23 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
   };
 
   // Extract unique rarities from collection for filters
-  const uniqueRarities = Array.from(new Set(collection.map(item => item.rarity).filter(Boolean)));
+  const uniqueRarities = useMemo(
+    () => Array.from(new Set(collection.map(item => item.rarity).filter(Boolean))),
+    [collection]
+  );
 
   // Filter logic
-  const filteredCollection = collection.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(searchFilter.toLowerCase()) || 
+  const filteredCollection = useMemo(() => collection.filter(item => {
+    const matchesSearch = item.name.toLowerCase().includes(searchFilter.toLowerCase()) ||
                           (item.set_name || '').toLowerCase().includes(searchFilter.toLowerCase()) ||
                           (item.number || '').includes(searchFilter);
-    const matchesLocation = locationFilter === '' ? true : 
-                            locationFilter === 'unassigned' ? !item.location_id : 
+    const matchesLocation = locationFilter === '' ? true :
+                            locationFilter === 'unassigned' ? !item.location_id :
                             item.location_id == locationFilter;
     const matchesRarity = rarityFilter === '' ? true : item.rarity === rarityFilter;
     const matchesCondition = conditionFilter === '' ? true : item.condition === conditionFilter;
     const matchesPrinting = printingFilter === '' ? true : item.printing === printingFilter;
-    
+
     const price = item.price_trend || 0;
     const matchesMinPrice = minPriceFilter === '' ? true : price >= parseFloat(minPriceFilter);
     const matchesMaxPrice = maxPriceFilter === '' ? true : price <= parseFloat(maxPriceFilter);
@@ -269,7 +272,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
     } else { // 'added-newest'
       return new Date(b.added_at || 0) - new Date(a.added_at || 0);
     }
-  });
+  }), [collection, searchFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, minPriceFilter, maxPriceFilter, sortBy]);
 
   const selectedLoc = locations.find(l => l.id == editLocationId);
   const isBinder = selectedLoc ? selectedLoc.type === 'Binder' : false;

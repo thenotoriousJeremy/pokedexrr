@@ -127,10 +127,13 @@ function Login({ onLoginSuccess }) {
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Username</label>
+            <label htmlFor="login-username" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Username</label>
             <div style={{ position: 'relative' }}>
               <input
+                id="login-username"
                 type="text"
+                name="username"
+                autoComplete="username"
                 className="input-control"
                 style={{ width: '100%', paddingLeft: '2.5rem' }}
                 placeholder="Enter username"
@@ -144,10 +147,13 @@ function Login({ onLoginSuccess }) {
           </div>
 
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Password</label>
+            <label htmlFor="login-password" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Password</label>
             <div style={{ position: 'relative' }}>
               <input
+                id="login-password"
                 type={showPassword ? 'text' : 'password'}
+                name="password"
+                autoComplete={isRegister ? 'new-password' : 'current-password'}
                 className="input-control"
                 style={{ width: '100%', paddingLeft: '2.5rem', paddingRight: '2.5rem' }}
                 placeholder="Enter password"
@@ -160,6 +166,7 @@ function Login({ onLoginSuccess }) {
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
                 style={{
                   position: 'absolute',
                   right: '0.75rem',
@@ -179,10 +186,13 @@ function Login({ onLoginSuccess }) {
 
           {isRegister && (
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Confirm Password</label>
+              <label htmlFor="login-confirm-password" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Confirm Password</label>
               <div style={{ position: 'relative' }}>
                 <input
+                  id="login-confirm-password"
                   type={showPassword ? 'text' : 'password'}
+                  name="confirm-password"
+                  autoComplete="new-password"
                   className="input-control"
                   style={{ width: '100%', paddingLeft: '2.5rem' }}
                   placeholder="Re-enter password"

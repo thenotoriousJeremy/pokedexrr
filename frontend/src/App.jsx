@@ -260,10 +260,11 @@ function App() {
             <Sparkles size={14} style={{ color: 'var(--accent-yellow)' }} />
             <span>Hello, <strong style={{ color: '#fff' }}>{user.username}</strong> ({user.role})</span>
           </div>
-          <button 
-            onClick={handleLogout} 
-            className="btn btn-secondary btn-icon-only" 
+          <button
+            onClick={handleLogout}
+            className="btn btn-secondary btn-icon-only"
             title="Log Out"
+            aria-label="Log Out"
             style={{ padding: '0.4rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
           >
             <LogOut size={14} />
