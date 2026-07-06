@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, RefreshCw, AlertTriangle, Plus, X, Search, Sparkles, Settings, ChevronLeft, ChevronRight, Library } from 'lucide-react';
+import { Camera, RefreshCw, AlertTriangle, Plus, X, Search, Settings, Library } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
@@ -48,8 +48,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [locations, setLocations] = useState([]);
   const [autoAddCountdown, setAutoAddCountdown] = useState(null);
   const [autoAddTargetCard, setAutoAddTargetCard] = useState(null);
-  const [drawerTouchStart, setDrawerTouchStart] = useState(null);
-  const [drawerTouchEnd, setDrawerTouchEnd] = useState(null);
   
   // Form states
   const [quantity, setQuantity] = useState(1);
@@ -58,8 +56,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [language, setLanguage] = useState('English');
   const [purchasePrice, setPurchasePrice] = useState(0);
   const [locationId, setLocationId] = useState('');
-  const [subLocation1, setSubLocation1] = useState('');
-  const [subLocation2, setSubLocation2] = useState('');
 
   // Keep a ref mirroring the latest stream so the unmount cleanup below (whose
   // closure is fixed from the first render) can always stop the live tracks.
@@ -241,9 +237,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           // Normal), not necessarily the Holofoil finish just chosen above —
           // resolve against the printing actually being recorded.
           purchase_price: resolveCardPrice(card, autoPrinting),
-          location_id: locationId ? parseInt(locationId, 10) : null,
-          sub_location_1: subLocation1,
-          sub_location_2: subLocation2
+          location_id: locationId ? parseInt(locationId, 10) : null
         })
       });
 
@@ -644,8 +638,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     } else {
       setLanguage('English');
     }
-    setSubLocation1('');
-    setSubLocation2('');
     setIsDrawerOpen(true);
   };
 
@@ -658,8 +650,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setPrinting('Normal');
     setLanguage('English');
     setPurchasePrice(0);
-    setSubLocation1('');
-    setSubLocation2('');
     // Restart camera on close if we want to scan another
     startCamera();
   };
@@ -679,9 +669,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           printing,
           language,
           purchase_price: parseFloat(purchasePrice) || 0,
-          location_id: locationId ? parseInt(locationId, 10) : null,
-          sub_location_1: subLocation1,
-          sub_location_2: subLocation2
+          location_id: locationId ? parseInt(locationId, 10) : null
         })
       });
 
@@ -711,10 +699,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       showToast('Error saving card.');
     }
   };
-
-  const selectedLocation = locations.find(l => l.id == locationId);
-  const isBinder = selectedLocation ? selectedLocation.type === 'Binder' : false;
-  const isBox = selectedLocation ? selectedLocation.type === 'Box' : false;
 
   return (
     <div className="scanner-container">
@@ -1286,122 +1270,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                       </select>
                     </div>
                   </div>
-
-                  {locationId && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.4rem' }}>
-                      <div className="quick-add-fields-group">
-                        <div className="form-group" style={{ marginBottom: 0 }}>
-                          <label style={{ fontSize: '0.7rem' }}>{isBinder ? 'Page' : isBox ? 'Row' : 'Sub-Loc 1'}</label>
-                          <input 
-                            type="text" 
-                            className="input-control" 
-                            placeholder={isBinder ? 'Page No.' : isBox ? 'Row No.' : 'Sub 1'} 
-                            value={subLocation1}
-                            onChange={(e) => setSubLocation1(e.target.value)}
-                            style={{ padding: '0.3rem 0.5rem', fontSize: '0.8rem' }}
-                          />
-                        </div>
-                        <div className="form-group" style={{ marginBottom: 0 }}>
-                          <label style={{ fontSize: '0.7rem' }}>{isBinder ? 'Slot' : isBox ? 'Divider' : 'Sub-Loc 2'}</label>
-                          <input 
-                            type="text" 
-                            className="input-control" 
-                            placeholder={isBinder ? 'Slot No.' : isBox ? 'Section' : 'Sub 2'} 
-                            value={subLocation2}
-                            onChange={(e) => setSubLocation2(e.target.value)}
-                            style={{ padding: '0.3rem 0.5rem', fontSize: '0.8rem' }}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Visual 3x3 Binder slot selector */}
-                      {isBinder && (() => {
-                        const pageNum = parseInt((subLocation1 || '').replace(/\D/g, ''), 10) || 1;
-                        const handleSetPage = (p) => {
-                          setSubLocation1(`Page ${p}`);
-                        };
-                        const handleDrawerTouchStart = (e) => {
-                          setDrawerTouchStart(e.targetTouches[0].clientX);
-                        };
-                        const handleDrawerTouchMove = (e) => {
-                          setDrawerTouchEnd(e.targetTouches[0].clientX);
-                        };
-                        const handleDrawerTouchEnd = () => {
-                          if (!drawerTouchStart || !drawerTouchEnd) return;
-                          const distance = drawerTouchStart - drawerTouchEnd;
-                          if (distance > 50) {
-                            handleSetPage(Math.min(pageNum + 1, 30));
-                          } else if (distance < -50) {
-                            handleSetPage(Math.max(pageNum - 1, 1));
-                          }
-                          setDrawerTouchStart(null);
-                          setDrawerTouchEnd(null);
-                        };
-
-                        return (
-                          <div 
-                            style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', marginTop: '0.15rem' }}
-                            onTouchStart={handleDrawerTouchStart}
-                            onTouchMove={handleDrawerTouchMove}
-                            onTouchEnd={handleDrawerTouchEnd}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '2px', userSelect: 'none' }}>
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-icon-only"
-                                onClick={() => handleSetPage(Math.max(pageNum - 1, 1))}
-                                disabled={pageNum === 1}
-                                style={{ padding: 0, width: '22px', height: '22px', minHeight: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: pageNum === 1 ? 0.3 : 1 }}
-                              >
-                                <ChevronLeft size={10} />
-                              </button>
-                              <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>Page {pageNum}</span>
-                              <button
-                                type="button"
-                                className="btn btn-secondary btn-icon-only"
-                                onClick={() => handleSetPage(Math.min(pageNum + 1, 30))}
-                                disabled={pageNum === 30}
-                                style={{ padding: 0, width: '22px', height: '22px', minHeight: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: pageNum === 30 ? 0.3 : 1 }}
-                              >
-                                <ChevronRight size={10} />
-                              </button>
-                            </div>
-                            <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Visual Slot (Swipe/Tap)</label>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.35rem', width: '150px', background: 'rgba(0,0,0,0.3)', padding: '0.4rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => {
-                                const slotLabel = `Slot ${num}`;
-                                const isSelected = subLocation2 === slotLabel || subLocation2 === String(num);
-                                return (
-                                  <button
-                                    key={num}
-                                    type="button"
-                                    onClick={() => setSubLocation2(slotLabel)}
-                                    style={{
-                                      aspectRatio: 0.718,
-                                      background: isSelected ? 'var(--accent-red)' : 'rgba(255,255,255,0.03)',
-                                      border: isSelected ? '1px solid var(--accent-red)' : '1px solid var(--border-glass)',
-                                      borderRadius: 'var(--radius-xs)',
-                                      color: isSelected ? '#fff' : 'var(--text-secondary)',
-                                      fontSize: '0.7rem',
-                                      fontWeight: '700',
-                                      cursor: 'pointer',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'center',
-                                      boxShadow: isSelected ? '0 0 8px rgba(255, 71, 71, 0.4)' : 'none',
-                                      transition: 'all 0.15s ease'
-                                    }}
-                                  >
-                                    {num}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
+                  <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+                    The sort assistant picks the exact page/row automatically based on this container's sort order.
+                  </p>
                 </div>
               </div>
 

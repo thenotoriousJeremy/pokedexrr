@@ -274,7 +274,7 @@ function AdminPanel({ showToast }) {
               <Shield size={18} style={{ color: 'var(--accent-yellow)' }} />
               Manage Users
             </h3>
-            <div style={{ position: 'relative', width: '220px' }}>
+            <div style={{ position: 'relative', width: '100%', maxWidth: '220px' }}>
               <input
                 type="text"
                 className="input-control"

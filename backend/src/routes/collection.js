@@ -4,11 +4,48 @@ const tcgApi = require('../tcgApi');
 const { authenticateToken } = require('../middleware/auth');
 const {
   resolveCardPrice,
-  rebalanceLocationPositions,
-  getSortedPositionForCard,
+  rebalanceCompartmentPositions,
   isVintageSet,
   parseSqliteUtc
 } = require('../utils/priceHelpers');
+const { recommendSlot, compartmentLabel, loadCompartments } = require('../utils/compartmentSort');
+
+// Default compartment plan by container type — used when a caller doesn't
+// specify one at creation time (see POST /locations).
+function defaultCompartmentPlan(type) {
+  if (type === 'Binder' || type === 'Toploader Binder') return { count: 30, capacity: 9 };
+  if (type === 'Box' || type === 'Toploader Box' || type === 'Graded Slab Box' || type === 'Display Shelf / Stand') return { count: 3, capacity: 40 };
+  if (type === 'Deck Box') return { count: 1, capacity: 60 };
+  return { count: 1, capacity: 1000 };
+}
+
+// Resolves where a card should actually land: an explicit compartment_id is
+// trusted as-is (manual placement from the box/binder UI); given only a
+// location_id, the recommendation engine picks a compartment automatically;
+// given neither, the card is unsorted. Shared by add/update so both follow
+// the exact same rule instead of drifting apart.
+async function resolveCompartmentAndPosition({ locationId, compartmentId, position, userId, cardId, printing }) {
+  if (compartmentId !== undefined && compartmentId !== null) {
+    if (position !== undefined) return { compartment_id: compartmentId, position };
+    const countRow = await db.get(`SELECT COUNT(*) as cnt FROM collection WHERE compartment_id = ? AND user_id = ?`, [compartmentId, userId]);
+    return { compartment_id: compartmentId, position: ((countRow?.cnt || 0) + 1) * 1000 };
+  }
+  if (!locationId) {
+    return { compartment_id: null, position: position !== undefined ? position : 0 };
+  }
+
+  const location = await db.get(`SELECT id, type, sort_order, foil_sorting, user_id FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
+  if (!location) return { compartment_id: null, position: 0 };
+
+  const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity FROM card_cache WHERE id = ?`, [cardId]);
+  if (!cardMetadata) return { compartment_id: null, position: 0 };
+  cardMetadata.printing = printing || 'Normal';
+  try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
+
+  const recommended = await recommendSlot(db, location, cardMetadata);
+  if (!recommended) return { compartment_id: null, position: 0 }; // container full — leave unsorted rather than error
+  return { compartment_id: recommended.compartment_id, position: recommended.position };
+}
 
 const router = express.Router();
 
@@ -49,8 +86,7 @@ router.get('/collection', async (req, res) => {
         c.printing,
         c.language,
         c.purchase_price,
-        c.sub_location_1,
-        c.sub_location_2,
+        c.compartment_id,
         c.position,
         c.added_at,
         c.is_trade,
@@ -70,10 +106,14 @@ router.get('/collection', async (req, res) => {
         cc.price_reverse_holofoil,
         l.id as location_id,
         l.name as location_name,
-        l.type as location_type
+        l.type as location_type,
+        cp.idx as compartment_idx,
+        cp.label as compartment_label,
+        cp.capacity as compartment_capacity
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       LEFT JOIN locations l ON c.location_id = l.id
+      LEFT JOIN compartments cp ON c.compartment_id = cp.id
       ${filterSql}
       ORDER BY c.added_at DESC
     `;
@@ -85,6 +125,9 @@ router.get('/collection', async (req, res) => {
       price_trend: resolveCardPrice(row),
       subtypes: JSON.parse(row.subtypes || '[]'),
       types: JSON.parse(row.types || '[]'),
+      compartment_display_label: row.compartment_id
+        ? compartmentLabel({ idx: row.compartment_idx, label: row.compartment_label }, row.location_type)
+        : null,
     }));
 
     res.json(formatted);
@@ -104,8 +147,7 @@ router.post('/collection', async (req, res) => {
     language = 'English',
     purchase_price = 0,
     location_id = null,
-    sub_location_1 = '',
-    sub_location_2 = '',
+    compartment_id = null,
     list_type = 'collection',
     is_trade = 0,
     position
@@ -134,11 +176,15 @@ router.post('/collection', async (req, res) => {
       }
     }
 
-    // Check if an identical card entry already exists in this location to stack them
+    const resolved = await resolveCompartmentAndPosition({
+      locationId: location_id, compartmentId: compartment_id, position, userId: req.user.id, cardId: card_id, printing
+    });
+
+    // Check if an identical card entry already exists in this compartment to stack them
     const existing = await db.get(`
       SELECT id, quantity FROM collection
       WHERE card_id = ? AND condition = ? AND printing = ? AND language = ?
-        AND location_id IS ? AND sub_location_1 IS ? AND sub_location_2 IS ?
+        AND location_id IS ? AND compartment_id IS ?
         AND user_id = ? AND list_type = ? AND is_trade = ?
     `, [
       card_id,
@@ -146,8 +192,7 @@ router.post('/collection', async (req, res) => {
       printing,
       language,
       location_id,
-      sub_location_1 || null,
-      sub_location_2 || null,
+      resolved.compartment_id,
       req.user.id,
       list_type,
       is_trade ? 1 : 0
@@ -161,26 +206,10 @@ router.post('/collection', async (req, res) => {
       `, [newQuantity, existing.id]);
       lastInsertedId = existing.id;
     } else {
-      let finalPosition = position;
-      if (finalPosition === undefined) {
-        if (location_id) {
-          const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, supertype, rarity FROM card_cache WHERE id = ?`, [card_id]);
-          if (cardMetadata) {
-            cardMetadata.printing = printing;
-            try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
-            finalPosition = await getSortedPositionForCard(db, location_id, req.user.id, cardMetadata);
-          } else {
-            finalPosition = 1000;
-          }
-        } else {
-          finalPosition = 0;
-        }
-      }
-
       const result = await db.run(`
         INSERT INTO collection
-        (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, user_id, list_type, is_trade, position)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, user_id, list_type, is_trade, position)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         card_id,
         quantity,
@@ -189,30 +218,29 @@ router.post('/collection', async (req, res) => {
         language,
         purchase_price || 0,
         location_id,
-        sub_location_1 || null,
-        sub_location_2 || null,
+        resolved.compartment_id,
         req.user.id,
         list_type,
         is_trade ? 1 : 0,
-        finalPosition
+        resolved.position
       ]);
       lastInsertedId = result.lastID;
 
-      if (location_id) {
+      if (resolved.compartment_id) {
         const neighbors = await db.all(`
           SELECT position FROM collection
-          WHERE location_id = ? AND user_id = ? AND id != ?
+          WHERE compartment_id = ? AND user_id = ? AND id != ?
           ORDER BY ABS(position - ?) ASC LIMIT 2
-        `, [location_id, req.user.id, lastInsertedId, finalPosition]);
+        `, [resolved.compartment_id, req.user.id, lastInsertedId, resolved.position]);
         let needsRebalance = false;
         for (const n of neighbors) {
-          if (Math.abs(n.position - finalPosition) < 0.001) {
+          if (Math.abs(n.position - resolved.position) < 0.001) {
             needsRebalance = true;
             break;
           }
         }
         if (needsRebalance) {
-          await rebalanceLocationPositions(db, location_id, req.user.id);
+          await rebalanceCompartmentPositions(db, resolved.compartment_id, req.user.id);
         }
       }
     }
@@ -240,8 +268,7 @@ router.put('/collection/:id', async (req, res) => {
     language,
     purchase_price,
     location_id,
-    sub_location_1,
-    sub_location_2,
+    compartment_id,
     list_type,
     is_trade,
     position
@@ -262,9 +289,26 @@ router.put('/collection/:id', async (req, res) => {
       }
     }
 
-    const finalLocId = location_id !== undefined ? location_id : entry.location_id;
-    const finalSub1 = sub_location_1 !== undefined ? sub_location_1 : entry.sub_location_1;
-    const finalSub2 = sub_location_2 !== undefined ? sub_location_2 : entry.sub_location_2;
+    // Only re-resolve the compartment when the caller actually asked to move
+    // this card (compartment_id given explicitly, or location_id changed) —
+    // never as a side effect of e.g. just updating quantity.
+    let finalLocId = entry.location_id;
+    let finalCompartmentId = entry.compartment_id;
+    let finalPosition = position;
+    const isMoving = compartment_id !== undefined || (location_id !== undefined && location_id !== entry.location_id);
+    if (isMoving) {
+      const resolved = await resolveCompartmentAndPosition({
+        locationId: location_id !== undefined ? location_id : entry.location_id,
+        compartmentId: compartment_id,
+        position,
+        userId: req.user.id,
+        cardId: entry.card_id,
+        printing: printing !== undefined ? printing : entry.printing
+      });
+      finalLocId = location_id !== undefined ? location_id : entry.location_id;
+      finalCompartmentId = resolved.compartment_id;
+      finalPosition = resolved.position;
+    }
 
     // Compute what the final values would be after this update
     const finalQuantity = quantity !== undefined ? parseInt(quantity, 10) : entry.quantity;
@@ -274,11 +318,11 @@ router.put('/collection/:id', async (req, res) => {
     const finalListType = list_type !== undefined ? list_type : entry.list_type;
     const finalIsTrade = is_trade !== undefined ? (is_trade ? 1 : 0) : entry.is_trade;
 
-    // Check if there is an identical card entry already in that new location (except this row itself)
+    // Check if there is an identical card entry already in that new compartment (except this row itself)
     const existing = await db.get(`
       SELECT id, quantity FROM collection
       WHERE card_id = ? AND condition = ? AND printing = ? AND language = ?
-        AND location_id IS ? AND sub_location_1 IS ? AND sub_location_2 IS ?
+        AND location_id IS ? AND compartment_id IS ?
         AND user_id = ? AND list_type = ? AND is_trade = ? AND id != ?
     `, [
       entry.card_id,
@@ -286,8 +330,7 @@ router.put('/collection/:id', async (req, res) => {
       finalPrinting,
       finalLanguage,
       finalLocId,
-      finalSub1 || null,
-      finalSub2 || null,
+      finalCompartmentId,
       req.user.id,
       finalListType,
       finalIsTrade,
@@ -301,22 +344,6 @@ router.put('/collection/:id', async (req, res) => {
       return res.json({ message: 'Collection entry merged/stacked successfully', id: existing.id });
     }
 
-    let finalPosition = position;
-    if (finalPosition === undefined && location_id !== undefined && location_id !== entry.location_id) {
-      if (location_id) {
-        const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, supertype, rarity FROM card_cache WHERE id = ?`, [entry.card_id]);
-        if (cardMetadata) {
-          cardMetadata.printing = printing !== undefined ? printing : entry.printing;
-          try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
-          finalPosition = await getSortedPositionForCard(db, location_id, req.user.id, cardMetadata);
-        } else {
-          finalPosition = 1000;
-        }
-      } else {
-        finalPosition = 0;
-      }
-    }
-
     // Build dynamic UPDATE query based on passed values
     const fields = [];
     const params = [];
@@ -327,8 +354,7 @@ router.put('/collection/:id', async (req, res) => {
     if (language !== undefined) { fields.push('language = ?'); params.push(language); }
     if (purchase_price !== undefined) { fields.push('purchase_price = ?'); params.push(purchase_price); }
     if (location_id !== undefined) { fields.push('location_id = ?'); params.push(location_id); }
-    if (sub_location_1 !== undefined) { fields.push('sub_location_1 = ?'); params.push(sub_location_1); }
-    if (sub_location_2 !== undefined) { fields.push('sub_location_2 = ?'); params.push(sub_location_2); }
+    if (isMoving) { fields.push('compartment_id = ?'); params.push(finalCompartmentId); }
     if (list_type !== undefined) { fields.push('list_type = ?'); params.push(list_type); }
     if (is_trade !== undefined) { fields.push('is_trade = ?'); params.push(is_trade ? 1 : 0); }
     if (finalPosition !== undefined) { fields.push('position = ?'); params.push(finalPosition); }
@@ -341,12 +367,12 @@ router.put('/collection/:id', async (req, res) => {
     params.push(req.user.id);
     await db.run(`UPDATE collection SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, params);
 
-    if (finalLocId && finalPosition !== undefined) {
+    if (finalCompartmentId && finalPosition !== undefined) {
       const neighbors = await db.all(`
         SELECT position FROM collection
-        WHERE location_id = ? AND user_id = ? AND id != ?
+        WHERE compartment_id = ? AND user_id = ? AND id != ?
         ORDER BY ABS(position - ?) ASC LIMIT 2
-      `, [finalLocId, req.user.id, id, finalPosition]);
+      `, [finalCompartmentId, req.user.id, id, finalPosition]);
       let needsRebalance = false;
       for (const n of neighbors) {
         if (Math.abs(n.position - finalPosition) < 0.001) {
@@ -355,7 +381,7 @@ router.put('/collection/:id', async (req, res) => {
         }
       }
       if (needsRebalance) {
-        await rebalanceLocationPositions(db, finalLocId, req.user.id);
+        await rebalanceCompartmentPositions(db, finalCompartmentId, req.user.id);
       }
     }
 
@@ -385,7 +411,8 @@ router.delete('/collection/:id', async (req, res) => {
 router.get('/locations', async (req, res) => {
   try {
     const locations = await db.all(`
-      SELECT l.*, COUNT(c.id) as card_count, SUM(c.quantity) as total_cards
+      SELECT l.*, COUNT(DISTINCT c.id) as card_count, SUM(c.quantity) as total_cards,
+        (SELECT COUNT(*) FROM compartments WHERE compartments.location_id = l.id) as compartment_count
       FROM locations l
       LEFT JOIN collection c ON l.id = c.location_id AND c.user_id = l.user_id
       WHERE l.user_id = ?
@@ -399,17 +426,7 @@ router.get('/locations', async (req, res) => {
 });
 
 router.post('/locations', async (req, res) => {
-  const {
-    name,
-    type,
-    description = '',
-    sort_order = 'name-asc',
-    max_pages = 30,
-    page_style = '3x3',
-    max_rows = 3,
-    max_capacity = 1000,
-    foil_sorting = 'normals_first'
-  } = req.body;
+  const { name, type, sort_order = 'name-asc', foil_sorting = 'normals_first', compartmentPlan } = req.body;
 
   if (!name || !type) {
     return res.status(400).json({ error: 'name and type are required' });
@@ -421,20 +438,13 @@ router.post('/locations', async (req, res) => {
     }
 
     const result = await db.run(`
-      INSERT INTO locations (name, type, description, sort_order, max_pages, page_style, max_rows, max_capacity, foil_sorting, user_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      name,
-      type,
-      description,
-      sort_order,
-      parseInt(max_pages, 10) || 30,
-      page_style,
-      parseInt(max_rows, 10) || 3,
-      parseInt(max_capacity, 10) || 1000,
-      foil_sorting || 'normals_first',
-      req.user.id
-    ]);
+      INSERT INTO locations (name, type, sort_order, foil_sorting, user_id)
+      VALUES (?, ?, ?, ?, ?)
+    `, [name, type, sort_order, foil_sorting || 'normals_first', req.user.id]);
+
+    const plan = compartmentPlan || defaultCompartmentPlan(type);
+    await db.createCompartments(result.lastID, Math.max(1, parseInt(plan.count, 10) || 1), Math.max(1, parseInt(plan.capacity, 10) || 40));
+
     res.status(201).json({ message: 'Location created', id: result.lastID });
   } catch (error) {
     console.error(error);
@@ -444,7 +454,7 @@ router.post('/locations', async (req, res) => {
 
 router.put('/locations/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, type, description, sort_order, max_pages, page_style, max_rows, max_capacity, foil_sorting } = req.body;
+  const { name, type, sort_order, foil_sorting } = req.body;
   try {
     const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) {
@@ -463,27 +473,10 @@ router.put('/locations/:id', async (req, res) => {
       SET
         name = COALESCE(?, name),
         type = COALESCE(?, type),
-        description = COALESCE(?, description),
         sort_order = COALESCE(?, sort_order),
-        max_pages = COALESCE(?, max_pages),
-        page_style = COALESCE(?, page_style),
-        max_rows = COALESCE(?, max_rows),
-        max_capacity = COALESCE(?, max_capacity),
         foil_sorting = COALESCE(?, foil_sorting)
       WHERE id = ? AND user_id = ?
-    `, [
-      name,
-      type,
-      description,
-      sort_order,
-      max_pages !== undefined ? parseInt(max_pages, 10) : null,
-      page_style,
-      max_rows !== undefined ? parseInt(max_rows, 10) : null,
-      max_capacity !== undefined ? parseInt(max_capacity, 10) : null,
-      foil_sorting,
-      id,
-      req.user.id
-    ]);
+    `, [name, type, sort_order, foil_sorting, id, req.user.id]);
     res.json({ message: 'Location updated' });
   } catch (error) {
     console.error(error);
@@ -499,14 +492,261 @@ router.delete('/locations/:id', async (req, res) => {
       return res.status(404).json({ error: 'Location not found' });
     }
 
-    // Disassociate cards from this location instead of blocking delete (scoped to user)
-    await db.run(`UPDATE collection SET location_id = NULL, sub_location_1 = NULL, sub_location_2 = NULL WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
+    // Disassociate cards from this location instead of blocking delete (scoped to user).
+    // Deleting the location cascades to its compartments (ON DELETE CASCADE), which in
+    // turn nulls collection.compartment_id (ON DELETE SET NULL) — this explicit update
+    // covers location_id the same way for clarity/safety regardless of FK enforcement state.
+    await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
 
     await db.run(`DELETE FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     res.json({ message: 'Location deleted successfully (any stored cards moved to Unsorted)' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to delete location' });
+  }
+});
+
+// 6b. Manage Compartments (pages/rows within a location)
+router.get('/locations/:id/compartments', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const loc = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) return res.status(404).json({ error: 'Location not found' });
+    const compartments = await loadCompartments(db, id, req.user.id);
+    res.json(compartments.map(c => ({ ...c, display_label: compartmentLabel(c, loc.type) })));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve compartments' });
+  }
+});
+
+router.post('/locations/:id/compartments', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const loc = await db.get(`SELECT id, type FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) return res.status(404).json({ error: 'Location not found' });
+
+    const last = await db.get(`SELECT MAX(idx) as maxIdx, capacity FROM compartments WHERE location_id = ? ORDER BY idx DESC LIMIT 1`, [id]);
+    const nextIdx = (last?.maxIdx || 0) + 1;
+    const capacity = parseInt(req.body.capacity, 10) || last?.capacity || defaultCompartmentPlan(loc.type).capacity;
+    const result = await db.run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [id, nextIdx, capacity]);
+    res.status(201).json({ message: 'Compartment added', id: result.lastID, idx: nextIdx });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to add compartment' });
+  }
+});
+
+router.patch('/compartments/:id', async (req, res) => {
+  const { id } = req.params;
+  const { label, capacity } = req.body;
+  try {
+    const compartment = await db.get(`
+      SELECT cp.id FROM compartments cp
+      JOIN locations l ON cp.location_id = l.id
+      WHERE cp.id = ? AND l.user_id = ?
+    `, [id, req.user.id]);
+    if (!compartment) return res.status(404).json({ error: 'Compartment not found' });
+
+    await db.run(`UPDATE compartments SET label = COALESCE(?, label), capacity = COALESCE(?, capacity) WHERE id = ?`, [
+      label !== undefined ? label : null,
+      capacity !== undefined ? parseInt(capacity, 10) : null,
+      id
+    ]);
+    res.json({ message: 'Compartment updated' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update compartment' });
+  }
+});
+
+// Only the highest-index (last) compartment in a location can be removed,
+// and only if it's empty — removing one from the middle would require
+// re-numbering every compartment after it and every card stored there.
+router.delete('/compartments/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const compartment = await db.get(`
+      SELECT cp.id, cp.idx, cp.location_id FROM compartments cp
+      JOIN locations l ON cp.location_id = l.id
+      WHERE cp.id = ? AND l.user_id = ?
+    `, [id, req.user.id]);
+    if (!compartment) return res.status(404).json({ error: 'Compartment not found' });
+
+    const last = await db.get(`SELECT MAX(idx) as maxIdx FROM compartments WHERE location_id = ?`, [compartment.location_id]);
+    if (compartment.idx !== last.maxIdx) {
+      return res.status(400).json({ error: 'Only the last compartment can be removed' });
+    }
+    const cardCount = await db.get(`SELECT COUNT(*) as cnt FROM collection WHERE compartment_id = ?`, [id]);
+    if (cardCount.cnt > 0) {
+      return res.status(400).json({ error: 'Empty this compartment before removing it' });
+    }
+    const compartmentTotal = await db.get(`SELECT COUNT(*) as cnt FROM compartments WHERE location_id = ?`, [compartment.location_id]);
+    if (compartmentTotal.cnt <= 1) {
+      return res.status(400).json({ error: 'A location needs at least one compartment' });
+    }
+
+    await db.run(`DELETE FROM compartments WHERE id = ?`, [id]);
+    res.json({ message: 'Compartment removed' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to remove compartment' });
+  }
+});
+
+// Replaces the full set of sets assigned to a compartment in one call —
+// the sort assistant then prefers this compartment for cards from those
+// sets (see compartmentSort.recommendSlot).
+router.put('/compartments/:id/sets', async (req, res) => {
+  const { id } = req.params;
+  const { sets = [] } = req.body;
+  try {
+    const compartment = await db.get(`
+      SELECT cp.id FROM compartments cp
+      JOIN locations l ON cp.location_id = l.id
+      WHERE cp.id = ? AND l.user_id = ?
+    `, [id, req.user.id]);
+    if (!compartment) return res.status(404).json({ error: 'Compartment not found' });
+
+    await db.run(`DELETE FROM compartment_set_assignments WHERE compartment_id = ?`, [id]);
+    for (const setName of sets) {
+      await db.run(`INSERT OR IGNORE INTO compartment_set_assignments (compartment_id, set_name) VALUES (?, ?)`, [id, setName]);
+    }
+    res.json({ message: 'Set assignments updated', sets });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to update set assignments' });
+  }
+});
+
+// Distributes every owned set across a location's compartments automatically,
+// sizing each set to however many compartments it actually needs
+// (ceil(ownedCount / capacity)). Biggest sets are placed first so they get
+// first pick of consecutive compartments; anything that doesn't fit is
+// reported back instead of silently dropped.
+router.post('/locations/:id/auto-assign-sets', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) return res.status(404).json({ error: 'Location not found' });
+
+    const compartments = await db.all(`SELECT id, idx, capacity FROM compartments WHERE location_id = ? ORDER BY idx ASC`, [id]);
+    if (compartments.length === 0) return res.status(400).json({ error: 'This location has no compartments' });
+
+    const setCounts = await db.all(`
+      SELECT cc.set_name, SUM(c.quantity) as owned
+      FROM collection c
+      JOIN card_cache cc ON c.card_id = cc.id
+      WHERE c.user_id = ? AND cc.set_name IS NOT NULL
+      GROUP BY cc.set_name
+    `, [req.user.id]);
+
+    const setsBySize = setCounts
+      .map(s => ({ setName: s.set_name, compartmentsNeeded: Math.max(1, Math.ceil(s.owned / (compartments[0]?.capacity || 40))) }))
+      .sort((a, b) => b.compartmentsNeeded - a.compartmentsNeeded);
+
+    const plan = new Map(); // compartment id -> [set names]
+    let cursor = 0;
+    const skipped = [];
+    for (const { setName, compartmentsNeeded } of setsBySize) {
+      if (cursor + compartmentsNeeded > compartments.length) {
+        skipped.push(setName);
+        continue;
+      }
+      for (let i = 0; i < compartmentsNeeded; i++) {
+        const compartment = compartments[cursor + i];
+        if (!plan.has(compartment.id)) plan.set(compartment.id, []);
+        plan.get(compartment.id).push(setName);
+      }
+      cursor += compartmentsNeeded;
+    }
+
+    for (const compartment of compartments) {
+      await db.run(`DELETE FROM compartment_set_assignments WHERE compartment_id = ?`, [compartment.id]);
+      for (const setName of plan.get(compartment.id) || []) {
+        await db.run(`INSERT OR IGNORE INTO compartment_set_assignments (compartment_id, set_name) VALUES (?, ?)`, [compartment.id, setName]);
+      }
+    }
+
+    res.json({
+      message: 'Row assignments updated',
+      assigned: Array.from(plan.entries()).map(([compartment_id, sets]) => ({ compartment_id, sets })),
+      skipped
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to auto-assign sets' });
+  }
+});
+
+// Recommends where a card would land in this location right now — used by
+// the sort assistant to preview a placement before committing to it.
+router.get('/locations/:id/recommend', async (req, res) => {
+  const { id } = req.params;
+  const { card_id, printing } = req.query;
+  try {
+    const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+
+    const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity FROM card_cache WHERE id = ?`, [card_id]);
+    if (!cardMetadata) return res.status(404).json({ error: 'Card not found in cache' });
+    cardMetadata.printing = printing || 'Normal';
+    try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
+
+    const recommendation = await recommendSlot(db, location, cardMetadata);
+    if (!recommendation) return res.json({ full: true });
+    res.json(recommendation);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to compute recommendation' });
+  }
+});
+
+// Files a whole batch of unsorted cards into a location in one request,
+// simulating slot assignment against an in-memory snapshot so two cards in
+// the same batch never collide on the same compartment/position — the
+// "scan everything first, then apply once" workflow instead of filing cards
+// one at a time.
+router.post('/locations/:id/apply-all', async (req, res) => {
+  const { id } = req.params;
+  const { entry_ids = [] } = req.body;
+  try {
+    const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+    if (!Array.isArray(entry_ids) || entry_ids.length === 0) {
+      return res.status(400).json({ error: 'entry_ids is required' });
+    }
+
+    let workingCompartments = await loadCompartments(db, id, req.user.id);
+    let filed = 0;
+
+    for (const entryId of entry_ids) {
+      const entry = await db.get(`
+        SELECT c.id, c.card_id, c.printing, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity
+        FROM collection c
+        JOIN card_cache cc ON c.card_id = cc.id
+        WHERE c.id = ? AND c.user_id = ?
+      `, [entryId, req.user.id]);
+      if (!entry) continue;
+      try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
+
+      const recommended = await recommendSlot(db, location, entry, workingCompartments);
+      if (!recommended) continue;
+
+      await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [
+        id, recommended.compartment_id, recommended.position, entryId, req.user.id
+      ]);
+
+      workingCompartments = workingCompartments.map(c =>
+        c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
+      );
+      filed++;
+    }
+
+    res.json({ message: `Filed ${filed} of ${entry_ids.length} card(s).`, filed, total: entry_ids.length });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to apply batch' });
   }
 });
 
@@ -860,8 +1100,6 @@ router.get('/export', async (req, res) => {
         c.printing,
         c.language,
         c.purchase_price,
-        c.sub_location_1,
-        c.sub_location_2,
         c.added_at,
         cc.id as card_id,
         cc.name as card_name,
@@ -876,10 +1114,14 @@ router.get('/export', async (req, res) => {
         cc.price_normal,
         cc.price_holofoil,
         cc.price_reverse_holofoil,
-        l.name as location_name
+        l.name as location_name,
+        l.type as location_type,
+        cp.idx as compartment_idx,
+        cp.label as compartment_label
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       LEFT JOIN locations l ON c.location_id = l.id
+      LEFT JOIN compartments cp ON c.compartment_id = cp.id
       WHERE c.user_id = ?
     `;
     const dbRows = await db.all(query, [req.user.id]);
@@ -887,7 +1129,8 @@ router.get('/export', async (req, res) => {
       const resolvedPrice = resolveCardPrice(row);
       return {
         ...row,
-        market_price: resolvedPrice
+        market_price: resolvedPrice,
+        compartment_display: row.compartment_idx ? compartmentLabel({ idx: row.compartment_idx, label: row.compartment_label }, row.location_type) : ''
       };
     });
 
@@ -905,7 +1148,7 @@ router.get('/export', async (req, res) => {
     const headers = [
       'Card ID', 'Name', 'Set Name', 'Set ID', 'Card Number', 'Rarity',
       'Quantity', 'Condition', 'Printing', 'Language', 'Purchase Price',
-      'Market Price', 'Location Container', 'Sub-Location Page/Row', 'Sub-Location Slot/Section', 'Added At'
+      'Market Price', 'Location Container', 'Compartment', 'Added At'
     ];
 
     // Neutralize leading =, +, -, @ so spreadsheet apps don't interpret free-text
@@ -932,8 +1175,7 @@ router.get('/export', async (req, res) => {
         r.purchase_price || 0,
         r.market_price || 0,
         r.location_name ? `"${csvCell(r.location_name).replace(/"/g, '""')}"` : 'Unassigned',
-        r.sub_location_1 ? `"${csvCell(r.sub_location_1).replace(/"/g, '""')}"` : '',
-        r.sub_location_2 ? `"${csvCell(r.sub_location_2).replace(/"/g, '""')}"` : '',
+        r.compartment_display ? `"${csvCell(r.compartment_display).replace(/"/g, '""')}"` : '',
         r.added_at
       ];
       csvContent += line.join(',') + '\n';
@@ -1008,8 +1250,6 @@ router.post('/import', async (req, res) => {
           purchase_price: parseFloat(cardObj['Purchase Price']) || 0,
           market_price: parseFloat(cardObj['Market Price']) || 0,
           location_name: cardObj['Location Container'],
-          sub_location_1: cardObj['Sub-Location Page/Row'],
-          sub_location_2: cardObj['Sub-Location Slot/Section'],
           added_at: cardObj['Added At']
         });
       }
@@ -1055,27 +1295,31 @@ router.post('/import', async (req, res) => {
         }
       }
 
-      // 2. Resolve location_id from location_name, scoped to this user only
+      // 2. Resolve location_id from location_name, scoped to this user only.
+      // The exported "Compartment" column is a display label, not a stable
+      // identifier — the sort assistant re-picks a real compartment on
+      // import rather than trying to parse a page/row number back out of it.
       let locationId = null;
       const locName = card.location_name || card.location_container;
       if (locName && locName !== 'Unassigned') {
         let locRow = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [locName, req.user.id]);
         if (!locRow) {
-          let type = 'Other';
-          if (card.sub_location_1 && (card.sub_location_1.toLowerCase().includes('page') || card.sub_location_2)) {
-            type = 'Binder';
-          }
-          const newLoc = await db.run(`INSERT INTO locations (name, type, user_id) VALUES (?, ?, ?)`, [locName, type, req.user.id]);
+          const newLoc = await db.run(`INSERT INTO locations (name, type, user_id) VALUES (?, ?, ?)`, [locName, 'Other', req.user.id]);
+          await db.createCompartments(newLoc.lastID, 1, 1000);
           locationId = newLoc.lastID;
         } else {
           locationId = locRow.id;
         }
       }
 
+      const resolved = await resolveCompartmentAndPosition({
+        locationId, compartmentId: null, position: undefined, userId: req.user.id, cardId, printing: card.printing || 'Normal'
+      });
+
       // 3. Insert card into the collection
       await db.run(
         `INSERT INTO collection
-         (card_id, user_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, added_at)
+         (card_id, user_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, added_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           cardId,
@@ -1086,8 +1330,8 @@ router.post('/import', async (req, res) => {
           card.language || 'English',
           card.purchase_price || 0,
           locationId,
-          card.sub_location_1 || '',
-          card.sub_location_2 || '',
+          resolved.compartment_id,
+          resolved.position,
           card.added_at || new Date().toISOString()
         ]
       );

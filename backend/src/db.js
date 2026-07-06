@@ -70,6 +70,21 @@ function hashPassword(password) {
 
 // Initialize tables
 async function initDb() {
+  // One-time reset for the storage-system redesign: sub_location_1/2 strings
+  // and location-wide shape columns (max_rows, page_style, etc.) are being
+  // replaced by real compartments + compartment_set_assignments tables. No
+  // real user collections exist on this schema version yet (dev/seed data
+  // only), so this drops and lets the statements below recreate clean rather
+  // than carrying forward a second, parallel migration path.
+  const existingCollectionCols = await all(`PRAGMA table_info(collection)`).catch(() => []);
+  if (existingCollectionCols.some(c => c.name === 'sub_location_1')) {
+    console.log('Resetting locations/collection tables for the new compartment-based storage schema...');
+    await run(`PRAGMA foreign_keys = OFF`);
+    await run(`DROP TABLE IF EXISTS collection`);
+    await run(`DROP TABLE IF EXISTS locations`);
+    await run(`PRAGMA foreign_keys = ON`);
+  }
+
   // Create users table
   await run(`
     CREATE TABLE IF NOT EXISTS users (
@@ -93,19 +108,41 @@ async function initDb() {
     )
   `);
 
-  // Create locations table
+  // Create locations table. Physical shape (how many pages/rows, their
+  // capacity, which sets they hold) lives entirely in the compartments table
+  // below — a location is just an identity + a sort scheme, not a shape.
   await run(`
     CREATE TABLE IF NOT EXISTS locations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
-      type TEXT CHECK(type IN ('Binder', 'Box', 'Toploader Box', 'Deck Box', 'Tin / Case', 'Other')) NOT NULL,
-      description TEXT,
+      type TEXT CHECK(type IN ('Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other')) NOT NULL,
       sort_order TEXT DEFAULT 'name-asc',
-      max_pages INTEGER DEFAULT 30,
-      page_style TEXT DEFAULT '3x3',
-      max_rows INTEGER DEFAULT 3,
-      max_capacity INTEGER DEFAULT 1000,
-      foil_sorting TEXT DEFAULT 'normals_first'
+      foil_sorting TEXT DEFAULT 'normals_first',
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  // A compartment is one physical unit a card can be placed in: a binder page,
+  // a box row, or (for single-compartment containers like a Deck Box) the
+  // container's whole interior. Real capacity and set assignment live here
+  // instead of being inferred from location-wide columns or parsed out of a
+  // free-text sub_location string.
+  await run(`
+    CREATE TABLE IF NOT EXISTS compartments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+      idx INTEGER NOT NULL,
+      label TEXT,
+      capacity INTEGER NOT NULL DEFAULT 40,
+      UNIQUE(location_id, idx)
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS compartment_set_assignments (
+      compartment_id INTEGER NOT NULL REFERENCES compartments(id) ON DELETE CASCADE,
+      set_name TEXT NOT NULL,
+      PRIMARY KEY(compartment_id, set_name)
     )
   `);
 
@@ -141,10 +178,10 @@ async function initDb() {
       language TEXT DEFAULT 'English',
       purchase_price REAL,
       location_id INTEGER,
-      sub_location_1 TEXT,
-      sub_location_2 TEXT,
+      compartment_id INTEGER,
       added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(location_id) REFERENCES locations(id) ON DELETE SET NULL,
+      FOREIGN KEY(compartment_id) REFERENCES compartments(id) ON DELETE SET NULL,
       FOREIGN KEY(card_id) REFERENCES card_cache(id)
     )
   `);
@@ -208,69 +245,25 @@ async function initDb() {
     console.log('Adding user_id column to locations table...');
     await run(`ALTER TABLE locations ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`);
   }
-
-  // Add custom dimension columns to locations table if missing
   if (!locationsCols.some(c => c.name === 'sort_order')) {
     console.log('Adding sort_order column to locations table...');
     await run(`ALTER TABLE locations ADD COLUMN sort_order TEXT DEFAULT 'name-asc'`);
-  }
-  if (!locationsCols.some(c => c.name === 'max_pages')) {
-    console.log('Adding max_pages column to locations table...');
-    await run(`ALTER TABLE locations ADD COLUMN max_pages INTEGER DEFAULT 30`);
-  }
-  if (!locationsCols.some(c => c.name === 'page_style')) {
-    console.log('Adding page_style column to locations table...');
-    await run(`ALTER TABLE locations ADD COLUMN page_style TEXT DEFAULT '3x3'`);
-  }
-  if (!locationsCols.some(c => c.name === 'max_rows')) {
-    console.log('Adding max_rows column to locations table...');
-    await run(`ALTER TABLE locations ADD COLUMN max_rows INTEGER DEFAULT 3`);
-  }
-  if (!locationsCols.some(c => c.name === 'max_capacity')) {
-    console.log('Adding max_capacity column to locations table...');
-    await run(`ALTER TABLE locations ADD COLUMN max_capacity INTEGER DEFAULT 1000`);
   }
   if (!locationsCols.some(c => c.name === 'foil_sorting')) {
     console.log('Adding foil_sorting column to locations table...');
     await run(`ALTER TABLE locations ADD COLUMN foil_sorting TEXT DEFAULT 'normals_first'`);
   }
 
-  // Add position column to collection table if missing
+  // Add position column to collection table if missing (ordering within a
+  // compartment — fractional so inserts between two cards don't need to
+  // renumber everything, see rebalanceCompartmentPositions).
   if (!collectionCols.some(c => c.name === 'position')) {
     console.log('Adding position column to collection table...');
     await run(`ALTER TABLE collection ADD COLUMN position REAL DEFAULT 0`);
-
-    // Migrate existing collection records to positions
-    console.log('Migrating existing coordinates to position indices...');
-    const existingCards = await all(`
-      SELECT c.id, c.sub_location_1, c.sub_location_2, l.type as location_type, l.page_style
-      FROM collection c
-      LEFT JOIN locations l ON c.location_id = l.id
-      WHERE c.location_id IS NOT NULL
-    `);
-
-    for (const card of existingCards) {
-      let pageNum = parseInt((card.sub_location_1 || '').replace(/\D/g, ''), 10) || 0;
-      let slotNum = parseInt((card.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
-      
-      let index = 0;
-      if (card.location_type === 'Binder' || card.location_type === 'Toploader Binder') {
-        const pocketsCount = card.page_style === '2x2' ? 4 : card.page_style === '3x4' ? 12 : 9;
-        if (pageNum > 0 && slotNum > 0) {
-          index = (pageNum - 1) * pocketsCount + (slotNum - 1);
-        }
-      } else if (card.location_type === 'Box' || card.location_type === 'Toploader Box' || card.location_type === 'Graded Slab Box' || card.location_type === 'Display Shelf / Stand') {
-        if (pageNum > 0 && slotNum > 0) {
-          index = (pageNum - 1) * 40 + (slotNum - 1);
-        }
-      } else {
-        index = slotNum - 1;
-      }
-      if (index < 0) index = 0;
-      const position = index * 1000;
-      await run(`UPDATE collection SET position = ? WHERE id = ?`, [position, card.id]);
-    }
-    console.log('Migration of coordinates to position indices completed.');
+  }
+  if (!collectionCols.some(c => c.name === 'compartment_id')) {
+    console.log('Adding compartment_id column to collection table...');
+    await run(`ALTER TABLE collection ADD COLUMN compartment_id INTEGER REFERENCES compartments(id) ON DELETE SET NULL`);
   }
 
   // 3. Remove UNIQUE constraint on locations name per user (optional, but let's make sure it's not unique across users)
@@ -337,49 +330,6 @@ async function initDb() {
     console.log(`Repaired ${brokenSeedImages.changes} card_cache row(s) with broken seed image URLs.`);
   }
 
-  // 8. The locations.type CHECK constraint was never updated when 'Toploader
-  // Binder', 'Graded Slab Box', and 'Display Shelf / Stand' were added as
-  // selectable container types in the UI — every attempt to create one of
-  // those three types has been failing with a raw SQLITE_CONSTRAINT error.
-  // SQLite can't ALTER a CHECK constraint in place, so rebuild the table.
-  const locationsTableDef = await get(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'locations'`);
-  if (locationsTableDef && !locationsTableDef.sql.includes('Toploader Binder')) {
-    console.log('Rebuilding locations table to allow all container types (Toploader Binder, Graded Slab Box, Display Shelf / Stand)...');
-    // collection.location_id references locations with ON DELETE SET NULL.
-    // With foreign_keys ON, SQLite treats DROP TABLE on the referenced table
-    // as deleting every row first, which fires that cascade and would null
-    // out location_id on every card ever placed in a container — confirmed
-    // by reproducing it in isolation before writing this. Must disable FK
-    // enforcement for the duration of the rebuild.
-    await run(`PRAGMA foreign_keys = OFF`);
-    try {
-      await run(`
-        CREATE TABLE locations_new (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          type TEXT CHECK(type IN ('Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other')) NOT NULL,
-          description TEXT,
-          sort_order TEXT DEFAULT 'name-asc',
-          max_pages INTEGER DEFAULT 30,
-          page_style TEXT DEFAULT '3x3',
-          max_rows INTEGER DEFAULT 3,
-          max_capacity INTEGER DEFAULT 1000,
-          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-          foil_sorting TEXT DEFAULT 'normals_first'
-        )
-      `);
-      await run(`
-        INSERT INTO locations_new (id, name, type, description, sort_order, max_pages, page_style, max_rows, max_capacity, user_id, foil_sorting)
-        SELECT id, name, type, description, sort_order, max_pages, page_style, max_rows, max_capacity, user_id, foil_sorting FROM locations
-      `);
-      await run(`DROP TABLE locations`);
-      await run(`ALTER TABLE locations_new RENAME TO locations`);
-    } finally {
-      await run(`PRAGMA foreign_keys = ON`);
-    }
-    console.log('locations table rebuilt successfully.');
-  }
-
   // --- SEED DATA & MIGRATION TO DEFAULT ADMIN ---
   const userCount = await get(`SELECT COUNT(*) as count FROM users`);
   let adminId = null;
@@ -418,15 +368,26 @@ async function initDb() {
   const locCount = await get(`SELECT COUNT(*) as count FROM locations`);
   if (locCount.count === 0 && adminId) {
     console.log('Populating default locations for admin user...');
-    await run(`INSERT INTO locations (name, type, description, user_id) VALUES (?, ?, ?, ?)`, [
-      'Main Binder', 'Binder', 'For ultra rares, holos and favorites.', adminId
+    const binder = await run(`INSERT INTO locations (name, type, user_id) VALUES (?, ?, ?)`, [
+      'Main Binder', 'Binder', adminId
     ]);
-    await run(`INSERT INTO locations (name, type, description, user_id) VALUES (?, ?, ?, ?)`, [
-      'Bulk Storage Box 1', 'Box', 'Standard cardboard row box for bulk/common cards.', adminId
+    await createCompartments(binder.lastID, 30, 9); // 30 pages, 9 pockets each (3x3)
+
+    const box = await run(`INSERT INTO locations (name, type, user_id) VALUES (?, ?, ?)`, [
+      'Bulk Storage Box 1', 'Box', adminId
     ]);
-    await run(`INSERT INTO locations (name, type, description, user_id) VALUES (?, ?, ?, ?)`, [
-      'Unsorted Pile', 'Other', 'Temporary staging area for newly scanned cards.', adminId
-    ]);
+    await createCompartments(box.lastID, 3, 40); // 3 rows, 40 cards each
+  }
+}
+
+// Bulk-creates N compartments for a location (e.g. binder pages or box rows),
+// each with the given capacity. Used at location creation and here for
+// default seed data — the single place compartment numbering/labels default
+// from, so a page/row's implicit label ("Page 3", "Row 2") always agrees
+// between however the location was created.
+async function createCompartments(locationId, count, capacity) {
+  for (let i = 1; i <= count; i++) {
+    await run(`INSERT INTO compartments (location_id, idx, capacity) VALUES (?, ?, ?)`, [locationId, i, capacity]);
   }
 }
 
@@ -436,6 +397,7 @@ module.exports = {
   get,
   all,
   initDb,
+  createCompartments,
   hashPassword // Export for server.js usage
 };
 

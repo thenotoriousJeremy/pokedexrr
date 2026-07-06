@@ -22,7 +22,7 @@ app.use(helmet({ contentSecurityPolicy: false }));
 
 // Restrict cross-origin access to known frontend origins. Defaults cover the
 // Vite dev server; production deployments should set CORS_ORIGIN explicitly.
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173,http://localhost:3001')
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173,https://localhost:5173,http://localhost:3001')
   .split(',')
   .map(o => o.trim())
   .filter(Boolean);

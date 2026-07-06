@@ -45,8 +45,6 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
   const [editLanguage, setEditLanguage] = useState('English');
   const [editPurchasePrice, setEditPurchasePrice] = useState(0);
   const [editLocationId, setEditLocationId] = useState('');
-  const [editSubLocation1, setEditSubLocation1] = useState('');
-  const [editSubLocation2, setEditSubLocation2] = useState('');
   const [editIsTrade, setEditIsTrade] = useState(0);
   const [editListType, setEditListType] = useState('collection');
   const [showDataMenu, setShowDataMenu] = useState(false);
@@ -163,8 +161,6 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
     setEditLanguage(item.language);
     setEditPurchasePrice(item.purchase_price || 0);
     setEditLocationId(item.location_id || '');
-    setEditSubLocation1(item.sub_location_1 || '');
-    setEditSubLocation2(item.sub_location_2 || '');
     setEditIsTrade(item.is_trade || 0);
     setEditListType(item.list_type || 'collection');
     setIsEditOpen(true);
@@ -190,8 +186,6 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
           language: editLanguage,
           purchase_price: parseFloat(editPurchasePrice) || 0,
           location_id: editLocationId ? parseInt(editLocationId, 10) : null,
-          sub_location_1: editSubLocation1,
-          sub_location_2: editSubLocation2,
           list_type: editListType,
           is_trade: editIsTrade
         })
@@ -250,10 +244,6 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
       return new Date(b.added_at || 0) - new Date(a.added_at || 0);
     }
   }), [collection, searchFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, minPriceFilter, maxPriceFilter, sortBy]);
-
-  const selectedLoc = locations.find(l => l.id == editLocationId);
-  const isBinder = selectedLoc ? selectedLoc.type === 'Binder' : false;
-  const isBox = selectedLoc ? selectedLoc.type === 'Box' : false;
 
   return (
     <div>
@@ -660,42 +650,18 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                 
                 <div className="form-group">
                   <label>Storage Container</label>
-                  <select className="select-control" value={editLocationId} onChange={(e) => {
-                    setEditLocationId(e.target.value);
-                    setEditSubLocation1('');
-                    setEditSubLocation2('');
-                  }}>
+                  <select className="select-control" value={editLocationId} onChange={(e) => setEditLocationId(e.target.value)}>
                     <option value="">Unassigned Pile</option>
                     {locations.map((loc) => (
                       <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
                     ))}
                   </select>
+                  {editLocationId && editLocationId !== String(editingItem?.location_id || '') && (
+                    <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+                      The sort assistant will pick the exact page/row automatically.
+                    </p>
+                  )}
                 </div>
-
-                {editLocationId && (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem', marginTop: '0.75rem' }}>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>{isBinder ? 'Page Number' : isBox ? 'Row Number / Letter' : 'Sub-Location 1'}</label>
-                      <input 
-                        type="text" 
-                        className="input-control" 
-                        placeholder={isBinder ? 'e.g. Page 12' : isBox ? 'e.g. Row 2' : 'e.g. Top shelf'} 
-                        value={editSubLocation1}
-                        onChange={(e) => setEditSubLocation1(e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>{isBinder ? 'Slot Number (1-9)' : isBox ? 'Divider / Section' : 'Sub-Location 2'}</label>
-                      <input 
-                        type="text" 
-                        className="input-control" 
-                        placeholder={isBinder ? 'e.g. Slot 4' : isBox ? 'e.g. Behind Grass Divider' : 'e.g. Box A'} 
-                        value={editSubLocation2}
-                        onChange={(e) => setEditSubLocation2(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
 
               <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
@@ -825,10 +791,9 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                     <strong style={{ color: '#fff' }}>
                       {inspectorCard.location_name ? `${inspectorCard.location_name} (${inspectorCard.location_type})` : 'Unassigned Pile'}
                     </strong>
-                    {inspectorCard.location_name && (inspectorCard.sub_location_1 || inspectorCard.sub_location_2) && (
+                    {inspectorCard.location_name && inspectorCard.compartment_display_label && (
                       <span style={{ color: 'var(--text-secondary)' }}>
-                        {` • ${inspectorCard.location_type === 'Binder' ? 'Page' : 'Row'} ${inspectorCard.sub_location_1 || '?'}`}
-                        {inspectorCard.sub_location_2 ? ` / Slot ${inspectorCard.sub_location_2}` : ''}
+                        {` • ${inspectorCard.compartment_display_label}`}
                       </span>
                     )}
                   </div>

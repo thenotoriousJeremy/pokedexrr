@@ -157,24 +157,27 @@ router.post('/seed-cards', async (req, res) => {
     return res.status(403).json({ error: 'Not available in production' });
   }
   try {
-    // 1. Get or create Binder and Box locations for admin
-    let binder = await db.get(`SELECT id, page_style FROM locations WHERE user_id = ? AND type = 'Binder' LIMIT 1`, [req.user.id]);
+    // 1. Get or create Binder and Box locations for admin, each with a Page 1 / Row 1
+    // compartment to seed into.
+    let binder = await db.get(`SELECT id FROM locations WHERE user_id = ? AND type = 'Binder' LIMIT 1`, [req.user.id]);
     if (!binder) {
       const result = await db.run(`
-        INSERT INTO locations (name, type, description, sort_order, max_pages, page_style, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, ['Binder Seed Box', 'Binder', 'Seeded binder', 'custom', 3, '3x3', req.user.id]);
-      binder = { id: result.lastID, page_style: '3x3' };
+        INSERT INTO locations (name, type, sort_order, user_id) VALUES (?, ?, ?, ?)
+      `, ['Binder Seed Box', 'Binder', 'custom', req.user.id]);
+      await db.createCompartments(result.lastID, 3, 9);
+      binder = { id: result.lastID };
     }
+    const binderPage1 = await db.get(`SELECT id FROM compartments WHERE location_id = ? AND idx = 1`, [binder.id]);
 
     let box = await db.get(`SELECT id FROM locations WHERE user_id = ? AND type = 'Box' LIMIT 1`, [req.user.id]);
     if (!box) {
       const result = await db.run(`
-        INSERT INTO locations (name, type, description, sort_order, max_rows, max_capacity, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, ['Box Seed Box', 'Box', 'Seeded bulk box', 'custom', 2, 20, req.user.id]);
+        INSERT INTO locations (name, type, sort_order, user_id) VALUES (?, ?, ?, ?)
+      `, ['Box Seed Box', 'Box', 'custom', req.user.id]);
+      await db.createCompartments(result.lastID, 2, 20);
       box = { id: result.lastID };
     }
+    const boxRow1 = await db.get(`SELECT id FROM compartments WHERE location_id = ? AND idx = 1`, [box.id]);
 
     // Real card IDs spanning vintage (Base Set/Fossil/Jungle/Neo) and modern
     // (Scarlet & Violet) sets, so seeded data actually shows "old vs new" and
@@ -248,9 +251,9 @@ router.post('/seed-cards', async (req, res) => {
         const pos = (s - 1) * 1000;
 
         await db.run(`
-          INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, position, user_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [card.id, qty, condition, print, language, purchasePrice, binder.id, `Page 1`, `Slot ${s}`, pos, req.user.id]);
+          INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, user_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [card.id, qty, condition, print, language, purchasePrice, binder.id, binderPage1.id, pos, req.user.id]);
         addedCount += qty;
       }
     }
@@ -268,9 +271,9 @@ router.post('/seed-cards', async (req, res) => {
         const pos = (s - 1) * 1000;
 
         await db.run(`
-          INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, position, user_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [card.id, qty, condition, print, language, purchasePrice, box.id, `Row 1`, String(s), pos, req.user.id]);
+          INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, user_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [card.id, qty, condition, print, language, purchasePrice, box.id, boxRow1.id, pos, req.user.id]);
         addedCount += qty;
       }
     }
@@ -289,8 +292,8 @@ router.post('/seed-cards', async (req, res) => {
         const purchasePrice = parseFloat((Math.random() * 5).toFixed(2));
 
         await db.run(`
-          INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, position, user_id)
-          VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?)
+          INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, user_id)
+          VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?)
         `, [card.id, qty, condition, print, language, purchasePrice, req.user.id]);
         addedCount += qty;
         unsortedAdded++;

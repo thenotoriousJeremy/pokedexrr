@@ -25,8 +25,6 @@ function CardSearch({ onAddSuccess, showToast }) {
   const [language, setLanguage] = useState('English');
   const [purchasePrice, setPurchasePrice] = useState(0);
   const [locationId, setLocationId] = useState('');
-  const [subLocation1, setSubLocation1] = useState('');
-  const [subLocation2, setSubLocation2] = useState('');
 
   // Fetch physical locations on mount for the form dropdown
   useEffect(() => {
@@ -102,8 +100,6 @@ function CardSearch({ onAddSuccess, showToast }) {
     setPrinting('Normal');
     setLanguage('English');
     setPurchasePrice(0);
-    setSubLocation1('');
-    setSubLocation2('');
   };
 
   const handleLocationChange = (e) => {
@@ -126,9 +122,7 @@ function CardSearch({ onAddSuccess, showToast }) {
           printing,
           language,
           purchase_price: parseFloat(purchasePrice) || 0,
-          location_id: locationId ? parseInt(locationId, 10) : null,
-          sub_location_1: subLocation1,
-          sub_location_2: subLocation2
+          location_id: locationId ? parseInt(locationId, 10) : null
         })
       });
 
@@ -158,10 +152,6 @@ function CardSearch({ onAddSuccess, showToast }) {
   };
 
   // Helper to determine location type layout guidance
-  const selectedLocation = locations.find(l => l.id == locationId);
-  const isBinder = selectedLocation ? selectedLocation.type === 'Binder' : false;
-  const isBox = selectedLocation ? selectedLocation.type === 'Box' : false;
-
   return (
     <div>
       {/* Search Header Panel */}
@@ -343,32 +333,12 @@ function CardSearch({ onAddSuccess, showToast }) {
                       <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
                     ))}
                   </select>
+                  {locationId && (
+                    <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
+                      The sort assistant picks the exact page/row automatically based on this container's sort order.
+                    </p>
+                  )}
                 </div>
-
-                {locationId && (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem', marginTop: '0.75rem' }}>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>{isBinder ? 'Page Number' : isBox ? 'Row Number / Letter' : 'Sub-Location 1'}</label>
-                      <input 
-                        type="text" 
-                        className="input-control" 
-                        placeholder={isBinder ? 'e.g. Page 12' : isBox ? 'e.g. Row 2' : 'e.g. Top shelf'} 
-                        value={subLocation1}
-                        onChange={(e) => setSubLocation1(e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>{isBinder ? 'Slot Number (1-9)' : isBox ? 'Divider / Section' : 'Sub-Location 2'}</label>
-                      <input 
-                        type="text" 
-                        className="input-control" 
-                        placeholder={isBinder ? 'e.g. Slot 4' : isBox ? 'e.g. Behind Grass Divider' : 'e.g. Box A'} 
-                        value={subLocation2}
-                        onChange={(e) => setSubLocation2(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
 
               <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>

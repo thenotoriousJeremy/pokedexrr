@@ -1049,7 +1049,7 @@ button, input, select, textarea {
   .quick-add-grid .select-control {
     padding: 0.3rem 0.45rem !important;
     font-size: 0.75rem !important;
-    height: 28px !important;
+    height: 40px !important;
   }
 }
 
@@ -1132,26 +1132,94 @@ button, input, select, textarea {
 
 @media (max-width: 768px) {
   .binder-page-container {
-    flex-direction: row;
+    flex-direction: column;
     border-width: 3px;
-    gap: 2px;
+    gap: 10px;
   }
   .binder-spine {
-    width: 6px;
+    display: none;
   }
   .binder-page-left, .binder-page-right {
     padding: 0.35rem;
-    flex: 1;
+    width: 100%;
     min-width: 0;
   }
 }
 
-.dropdown-item-hover:hover {
-  background: rgba(255, 255, 255, 0.08) !important;
-  color: var(--accent-red) !important;
+.binder-pocket-grid {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+  align-content: start;
+}
+
+.binder-pocket {
+  position: relative;
+  aspect-ratio: 0.718;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6), 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.binder-pocket img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.binder-pocket-empty {
+  aspect-ratio: 0.718;
+  border-radius: 4px;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.binder-pocket-actions {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.binder-pocket:hover .binder-pocket-actions {
+  opacity: 1;
+}
+
+.binder-pocket-actions select {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.55rem;
+  padding: 1px 2px;
+}
+
+.binder-pocket-actions button {
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  padding: 1px;
+  flex-shrink: 0;
 }
 
 /* Storage Coordinator Workspace Layout */
+.storage-workspace-grid {
+  display: grid;
+  grid-template-columns: 260px 1fr 320px;
+  gap: 1.25rem;
+  min-height: 70vh;
+}
+
 @media (max-width: 1024px) {
   .storage-workspace-grid {
     grid-template-columns: 1fr !important;
@@ -1259,6 +1327,13 @@ button, input, select, textarea {
 
 .coverflow-nav-btn.right-btn {
   right: 10px;
+}
+
+@media (max-width: 768px) {
+  .coverflow-nav-btn {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 /* Custom Visual Styles for Container Types */
@@ -1539,69 +1614,19 @@ button, input, select, textarea {
   opacity: 0.8 !important;
 }
 
+/* iPod coverflow-style focus: hovering a box row shrinks its other cards
+   slightly, and the hovered card pops forward and grows. */
+.box-row-strip:hover .tilt-card-wrapper {
+  transform: scale(0.88) !important;
+}
+
+.box-row-strip .tilt-card-wrapper:hover {
+  transform: scale(1.25) !important;
+  z-index: 20;
+}
+
 .tilt-card-wrapper:hover .reverse-holo-shine-overlay {
   opacity: 0.8 !important;
-}
-
-/* Dimming/Blur effect for visualizer search filtering */
-.visualizer-slot-dimmed {
-  opacity: 0.15 !important;
-  filter: blur(1.5px) grayscale(60%) !important;
-  pointer-events: none;
-  transition: opacity 0.4s ease, filter 0.4s ease;
-}
-
-.visualizer-slot-highlighted {
-  transform: scale(1.05);
-  box-shadow: 0 0 20px var(--accent-red), 0 0 40px rgba(239, 83, 80, 0.4) !important;
-  border-color: var(--accent-red) !important;
-  z-index: 10;
-  transition: transform 0.4s ease, box-shadow 0.4s ease, border-color 0.4s ease;
-}
-
-/* Tactile 3D page flip turning effects */
-.page-flip-left {
-  animation: pageTurnLeft 0.5s cubic-bezier(0.645, 0.045, 0.355, 1) forwards;
-  transform-origin: left center;
-}
-
-.page-flip-right {
-  animation: pageTurnRight 0.5s cubic-bezier(0.645, 0.045, 0.355, 1) forwards;
-  transform-origin: right center;
-}
-
-@keyframes pageTurnLeft {
-  0% {
-    transform: rotateY(0deg);
-    filter: brightness(1);
-    z-index: 10;
-  }
-  50% {
-    transform: rotateY(-90deg);
-    filter: brightness(0.5);
-  }
-  100% {
-    transform: rotateY(-180deg);
-    filter: brightness(1);
-    z-index: 1;
-  }
-}
-
-@keyframes pageTurnRight {
-  0% {
-    transform: rotateY(0deg);
-    filter: brightness(1);
-    z-index: 10;
-  }
-  50% {
-    transform: rotateY(90deg);
-    filter: brightness(0.5);
-  }
-  100% {
-    transform: rotateY(180deg);
-    filter: brightness(1);
-    z-index: 1;
-  }
 }
 
 /* Stack Inspector Drawer Styles */
@@ -1671,5 +1696,145 @@ button, input, select, textarea {
   background: rgba(255, 255, 255, 0.03);
   border-color: var(--border-glass-hover);
 }
+
+/* Custom Row Selection and Coverflow Styles for Storage Box */
+.row-selection-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.row-tab-btn {
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  color: var(--text-secondary);
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.row-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-glass-hover);
+  color: #fff;
+}
+
+.row-tab-btn.active {
+  background: rgba(255, 71, 71, 0.15);
+  border-color: var(--accent-red);
+  color: #fff;
+  box-shadow: 0 0 10px rgba(255, 71, 71, 0.2);
+}
+
+.box-coverflow-container {
+  position: relative;
+  width: 100%;
+  height: 290px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  perspective: 1200px;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-glass);
+  margin: 0.5rem 0;
+  user-select: none;
+}
+
+.box-coverflow-track {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-style: preserve-3d;
+}
+
+.box-coverflow-card {
+  position: absolute;
+  width: 145px;
+  height: 202px;
+  border-radius: 8px;
+  box-shadow: 0 15px 35px rgba(0,0,0,0.6);
+  transition: transform 0.45s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.45s ease, filter 0.45s ease;
+  cursor: pointer;
+  overflow: hidden;
+  transform-style: preserve-3d;
+}
+
+.box-coverflow-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+}
+
+.box-coverflow-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0) 40%, rgba(0,0,0,0.45) 100%);
+  pointer-events: none;
+}
+
+.box-coverflow-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.65);
+  border: 1px solid var(--border-glass);
+  color: #fff;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.box-coverflow-nav:hover {
+  background: rgba(255, 71, 71, 0.85);
+  border-color: var(--accent-red);
+  transform: translateY(-50%) scale(1.1);
+}
+
+.box-coverflow-nav:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.box-coverflow-nav.left {
+  left: 15px;
+}
+
+.box-coverflow-nav.right {
+  right: 15px;
+}
+
+.focused-card-info-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.85rem;
+  background: rgba(0,0,0,0.25);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  margin-top: 0.25rem;
+}
+
 
 

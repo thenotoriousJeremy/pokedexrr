@@ -1,5 +1,5 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
-import { LayoutDashboard, Camera, Search, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Layers } from 'lucide-react';
+import { LayoutDashboard, Camera, Search, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert } from 'lucide-react';
 import Login from './components/Login';
 
 // View components are code-split so heavy deps (tesseract.js OCR in the scanner,

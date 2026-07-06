@@ -1,1817 +1,427 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { MapPin, Plus, Trash2, Library, BookOpen, Layers, Archive, ChevronLeft, ChevronRight, X, PanelRightClose, PanelRightOpen } from 'lucide-react';
-import { getCardDisplayName } from '../utils/langHelper';
-import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
-import { sortCardsByOrder, POKEMON_TYPE_ORDER } from '../utils/cardSort';
-import { getPageNum, getSlotNum } from '../utils/locationCoords';
-import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
-import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
-import { buildLocationProfiles, suggestBestContainer, capacityOf } from '../utils/containerSuggest';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Plus, Trash2, X } from 'lucide-react';
+import { sortCardsByOrder } from '../utils/cardSort';
+import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
+import { getCardRarityBorder } from '../utils/cardRarity';
 
-// Shared corner badge for a card's finish (Holo / Rev / 1st / Promo). Colors and
-// label come from the single source of truth so Storage matches Collection.
-function PrintingBadge({ printing, style }) {
+const CONTAINER_TYPES = ['Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other'];
+
+// Base sort schemes a container can use. 'set-number' has a foil-aware
+// sub-option (stored as the separate 'set-number-printing' scheme
+// server-side) rather than existing as its own top-level entry — from the
+// user's perspective it's one scheme with a toggle, not two schemes.
+const SORT_BASES = [
+  { value: 'custom', label: 'Custom (manual order, next empty slot)' },
+  { value: 'name-asc', label: 'A-Z Alphabetical' },
+  { value: 'set-number', label: 'Set & Number' },
+  { value: 'price-desc', label: 'Value (High-Low)' },
+  { value: 'type-name', label: 'Energy Type' }
+];
+
+// Given a stored sort_order value, splits it into the base scheme shown in
+// the main dropdown plus whether the foil-aware sub-option is active.
+function splitSortOrder(sortOrder) {
+  if (sortOrder === 'set-number-printing') return { base: 'set-number', foilAware: true };
+  return { base: sortOrder || 'custom', foilAware: false };
+}
+
+// A binder page's pocket grid is square-ish (3x3 for the default capacity-9
+// page) rather than however many columns happen to fit the viewport.
+function pocketColumns(capacity) {
+  return Math.max(1, Math.round(Math.sqrt(capacity || 1)));
+}
+
+function PrintingBadge({ printing }) {
   const label = getPrintingBadgeLabel(printing);
   if (!label) return null;
   return (
     <span style={{
       position: 'absolute', top: '4px', right: '4px',
       fontSize: '0.55rem', fontWeight: 900, letterSpacing: '0.05em',
-      padding: '1px 5px', borderRadius: '3px', zIndex: 10,
+      padding: '1px 5px', borderRadius: '3px', zIndex: 2,
       boxShadow: '0 1px 3px rgba(0,0,0,0.5)', textTransform: 'uppercase',
-      ...getPrintingBadgeStyle(printing), ...style
+      ...getPrintingBadgeStyle(printing)
     }}>{label}</span>
   );
 }
 
+// A card is just a compartment (a binder page, a box row, a deck box's whole
+// interior) — real capacity/label/set-assignment lives on the compartment
+// itself, not inferred from location.type. One renderer covers every
+// container type instead of separate Box/Binder/CoverFlow implementations.
+function CompartmentCard({ compartment, cards, sortOrder, availableSets, onRename, onSetCapacity, onToggleSet, onRemove, onDeleteCard, onMoveCard, moveTargets, canRemove }) {
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelDraft, setLabelDraft] = useState(compartment.display_label);
+  const [showSets, setShowSets] = useState(false);
+  const isCustom = sortOrder === 'custom';
+
+  return (
+    <div className="glass-panel" style={{ padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        {editingLabel ? (
+          <input
+            autoFocus
+            className="input-control"
+            value={labelDraft}
+            onChange={(e) => setLabelDraft(e.target.value)}
+            onBlur={() => { setEditingLabel(false); onRename(labelDraft); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') { setEditingLabel(false); onRename(labelDraft); } if (e.key === 'Escape') setEditingLabel(false); }}
+            style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem', width: '140px' }}
+          />
+        ) : (
+          <strong onDoubleClick={() => { setLabelDraft(compartment.display_label); setEditingLabel(true); }} title="Double-click to rename" style={{ cursor: 'pointer', fontSize: '0.85rem' }}>
+            {compartment.display_label}
+          </strong>
+        )}
+        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{compartment.count} / {compartment.capacity}</span>
+        <button type="button" className="btn btn-secondary" onClick={() => setShowSets(s => !s)} style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem' }}>
+          {compartment.assignedSets.length === 0 ? 'Any set' : compartment.assignedSets.length === 1 ? compartment.assignedSets[0] : `${compartment.assignedSets.length} sets`}
+        </button>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+          Capacity
+          <input
+            type="number" min="1" className="input-control" defaultValue={compartment.capacity}
+            onBlur={(e) => { const v = parseInt(e.target.value, 10); if (v > 0 && v !== compartment.capacity) onSetCapacity(v); }}
+            style={{ width: '60px', padding: '0.15rem 0.3rem', fontSize: '0.7rem' }}
+          />
+        </label>
+        {canRemove && (
+          <button type="button" className="btn btn-danger btn-icon-only" onClick={onRemove} title="Remove this compartment (must be empty)" style={{ width: '26px', height: '26px', padding: 0, marginLeft: 'auto' }}>
+            <Trash2 size={12} />
+          </button>
+        )}
+      </div>
+
+      {showSets && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
+          {availableSets.length === 0 ? (
+            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>No sets in your collection yet.</span>
+          ) : availableSets.map(setName => (
+            <label key={setName} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.65rem' }}>
+              <input type="checkbox" checked={compartment.assignedSets.includes(setName)} onChange={() => onToggleSet(setName)} />
+              {setName}
+            </label>
+          ))}
+        </div>
+      )}
+
+      {cards.length === 0 ? (
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic', padding: '0.25rem 0' }}>Empty</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+          {cards.map(card => (
+            <div key={card.entry_id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', padding: '0.25rem 0', borderBottom: '1px solid var(--border-glass)' }}>
+              <div style={{ position: 'relative', width: '32px', flexShrink: 0, overflow: 'hidden', borderRadius: '3px', ...getCardRarityBorder(card.rarity) }}>
+                <img src={card.image_url} alt={card.name} style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', display: 'block' }} />
+                {getFoilOverlayClass(card.printing) && (
+                  <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '3px' }} />
+                )}
+                <PrintingBadge printing={card.printing} />
+              </div>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {card.name} {card.quantity > 1 ? `x${card.quantity}` : ''}
+              </span>
+              {isCustom && moveTargets.length > 1 && (
+                <select
+                  className="select-control"
+                  value=""
+                  onChange={(e) => { if (e.target.value) onMoveCard(card.entry_id, parseInt(e.target.value, 10)); }}
+                  style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', maxWidth: '110px' }}
+                >
+                  <option value="">Move to...</option>
+                  {moveTargets.filter(t => t.id !== compartment.id).map(t => (
+                    <option key={t.id} value={t.id}>{t.display_label}</option>
+                  ))}
+                </select>
+              )}
+              <button type="button" onClick={() => onDeleteCard(card.entry_id)} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }} title="Remove from collection">
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One binder page: a fixed pocket grid (capacity slots, empty ones shown as
+// dashed placeholders) instead of CompartmentCard's variable-length row list.
+function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRename, onSetCapacity, onToggleSet, onRemove, onDeleteCard, onMoveCard, moveTargets, canRemove }) {
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelDraft, setLabelDraft] = useState(compartment.display_label);
+  const [showSets, setShowSets] = useState(false);
+  const isCustom = sortOrder === 'custom';
+  const cols = pocketColumns(compartment.capacity);
+  const slotCount = Math.max(compartment.capacity, cards.length);
+  const pockets = Array.from({ length: slotCount }, (_, i) => cards[i] || null);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', height: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+        {editingLabel ? (
+          <input
+            autoFocus
+            className="input-control"
+            value={labelDraft}
+            onChange={(e) => setLabelDraft(e.target.value)}
+            onBlur={() => { setEditingLabel(false); onRename(labelDraft); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') { setEditingLabel(false); onRename(labelDraft); } if (e.key === 'Escape') setEditingLabel(false); }}
+            style={{ padding: '0.15rem 0.4rem', fontSize: '0.75rem', width: '110px' }}
+          />
+        ) : (
+          <strong onDoubleClick={() => { setLabelDraft(compartment.display_label); setEditingLabel(true); }} title="Double-click to rename" style={{ cursor: 'pointer', fontSize: '0.8rem' }}>
+            {compartment.display_label}
+          </strong>
+        )}
+        <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{compartment.count}/{compartment.capacity}</span>
+        <button type="button" className="btn btn-secondary" onClick={() => setShowSets(s => !s)} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem' }}>
+          {compartment.assignedSets.length === 0 ? 'Any set' : compartment.assignedSets.length === 1 ? compartment.assignedSets[0] : `${compartment.assignedSets.length} sets`}
+        </button>
+        <input
+          type="number" min="1" className="input-control" defaultValue={compartment.capacity}
+          onBlur={(e) => { const v = parseInt(e.target.value, 10); if (v > 0 && v !== compartment.capacity) onSetCapacity(v); }}
+          title="Pockets on this page"
+          style={{ width: '46px', padding: '0.1rem 0.25rem', fontSize: '0.65rem' }}
+        />
+        {canRemove && (
+          <button type="button" className="btn btn-danger btn-icon-only" onClick={onRemove} title="Remove this page (must be empty)" style={{ width: '22px', height: '22px', padding: 0, marginLeft: 'auto' }}>
+            <Trash2 size={11} />
+          </button>
+        )}
+      </div>
+
+      {showSets && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', padding: '0.4rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
+          {availableSets.length === 0 ? (
+            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>No sets in your collection yet.</span>
+          ) : availableSets.map(setName => (
+            <label key={setName} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.6rem' }}>
+              <input type="checkbox" checked={compartment.assignedSets.includes(setName)} onChange={() => onToggleSet(setName)} />
+              {setName}
+            </label>
+          ))}
+        </div>
+      )}
+
+      <div className="binder-pocket-grid" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
+        {pockets.map((card, i) => card ? (
+          <div key={card.entry_id} className="binder-pocket" style={getCardRarityBorder(card.rarity)}>
+            <img src={card.image_url} alt={card.name} title={`${card.name}${card.quantity > 1 ? ` x${card.quantity}` : ''}`} />
+            {getFoilOverlayClass(card.printing) && (
+              <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />
+            )}
+            <PrintingBadge printing={card.printing} />
+            <div className="binder-pocket-actions">
+              {isCustom && moveTargets.length > 1 && (
+                <select
+                  value=""
+                  onChange={(e) => { if (e.target.value) onMoveCard(card.entry_id, parseInt(e.target.value, 10)); }}
+                >
+                  <option value="">Move...</option>
+                  {moveTargets.filter(t => t.id !== compartment.id).map(t => (
+                    <option key={t.id} value={t.id}>{t.display_label}</option>
+                  ))}
+                </select>
+              )}
+              <button type="button" onClick={() => onDeleteCard(card.entry_id)} title="Remove from collection">
+                <X size={12} />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div key={`empty-${i}`} className="binder-pocket-empty" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, setSelectedCardFilter, setActiveTab }) {
-  const isMobile = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
-  // Below this width the binder's two-page spread renders each pocket too
-  // small to read (a 3x3 spread splits the viewport into 6 columns). Tracks
-  // actual viewport width rather than touch support, so a narrow desktop
-  // window gets the same single-page layout as a phone.
-  const [isNarrowViewport, setIsNarrowViewport] = useState(typeof window !== 'undefined' && window.innerWidth <= 768);
+  const [locations, setLocations] = useState([]);
+  const [activeLocationId, setActiveLocationId] = useState(null);
+  const [compartments, setCompartments] = useState([]);
+  const [allCards, setAllCards] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newType, setNewType] = useState('Binder');
+
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [showAutoAssignInfo, setShowAutoAssignInfo] = useState(false);
+
+  const [unsortedSearch, setUnsortedSearch] = useState('');
+  const [unsortedSort, setUnsortedSort] = useState('scanned-desc');
+  const [applyAllTarget, setApplyAllTarget] = useState('');
+  const [activePageIndex, setActivePageIndex] = useState(0);
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const touchStartRef = useRef(0);
+
+  const [activeCompartmentId, setActiveCompartmentId] = useState(null);
+  const [coverflowActiveIndex, setCoverflowActiveIndex] = useState(0);
+  const [editingRowLabel, setEditingRowLabel] = useState(false);
+  const [rowLabelDraft, setRowLabelDraft] = useState('');
+  const [showRowSets, setShowRowSets] = useState(false);
+
+  const handleTouchStart = (e) => {
+    touchStartRef.current = e.changedTouches[0].clientX;
+  };
+
+  const handleTouchEnd = (e) => {
+    const endX = e.changedTouches[0].clientX;
+    const diffX = touchStartRef.current - endX;
+    if (diffX > 50) {
+      setActivePageIndex(prev => Math.min(compartments.length - 1, prev + 1));
+    } else if (diffX < -50) {
+      setActivePageIndex(prev => Math.max(0, prev - 1));
+    }
+  };
+
   useEffect(() => {
-    const handleResize = () => setIsNarrowViewport(window.innerWidth <= 768);
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
-  const [locations, setLocations] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [activeLocationId, setActiveLocationId] = useState(null);
-  const [locationCards, setLocationCards] = useState([]);
-
-  // Collection Organizer state upgrades
-  const [activeMoveCard, setActiveMoveCard] = useState(null);
-  const [showCreateAdvanced, setShowCreateAdvanced] = useState(false);
-  const [showEditAdvanced, setShowEditAdvanced] = useState(false);
-  const [createAdvancedConfig, setCreateAdvancedConfig] = useState({});
-  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
-  const [activeCardIndex, setActiveCardIndex] = useState(0);
-  const [cardCarouselTouchStart, setCardCarouselTouchStart] = useState(null);
-  const [cardCarouselTouchEnd, setCardCarouselTouchEnd] = useState(null);
-  
-  // Form states for creating a location
-  const [name, setName] = useState('');
-  const [type, setType] = useState('Binder');
-  const [description, setDescription] = useState('');
-  const [isAdding, setIsAdding] = useState(false);
-  const [sortOrder, setSortOrder] = useState('custom');
-  const [foilSorting, setFoilSorting] = useState('normals_first');
-  const [maxPages, setMaxPages] = useState(30);
-  const [pageStyle, setPageStyle] = useState('3x3');
-  const [maxRows, setMaxRows] = useState(3);
-  const [maxCapacity, setMaxCapacity] = useState(1000);
-
-  // Form states for editing a location
-  const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState('');
-  const [editType, setEditType] = useState('Binder');
-  const [editSortOrder, setEditSortOrder] = useState('custom');
-  const [editMaxPages, setEditMaxPages] = useState(30);
-  const [editPageStyle, setEditPageStyle] = useState('3x3');
-  const [editMaxRows, setEditMaxRows] = useState(3);
-  const [editMaxRowsStr, setEditMaxRowsStr] = useState('3'); // string version to allow clearing
-  const [editMaxCapacity, setEditMaxCapacity] = useState(1000);
-  const [editFoilSorting, setEditFoilSorting] = useState('normals_first');
-  const [editRowCapacity, setEditRowCapacity] = useState(40); // cards per row for box
-  const [editRowCapacityStr, setEditRowCapacityStr] = useState('40');
-  const [editAssignedSets, setEditAssignedSets] = useState(''); // newline-separated set names
-
-  // Binder Grid Visualizer states
-  const [viewMode, setViewMode] = useState('grid'); // Defaults to 'grid' (no list view)
-  const [selectedPage, setSelectedPage] = useState(1);
-  const [showQuickAdd, setShowQuickAdd] = useState(false);
-  const [targetSlot, setTargetSlot] = useState(null);
-  const [inspectedSlot, setInspectedSlot] = useState(null);
-  const [isFlipping, setIsFlipping] = useState(false);
-  const [visualizerSearch, setVisualizerSearch] = useState('');
-  const [inspectorStackSlot, setInspectorStackSlot] = useState(null);
-  
-  // Unsorted Cards states
-  const [unsortedCards, setUnsortedCards] = useState([]);
-  const [allCards, setAllCards] = useState([]); // full collection, for cross-location suggestions
-  const locationProfiles = useMemo(() => buildLocationProfiles(allCards), [allCards]);
-  const [unsortedSearch, setUnsortedSearch] = useState('');
-  const [unsortedSortOrder, setUnsortedSortOrder] = useState('name-asc');
-  const [unsortedViewMode, setUnsortedViewMode] = useState('list'); // 'list' or 'assistant'
-  const [assistantIndex, setAssistantIndex] = useState(0);
-  const [assistantHighlightRow, setAssistantHighlightRow] = useState(null);
-  const [assistantHighlightPos, setAssistantHighlightPos] = useState(null); // NEW: highlighted position within row
-  const [expandedRow, setExpandedRow] = useState(null); // NEW: which row is expanded in box visualizer
-  const [unsortedDateFilter, setUnsortedDateFilter] = useState('all');
-  const [carouselTouchStartIndex, setCarouselTouchStartIndex] = useState(0);
-  
-  // Touch Swiping states
-  const [touchStart, setTouchStart] = useState(null);
-  const [touchEnd, setTouchEnd] = useState(null);
-  
-  // Quick Add Form states
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [searching, setSearching] = useState(false);
-  const [selectedCard, setSelectedCard] = useState(null);
-  const [quickQty, setQuickQty] = useState(1);
-  const [quickCond, setQuickCond] = useState('Near Mint');
-  const [quickPrint, setQuickPrint] = useState('Normal');
-  const [quickLang, setQuickLang] = useState('English');
-  const [quickPrice, setQuickPrice] = useState(0);
 
   useEffect(() => {
-    fetchLocations();
+    setActiveCompartmentId(null);
+    setActivePageIndex(0);
+    setCoverflowActiveIndex(0);
+  }, [activeLocationId]);
+
+  useEffect(() => {
+    if (compartments.length > 0) {
+      const exists = compartments.some(c => c.id === activeCompartmentId);
+      if (!exists) {
+        setActiveCompartmentId(compartments[0].id);
+      }
+    } else {
+      setActiveCompartmentId(null);
+    }
+  }, [compartments, activeCompartmentId]);
+
+  useEffect(() => {
+    setCoverflowActiveIndex(0);
+  }, [activeCompartmentId]);
+
+  useEffect(() => {
+    if (activePageIndex >= compartments.length && compartments.length > 0) {
+      setActivePageIndex(compartments.length - 1);
+    }
+  }, [compartments.length, activePageIndex]);
+
+  const fetchLocations = async () => {
+    try {
+      const res = await fetch('/api/locations');
+      if (res.ok) setLocations(await res.json());
+    } catch (err) { console.error(err); }
+  };
+
+  const fetchAllCards = async () => {
+    try {
+      const res = await fetch('/api/collection');
+      if (res.ok) setAllCards(await res.json());
+    } catch (err) { console.error(err); }
+  };
+
+  const fetchCompartments = async (locId) => {
+    if (!locId) { setCompartments([]); return; }
+    try {
+      const res = await fetch(`/api/locations/${locId}/compartments`);
+      if (res.ok) setCompartments(await res.json());
+    } catch (err) { console.error(err); }
+  };
+
+  const refreshAll = async () => {
+    await Promise.all([fetchLocations(), fetchAllCards()]);
+    if (activeLocationId) await fetchCompartments(activeLocationId);
+  };
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      await Promise.all([fetchLocations(), fetchAllCards()]);
+      setLoading(false);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statsTrigger]);
+
+  useEffect(() => {
+    fetchCompartments(activeLocationId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeLocationId, statsTrigger]);
 
   useEffect(() => {
     if (selectedLocationId) {
       setActiveLocationId(selectedLocationId);
-      if (setSelectedLocationId) {
-        setSelectedLocationId(null);
-      }
+      setSelectedLocationId(null);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLocationId]);
 
-  useEffect(() => {
-    fetchLocationCards(activeLocationId);
-  }, [activeLocationId, statsTrigger, locations]);
-
-  // ==========================================
-  // ADVANCED CONFIGURATION & UTILITY HELPERS
-  // ==========================================
-  const parseAdvancedConfig = (loc) => {
-    if (!loc || !loc.description) return {};
-    try {
-      const desc = loc.description.trim();
-      if (desc.startsWith('{') && desc.endsWith('}')) {
-        return JSON.parse(desc);
-      }
-    } catch (err) {
-      console.error('Error parsing location config', err);
-    }
-    return {};
-  };
-
-  const handleSaveAdvancedConfig = async (updatedConfig) => {
-    if (!selectedLoc) return;
-    try {
-      const res = await fetch(`/api/locations/${selectedLoc.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          description: JSON.stringify(updatedConfig)
-        })
-      });
-      if (res.ok) {
-        showToast('Advanced configurations saved!');
-        fetchLocations();
-      } else {
-        showToast('Failed to save configurations.');
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Error saving configurations.');
-    }
-  };
-
-  // ==========================================
-  // CLICK-TO-MOVE / TAP-TO-PLACE HANDLERS
-  // ==========================================
-  const handleCardSelectForMove = (card) => {
-    if (activeMoveCard?.entry_id === card.entry_id) {
-      setActiveMoveCard(null);
-    } else {
-      setActiveMoveCard(card);
-      showToast(`Selected ${card.name}. Tap a destination slot or row to place.`);
-    }
-  };
-
-  const handlePlaceCardInSlot = async (pageNum, slotNum) => {
-    if (!activeMoveCard) return;
-
-    const sourceCard = activeMoveCard;
-    const targetCard = locationCards.find(c => getPageNum(c.sub_location_1) === pageNum && getSlotNum(c.sub_location_2) === slotNum);
-
-    if (targetCard) {
-      // SWAP cards
-      try {
-        const res1 = await fetch(`/api/collection/${sourceCard.entry_id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            location_id: activeLocationId,
-            sub_location_1: `Page ${pageNum}`,
-            sub_location_2: `Slot ${slotNum}`,
-            position: targetCard.position || 0,
-            quantity: sourceCard.quantity,
-            condition: sourceCard.condition,
-            printing: sourceCard.printing,
-            language: sourceCard.language,
-            purchase_price: sourceCard.purchase_price || 0,
-            list_type: sourceCard.list_type || 'collection',
-            is_trade: sourceCard.is_trade || 0
-          })
-        });
-
-        const res2 = await fetch(`/api/collection/${targetCard.entry_id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            location_id: sourceCard.location_id ? sourceCard.location_id : null,
-            sub_location_1: sourceCard.sub_location_1 ? sourceCard.sub_location_1 : null,
-            sub_location_2: sourceCard.sub_location_2 ? sourceCard.sub_location_2 : null,
-            position: sourceCard.position || 0,
-            quantity: targetCard.quantity,
-            condition: targetCard.condition,
-            printing: targetCard.printing,
-            language: targetCard.language,
-            purchase_price: targetCard.purchase_price || 0,
-            list_type: targetCard.list_type || 'collection',
-            is_trade: targetCard.is_trade || 0
-          })
-        });
-
-        if (res1.ok && res2.ok) {
-          showToast(`Swapped ${sourceCard.name} and ${targetCard.name}!`);
-          setActiveMoveCard(null);
-          fetchLocations();
-          fetchLocationCards(activeLocationId);
-          onUpdate();
-        } else {
-          showToast('Failed to swap cards.');
-        }
-      } catch (err) {
-        console.error(err);
-        showToast('Error swapping cards.');
-      }
-    } else {
-      // Move card to empty slot
-      try {
-        const pocketsCount = selectedLoc?.page_style === '2x2' ? 4 : selectedLoc?.page_style === '3x4' ? 12 : 9;
-        const targetSlotIndex = (pageNum - 1) * pocketsCount + (slotNum - 1);
-        const otherCards = locationCards.filter(c => c.entry_id !== sourceCard.entry_id);
-
-        let prevCard = null;
-        let nextCard = null;
-
-        otherCards.forEach(c => {
-          const p = getPageNum(c.sub_location_1);
-          const s = getSlotNum(c.sub_location_2);
-          const idx = (p - 1) * pocketsCount + (s - 1);
-          
-          if (idx < targetSlotIndex) {
-            if (!prevCard || idx > (getPageNum(prevCard.sub_location_1) - 1) * pocketsCount + (getSlotNum(prevCard.sub_location_2) - 1)) {
-              prevCard = c;
-            }
-          }
-          if (idx > targetSlotIndex) {
-            if (!nextCard || idx < (getPageNum(nextCard.sub_location_1) - 1) * pocketsCount + (getSlotNum(nextCard.sub_location_2) - 1)) {
-              nextCard = c;
-            }
-          }
-        });
-
-        let pos = 1000;
-        if (prevCard && nextCard) {
-          pos = (prevCard.position + nextCard.position) / 2;
-        } else if (prevCard) {
-          pos = prevCard.position + 1000;
-        } else if (nextCard) {
-          pos = nextCard.position / 2;
-        }
-
-        const response = await fetch(`/api/collection/${sourceCard.entry_id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            location_id: activeLocationId,
-            sub_location_1: `Page ${pageNum}`,
-            sub_location_2: `Slot ${slotNum}`,
-            position: pos,
-            quantity: sourceCard.quantity,
-            condition: sourceCard.condition,
-            printing: sourceCard.printing,
-            language: sourceCard.language,
-            purchase_price: sourceCard.purchase_price || 0,
-            list_type: sourceCard.list_type || 'collection',
-            is_trade: sourceCard.is_trade || 0
-          })
-        });
-        if (response.ok) {
-          showToast(`Moved ${sourceCard.name} to Page ${pageNum} Slot ${slotNum}`);
-          setActiveMoveCard(null);
-          fetchLocations();
-          fetchLocationCards(activeLocationId);
-          onUpdate();
-        } else {
-          showToast('Failed to move card.');
-        }
-      } catch (err) {
-        console.error(err);
-        showToast('Error moving card.');
-      }
-    }
-  };
-
-  const handleRelocateCardToContainer = async (cardEntryId, targetLoc) => {
-    try {
-      const resCards = await fetch(`/api/locations/${targetLoc.id}/cards`);
-      let targetCards = [];
-      if (resCards.ok) {
-        targetCards = await resCards.json();
-      }
-
-      let sub1 = '', sub2 = '';
-      if (targetLoc.type === 'Binder' || targetLoc.type === 'Toploader Binder') {
-        const pocketsCount = targetLoc.page_style === '2x2' ? 4 : targetLoc.page_style === '3x4' ? 12 : 9;
-        const maxP = targetLoc.max_pages || 30;
-        const occupied = new Set(targetCards.map(c => {
-          const p = parseInt((c.sub_location_1 || '').replace(/\D/g, ''), 10) || 0;
-          const s = parseInt((c.sub_location_2 || '').replace(/\D/g, ''), 10) || 0;
-          return `${p}-${s}`;
-        }));
-
-        let found = false;
-        for (let p = 1; p <= maxP; p++) {
-          for (let s = 1; s <= pocketsCount; s++) {
-            if (!occupied.has(`${p}-${s}`)) {
-              sub1 = `Page ${p}`;
-              sub2 = `Slot ${s}`;
-              found = true;
-              break;
-            }
-          }
-          if (found) break;
-        }
-        if (!found) {
-          sub1 = 'Page 1';
-          sub2 = 'Slot 1';
-        }
-      } else if (targetLoc.type === 'Box' || targetLoc.type === 'Toploader Box' || targetLoc.type === 'Graded Slab Box' || targetLoc.type === 'Display Shelf / Stand') {
-        sub1 = 'Row 1';
-        const cardsInRow1 = targetCards.filter(c => c.sub_location_1 === 'Row 1');
-        sub2 = String(cardsInRow1.length + 1);
-      }
-
-      const sourceCard = locationCards.find(c => c.entry_id == cardEntryId) || unsortedCards.find(c => c.entry_id == cardEntryId);
-      const cardName = sourceCard ? sourceCard.name : 'Card';
-
-      const res = await fetch(`/api/collection/${cardEntryId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          location_id: targetLoc.id,
-          sub_location_1: sub1,
-          sub_location_2: sub2,
-          position: (targetCards.length > 0 ? Math.max(...targetCards.map(c => c.position || 0)) : 0) + 1000,
-          quantity: sourceCard ? sourceCard.quantity : 1,
-          condition: sourceCard ? sourceCard.condition : 'NM',
-          printing: sourceCard ? sourceCard.printing : 'Standard',
-          language: sourceCard ? sourceCard.language : 'English',
-          purchase_price: sourceCard ? (sourceCard.purchase_price || 0) : 0,
-          list_type: sourceCard ? (sourceCard.list_type || 'collection') : 'collection',
-          is_trade: sourceCard ? (sourceCard.is_trade || 0) : 0
-        })
-      });
-
-      if (res.ok) {
-        showToast(`Moved ${cardName} to ${targetLoc.name} (${sub1}, ${sub2})`);
-        setActiveMoveCard(null);
-        setActiveLocationId(targetLoc.id);
-        fetchLocations();
-        onUpdate();
-      } else {
-        showToast('Failed to relocate card.');
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Error relocating card.');
-    }
-  };
-
-  const handlePlaceCardInBoxRow = async (cardEntryId, rowName) => {
-    const entryId = parseInt(cardEntryId, 10);
-    if (!entryId) return;
-    
-    const sourceCard = locationCards.find(c => c.entry_id === entryId) || 
-                       unsortedCards.find(c => c.entry_id === entryId);
-    if (!sourceCard) return;
-
-    const existingInRow = locationCards.filter(c => c.sub_location_1 === rowName);
-    const targetSeq = existingInRow.length + 1;
-    
-    const lastCard = existingInRow[existingInRow.length - 1];
-    const newPos = lastCard ? lastCard.position + 1000 : 1000;
-
-    await moveCardToLocation(entryId, activeLocationId, rowName, String(targetSeq), newPos);
-    setActiveMoveCard(null);
-  };
-
-  const handleUpdateQuantity = async (cardEntryId, newQty) => {
-    try {
-      const card = locationCards.find(c => c.entry_id === cardEntryId) || 
-                   unsortedCards.find(c => c.entry_id === cardEntryId);
-      if (!card) return;
-
-      const res = await fetch(`/api/collection/${cardEntryId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          location_id: card.location_id,
-          sub_location_1: card.sub_location_1,
-          sub_location_2: card.sub_location_2,
-          quantity: newQty,
-          condition: card.condition,
-          printing: card.printing,
-          language: card.language,
-          purchase_price: card.purchase_price || 0,
-          list_type: card.list_type || 'collection',
-          is_trade: card.is_trade || 0
-        })
-      });
-
-      if (res.ok) {
-        showToast(`Quantity updated to ${newQty}`);
-        setActiveMoveCard(prev => prev ? { ...prev, quantity: newQty } : null);
-        fetchLocationCards(activeLocationId);
-        onUpdate();
-      } else {
-        showToast('Failed to update quantity.');
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Error updating quantity.');
-    }
-  };
-
-
-
-  // ==========================================
-  // COLLAPSIBLE ADVANCED CONFIGURATIONS MENU
-  // ==========================================
-  const renderAdvancedConfigAccordion = (isCreation = false, configToUse = null, onConfigChange = null) => {
-    const activeConfig = configToUse || (selectedLoc ? parseAdvancedConfig(selectedLoc) : {});
-    
-    const updateVal = (key, val) => {
-      const updated = { ...activeConfig, [key]: val };
-      if (isCreation) {
-        onConfigChange(updated);
-      } else {
-        handleSaveAdvancedConfig(updated);
-      }
-    };
-
-    const updateEnergyRange = (type, pageNum) => {
-      const currentRanges = activeConfig.energyRanges || {
-        'Grass': 1, 'Fire': 4, 'Water': 7, 'Lightning': 10, 'Psychic': 13,
-        'Fighting': 16, 'Darkness': 19, 'Metal': 22, 'Dragon': 25, 'Colorless': 27, 'Trainers': 29
-      };
-      const updatedRanges = { ...currentRanges, [type]: parseInt(pageNum, 10) || 1 };
-      updateVal('energyRanges', updatedRanges);
-    };
-
-    const updateAlphaGroup = (idx, rangeStr) => {
-      const currentGroups = activeConfig.alphabetGroups || ["A-C", "D-F", "G-I", "J-L", "M-O", "P-R", "S-U", "V-Z"];
-      const updatedGroups = [...currentGroups];
-      updatedGroups[idx] = rangeStr;
-      updateVal('alphabetGroups', updatedGroups);
-    };
-
-    const currentType = isCreation ? type : (selectedLoc?.type || 'Binder');
-    const currentSort = isCreation ? sortOrder : (selectedLoc?.sort_order || 'name-asc');
-
-    return (
-      <div style={{ marginTop: '0.5rem', width: '100%', display: 'flex', flexDirection: 'column' }}>
-        <div 
-          className="advanced-config-header"
-          onClick={() => isCreation ? setShowCreateAdvanced(!showCreateAdvanced) : setShowEditAdvanced(!showEditAdvanced)}
-        >
-          <span>⚙️ Advanced Sorting Customizations</span>
-          <span style={{ fontSize: '0.6rem' }}>{(isCreation ? showCreateAdvanced : showEditAdvanced) ? '▲' : '▼'}</span>
-        </div>
-        
-        {((isCreation && showCreateAdvanced) || (!isCreation && showEditAdvanced)) && (
-          <div className="advanced-config-content">
-            {currentSort === 'price-desc' && (
-              <>
-                <span style={{ fontSize: '0.6rem', color: 'var(--accent-red)', fontWeight: 800, textTransform: 'uppercase' }}>Value Boundaries</span>
-                <div className="advanced-config-row">
-                  <label>High-Value Tier ($)</label>
-                  <input 
-                    type="number" 
-                    className="input-control"
-                    value={activeConfig.priceHigh !== undefined ? activeConfig.priceHigh : 20}
-                    onChange={(e) => updateVal('priceHigh', parseFloat(e.target.value) || 20)}
-                  />
-                </div>
-                <div className="advanced-config-row">
-                  <label>Mid-Value Tier ($)</label>
-                  <input 
-                    type="number" 
-                    className="input-control"
-                    value={activeConfig.priceMid !== undefined ? activeConfig.priceMid : 5}
-                    onChange={(e) => updateVal('priceMid', parseFloat(e.target.value) || 5)}
-                  />
-                </div>
-              </>
-            )}
-
-            {currentSort === 'type-name' && (currentType === 'Binder' || currentType === 'Toploader Binder') && (
-              <>
-                <span style={{ fontSize: '0.6rem', color: 'var(--accent-red)', fontWeight: 800, textTransform: 'uppercase' }}>Energy Starting Pages</span>
-                {['Grass', 'Fire', 'Water', 'Lightning', 'Psychic', 'Fighting', 'Darkness', 'Metal', 'Dragon', 'Colorless', 'Trainers'].map((t) => {
-                  const currentRanges = activeConfig.energyRanges || {
-                    'Grass': 1, 'Fire': 4, 'Water': 7, 'Lightning': 10, 'Psychic': 13,
-                    'Fighting': 16, 'Darkness': 19, 'Metal': 22, 'Dragon': 25, 'Colorless': 27, 'Trainers': 29
-                  };
-                  return (
-                    <div className="advanced-config-row" key={t}>
-                      <label>{t} Page</label>
-                      <input 
-                        type="number" 
-                        className="input-control"
-                        min="1"
-                        max={isCreation ? maxPages : (selectedLoc?.max_pages || 30)}
-                        value={currentRanges[t] || 1}
-                        onChange={(e) => updateEnergyRange(t, e.target.value)}
-                      />
-                    </div>
-                  );
-                })}
-              </>
-            )}
-
-            {currentSort === 'name-asc' && (
-              <>
-                <span style={{ fontSize: '0.6rem', color: 'var(--accent-red)', fontWeight: 800, textTransform: 'uppercase' }}>Alphabet Buckets (A-Z)</span>
-                {Array.from({ length: 8 }).map((_, idx) => {
-                  const defaultGroups = ["A-C", "D-F", "G-I", "J-L", "M-O", "P-R", "S-U", "V-Z"];
-                  const currentGroups = activeConfig.alphabetGroups || defaultGroups;
-                  return (
-                    <div className="advanced-config-row" key={idx}>
-                      <label>Group {idx + 1}</label>
-                      <input 
-                        type="text" 
-                        className="input-control"
-                        placeholder="e.g. A-C"
-                        value={currentGroups[idx] || ''}
-                        onChange={(e) => updateAlphaGroup(idx, e.target.value.toUpperCase())}
-                      />
-                    </div>
-                  );
-                })}
-              </>
-            )}
-
-            {currentType === 'Deck Box' && (
-              <>
-                <span style={{ fontSize: '0.6rem', color: 'var(--accent-red)', fontWeight: 800, textTransform: 'uppercase' }}>Deck Limit Settings</span>
-                <div className="advanced-config-row">
-                  <label>Target Deck Size</label>
-                  <input 
-                    type="number" 
-                    className="input-control"
-                    min="1"
-                    value={activeConfig.targetDeckSize || 60}
-                    onChange={(e) => updateVal('targetDeckSize', parseInt(e.target.value, 10) || 60)}
-                  />
-                </div>
-              </>
-            )}
-
-            {/* General Layout & Sorting Preferences */}
-            <span style={{ fontSize: '0.6rem', color: 'var(--accent-red)', fontWeight: 800, textTransform: 'uppercase', display: 'block', marginTop: '0.5rem' }}>General Settings</span>
-            
-            <div className="advanced-config-row">
-              <label>Foil Sorting Priority</label>
-              <select 
-                className="select-control" 
-                value={isCreation ? foilSorting : editFoilSorting} 
-                onChange={(e) => {
-                  if (isCreation) {
-                    setFoilSorting(e.target.value);
-                  } else {
-                    setEditFoilSorting(e.target.value);
-                  }
-                }}
-                style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem', height: '24px', flex: 1, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(0,0,0,0.2)', color: '#fff', borderRadius: '4px' }}
-              >
-                <option value="normals_first">Normals First (Normal -&gt; Rev Holo -&gt; Holo)</option>
-                <option value="foils_first">Foils First (Rev Holo -&gt; Holo -&gt; Normal)</option>
-              </select>
-            </div>
-
-            {(currentType === 'Binder' || currentType === 'Toploader Binder') && (
-              <div className="advanced-config-row" style={{ marginTop: '0.4rem' }}>
-                <label>1st Page Solo (Cover Style)</label>
-                <select 
-                  className="select-control" 
-                  value={activeConfig.firstPageSolo ? 'yes' : 'no'} 
-                  onChange={(e) => updateVal('firstPageSolo', e.target.value === 'yes')}
-                  style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem', height: '24px', flex: 1, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(0,0,0,0.2)', color: '#fff', borderRadius: '4px' }}
-                >
-                  <option value="no">No (Side-by-side Page 1 & 2)</option>
-                  <option value="yes">Yes (Page 1 alone on right)</option>
-                </select>
-              </div>
-            )}
-
-            <div style={{ fontSize: '0.55rem', color: 'var(--text-muted)', fontStyle: 'italic', marginTop: '0.2rem', lineHeight: 1.2 }}>
-              These custom thresholds set the targets suggested by the Sorting Assistant mode.
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // ==========================================
-  // CUSTOM PREMIUM CONTAINER VISUALIZERS
-  // ==========================================
-
-  // ==========================================
-  // BOX ROW VISUALIZER (for Box, Toploader Box, etc.)
-  // ==========================================
-  const renderBoxVisualizer = () => {
-    const isBoxType = selectedLoc && (
-      selectedLoc.type === 'Box' ||
-      selectedLoc.type === 'Toploader Box' ||
-      selectedLoc.type === 'Graded Slab Box' ||
-      selectedLoc.type === 'Display Shelf / Stand'
-    );
-    if (!isBoxType) return null;
-
-    const maxRows = selectedLoc.max_rows || 3;
-    const rowNames = Array.from({ length: maxRows }, (_, i) => `Row ${i + 1}`);
-
-    if (locationCards.length === 0) {
-      return (
-        <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2.5rem 1rem' }}>
-          <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>📦</div>
-          <p>This box is empty. Go to Search or Scanner to add cards, or drag cards here from the Unsorted panel!</p>
-        </div>
-      );
-    }
-
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', width: '100%' }}>
-        {rowNames.map((rowName, rowIdx) => {
-          const rowCards = locationCards.filter(c => c.sub_location_1 === rowName)
-            .sort((a, b) => {
-              const seqA = parseInt(a.sub_location_2 || '0', 10) || 0;
-              const seqB = parseInt(b.sub_location_2 || '0', 10) || 0;
-              return seqA - seqB || (a.position || 0) - (b.position || 0);
-            });
-
-          const isHighlighted = assistantHighlightRow === rowName;
-          const isTargetable = !!activeMoveCard;
-
-          return (
-            <div
-              key={rowName}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                const cardId = e.dataTransfer.getData('card_entry_id');
-                handleDropToBoxRow(cardId, rowName);
-              }}
-              onClick={() => {
-                if (activeMoveCard) {
-                  handlePlaceCardInBoxRow(activeMoveCard.entry_id, rowName);
-                }
-              }}
-              style={{
-                borderRadius: 'var(--radius-md)',
-                border: isHighlighted
-                  ? '2px solid #eab308'
-                  : isTargetable
-                  ? '2px dashed rgba(255,255,255,0.2)'
-                  : '1px solid var(--border-glass)',
-                background: isHighlighted
-                  ? 'rgba(234,179,8,0.06)'
-                  : isTargetable
-                  ? 'rgba(255,255,255,0.02)'
-                  : 'rgba(0,0,0,0.15)',
-                boxShadow: isHighlighted ? '0 0 18px rgba(234,179,8,0.25), inset 0 0 12px rgba(234,179,8,0.05)' : 'none',
-                transition: 'all 0.25s ease',
-                cursor: isTargetable ? 'pointer' : 'default',
-                overflow: 'hidden',
-                animation: isHighlighted ? 'pulse-row 1.5s ease-in-out infinite' : 'none'
-              }}
-            >
-              {/* Row Header */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.6rem',
-                padding: '0.4rem 0.75rem',
-                borderBottom: isHighlighted ? '1px solid rgba(234,179,8,0.3)' : '1px solid var(--border-glass)',
-                background: isHighlighted ? 'rgba(234,179,8,0.08)' : 'rgba(0,0,0,0.2)'
-              }}>
-                <span style={{
-                  fontSize: '0.7rem',
-                  fontWeight: 850,
-                  letterSpacing: '0.08em',
-                  color: isHighlighted ? '#eab308' : 'var(--text-secondary)',
-                  textTransform: 'uppercase'
-                }}>
-                  {rowName}
-                </span>
-                <span style={{
-                  fontSize: '0.6rem',
-                  background: isHighlighted ? 'rgba(234,179,8,0.2)' : 'rgba(255,255,255,0.06)',
-                  color: isHighlighted ? '#eab308' : 'var(--text-muted)',
-                  border: isHighlighted ? '1px solid rgba(234,179,8,0.4)' : '1px solid var(--border-glass)',
-                  borderRadius: '8px',
-                  padding: '1px 6px',
-                  fontWeight: 700
-                }}>
-                  {rowCards.length} card{rowCards.length !== 1 ? 's' : ''}
-                </span>
-                {isHighlighted && (
-                  <span style={{
-                    marginLeft: 'auto',
-                    fontSize: '0.6rem',
-                    fontWeight: 800,
-                    color: '#eab308',
-                    background: 'rgba(234,179,8,0.15)',
-                    border: '1px solid rgba(234,179,8,0.4)',
-                    borderRadius: '8px',
-                    padding: '2px 8px',
-                    letterSpacing: '0.05em',
-                    textTransform: 'uppercase',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    animation: 'pulse-text 1.5s ease-in-out infinite'
-                  }}>
-                    🎯 Place Here
-                  </span>
-                )}
-              </div>
-
-              {/* Cards Strip */}
-              <div style={{
-                display: 'flex',
-                flexDirection: 'row',
-                gap: '0.35rem',
-                padding: '0.5rem 0.75rem',
-                overflowX: 'auto',
-                minHeight: '90px',
-                alignItems: 'center',
-                flexWrap: 'nowrap'
-              }}>
-                {rowCards.map((card, posIdx) => {
-                  const isSelected = activeMoveCard?.entry_id === card.entry_id;
-                  const rarityStyle = getCardRarityBorder(card.rarity);
-                  return (
-                    <div
-                      key={card.entry_id}
-                      draggable
-                      onDragStart={(e) => handleDragStart(e, card)}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (activeMoveCard) {
-                          // Swap within same box
-                          handlePlaceCardInBoxRow(activeMoveCard.entry_id, rowName);
-                        } else {
-                          handleCardSelectForMove(card);
-                        }
-                      }}
-                      className={`tilt-card-wrapper ${isSelected ? 'card-move-selecting' : ''}`}
-                      title={`${card.name} — ${card.set_name} #${card.number} | ${card.condition} | ${card.printing}`}
-                      style={{
-                        position: 'relative',
-                        width: '60px',
-                        aspectRatio: 0.718,
-                        flexShrink: 0,
-                        borderRadius: '5px',
-                        overflow: 'hidden',
-                        cursor: 'pointer',
-                        border: isSelected ? '2px solid var(--accent-yellow)' : rarityStyle.border,
-                        boxShadow: isSelected
-                          ? '0 0 10px var(--accent-yellow)'
-                          : `0 3px 8px rgba(0,0,0,0.45), ${rarityStyle.boxShadow}`,
-                        transition: 'all 0.15s ease',
-                        transform: isSelected ? 'scale(1.08) translateY(-2px)' : 'scale(1)'
-                      }}
-                    >
-                      <img
-                        src={card.image_url}
-                        alt={card.name}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                      />
-                      {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '5px' }} />}
-                      {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '5px' }} />}
-                      {/* Position badge */}
-                      <span style={{
-                        position: 'absolute',
-                        top: '2px',
-                        left: '2px',
-                        fontSize: '0.45rem',
-                        fontWeight: 900,
-                        color: 'rgba(255,255,255,0.85)',
-                        background: 'rgba(0,0,0,0.6)',
-                        borderRadius: '2px',
-                        padding: '0px 2px',
-                        lineHeight: 1.4
-                      }}>
-                        #{posIdx + 1}
-                      </span>
-                      {/* Qty badge */}
-                      {card.quantity > 1 && (
-                        <span style={{
-                          position: 'absolute',
-                          bottom: '1px',
-                          right: '2px',
-                          fontSize: '0.5rem',
-                          fontWeight: 900,
-                          color: '#fff',
-                          background: 'var(--accent-red)',
-                          borderRadius: '3px',
-                          padding: '0px 3px'
-                        }}>
-                          x{card.quantity}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-
-                {/* Drop target placeholder */}
-                {isTargetable && (
-                  <div
-                    style={{
-                      width: '60px',
-                      aspectRatio: 0.718,
-                      flexShrink: 0,
-                      borderRadius: '5px',
-                      border: isHighlighted ? '2px dashed #eab308' : '2px dashed rgba(255,255,255,0.2)',
-                      background: isHighlighted ? 'rgba(234,179,8,0.1)' : 'rgba(255,255,255,0.02)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: isHighlighted ? '1.1rem' : '0.9rem',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s'
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handlePlaceCardInBoxRow(activeMoveCard.entry_id, rowName);
-                    }}
-                  >
-                    {isHighlighted ? '🎯' : '+'}
-                  </div>
-                )}
-
-                {/* Empty row placeholder */}
-                {rowCards.length === 0 && !isTargetable && (
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontStyle: 'italic', padding: '0 0.5rem' }}>
-                    Empty row — drag cards here to fill
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-
-        <style>{`
-          @keyframes pulse-row {
-            0%, 100% { box-shadow: 0 0 18px rgba(234,179,8,0.25), inset 0 0 12px rgba(234,179,8,0.05); }
-            50% { box-shadow: 0 0 30px rgba(234,179,8,0.5), inset 0 0 20px rgba(234,179,8,0.1); }
-          }
-          @keyframes pulse-text {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.6; }
-          }
-        `}</style>
-      </div>
-    );
-  };
-
-  // ==========================================
-  // CUSTOM PREMIUM COVER FLOW CARD BROWSING
-  // ==========================================
-  const renderCardCoverFlow = () => {
-    if (locationCards.length === 0) {
-      return (
-        <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem' }}>
-          <p>This container is currently empty. Go to Search or Scanner to add cards to this location!</p>
-        </div>
-      );
-    }
-
-    const activeIdx = Math.max(0, Math.min(activeCardIndex, locationCards.length - 1));
-    const activeCard = locationCards[activeIdx];
-
-    const handlePrevCard = () => {
-      setActiveCardIndex((prev) => (prev - 1 + locationCards.length) % locationCards.length);
-    };
-
-    const handleNextCard = () => {
-      setActiveCardIndex((prev) => (prev + 1) % locationCards.length);
-    };
-
-    const handleWheelCard = (e) => {
-      if (e.deltaX > 40 || e.deltaY > 40) {
-        handleNextCard();
-      } else if (e.deltaX < -40 || e.deltaY < -40) {
-        handlePrevCard();
-      }
-    };
-
-    return (
-      <div 
-        style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', alignItems: 'center', width: '100%', outline: 'none' }}
-        tabIndex="0"
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowLeft') handlePrevCard();
-          if (e.key === 'ArrowRight') handleNextCard();
-        }}
-      >
-        {/* Cover Flow track */}
-        <div 
-          className="coverflow-container"
-          onWheel={handleWheelCard}
-          onTouchStart={(e) => {
-            setCardCarouselTouchStart(e.touches[0].clientX);
-            setCarouselTouchStartIndex(activeCardIndex);
-          }}
-          onTouchMove={(e) => {
-            if (cardCarouselTouchStart === null) return;
-            const currentX = e.touches[0].clientX;
-            const diff = cardCarouselTouchStart - currentX;
-            const step = 25; // Dragging 25px shifts 1 card
-            const shift = Math.round(diff / step);
-            let targetIdx = carouselTouchStartIndex + shift;
-            if (targetIdx < 0) targetIdx = 0;
-            if (targetIdx >= locationCards.length) targetIdx = locationCards.length - 1;
-            setActiveCardIndex(targetIdx);
-          }}
-          onTouchEnd={() => {
-            setCardCarouselTouchStart(null);
-          }}
-          style={{ height: '240px', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' }}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            const cardId = e.dataTransfer.getData('card_entry_id');
-            const defaultRow = activeCard ? (activeCard.sub_location_1 || 'Row 1') : 'Row 1';
-            handleDropToBoxRow(cardId, defaultRow);
-          }}
-          onClick={() => {
-            if (activeMoveCard) {
-              const defaultRow = activeCard ? (activeCard.sub_location_1 || 'Row 1') : 'Row 1';
-              handlePlaceCardInBoxRow(activeMoveCard.entry_id, defaultRow);
-            }
-          }}
-        >
-          <button type="button" className="coverflow-nav-btn left-btn" onClick={(e) => { e.stopPropagation(); handlePrevCard(); }} style={{ zIndex: 10 }}><ChevronLeft size={18} /></button>
-          
-          <div className="coverflow-track" style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', perspective: '1000px', transformStyle: 'preserve-3d' }}>
-            {locationCards.map((card, idx) => {
-              const isActive = idx === activeIdx;
-              let offset = idx - activeIdx;
-              const absOffset = Math.abs(offset);
-              
-              if (absOffset > 3) return null;
-
-              const rotateY = offset * -28; 
-              const translateZ = absOffset * -90; 
-              const translateX = offset * 90; 
-              const scale = isActive ? 1.0 : 0.75;
-              const opacity = absOffset > 2 ? 0.2 : 1 - (absOffset * 0.35);
-
-              const isSelected = activeMoveCard?.entry_id === card.entry_id;
-              const rarityStyle = getCardRarityBorder(card.rarity);
-
-              return (
-                <div
-                  key={card.entry_id}
-                  className={`coverflow-card tilt-card-wrapper ${isSelected ? 'card-move-selecting' : ''}`}
-                  onMouseMove={handleCardMouseMove}
-                  onMouseLeave={handleCardMouseLeave}
-                  style={{
-                    position: 'absolute',
-                    width: '120px',
-                    aspectRatio: 0.718,
-                    transform: `translateX(${translateX}px) translateZ(${translateZ}px) rotateY(${rotateY}deg) scale(${scale})`,
-                    opacity: opacity,
-                    transition: 'all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1)',
-                    pointerEvents: absOffset > 1.2 ? 'none' : 'auto',
-                    cursor: 'pointer',
-                    boxShadow: isSelected ? '0 0 12px var(--accent-yellow)' : isActive ? `0 10px 25px rgba(0,0,0,0.5), ${rarityStyle.boxShadow}` : rarityStyle.boxShadow,
-                    borderRadius: '8px',
-                    overflow: 'hidden',
-                    border: isSelected ? '2.5px solid var(--accent-yellow)' : rarityStyle.border
-                  }}
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    if (isActive) {
-                      if (activeMoveCard) {
-                        // Swap box coordinates directly
-                        try {
-                          const res1 = await fetch(`/api/collection/${activeMoveCard.entry_id}`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              location_id: selectedLoc.id,
-                              sub_location_1: card.sub_location_1,
-                              sub_location_2: card.sub_location_2,
-                              position: card.position || 0,
-                              quantity: activeMoveCard.quantity,
-                              condition: activeMoveCard.condition,
-                              printing: activeMoveCard.printing,
-                              language: activeMoveCard.language,
-                              purchase_price: activeMoveCard.purchase_price || 0,
-                              is_trade: activeMoveCard.is_trade || 0,
-                              list_type: activeMoveCard.list_type || 'collection'
-                            })
-                          });
-                          const res2 = await fetch(`/api/collection/${card.entry_id}`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              location_id: activeMoveCard.location_id || null,
-                              sub_location_1: activeMoveCard.sub_location_1 || '',
-                              sub_location_2: activeMoveCard.sub_location_2 || '',
-                              position: activeMoveCard.position || 0,
-                              quantity: card.quantity,
-                              condition: card.condition,
-                              printing: card.printing,
-                              language: card.language,
-                              purchase_price: card.purchase_price || 0,
-                              is_trade: card.is_trade || 0,
-                              list_type: card.list_type || 'collection'
-                            })
-                          });
-                          if (res1.ok && res2.ok) {
-                            showToast(`Swapped positions!`);
-                            setActiveMoveCard(null);
-                            fetchLocations();
-                            fetchLocationCards(selectedLoc.id);
-                            onUpdate();
-                          } else {
-                            showToast('Failed to swap positions.');
-                          }
-                        } catch (err) {
-                          console.error(err);
-                          showToast('Error swapping positions.');
-                        }
-                      } else {
-                        setActiveMoveCard(card);
-                        showToast(`Selected ${card.name} for relocation. Tap a destination slot, row, or Unsorted to place.`);
-                      }
-                    } else {
-                      setActiveCardIndex(idx);
-                    }
-                  }}
-                >
-                  <img src={card.image_url} alt={card.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  {/* Shiny holo overlay */}
-                  {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '8px' }} />}
-                  {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '8px' }} />}
-                  {/* Finish badge (shared style) */}
-                  <PrintingBadge printing={card.printing} />
-                  <div style={{
-                    position: 'absolute',
-                    bottom: 0, left: 0, right: 0,
-                    background: 'rgba(0,0,0,0.85)',
-                    padding: '4px',
-                    fontSize: '0.65rem',
-                    textAlign: 'center',
-                    color: '#fff',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    fontWeight: 600
-                  }}>
-                    {card.quantity > 1 ? `x${card.quantity}` : card.name}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <button type="button" className="coverflow-nav-btn right-btn" onClick={(e) => { e.stopPropagation(); handleNextCard(); }} style={{ zIndex: 10 }}><ChevronRight size={18} /></button>
-        </div>
-
-        {/* Focused Card Details & Compartment Settings */}
-        {activeCard && (
-          <div className="glass-panel" style={{ width: '100%', maxWidth: '480px', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', border: '1px solid var(--border-glass)' }}>
-            <div style={{ display: 'flex', gap: '0.85rem', alignItems: 'center' }}>
-              <img src={activeCard.image_url} alt={activeCard.name} style={{ width: '60px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 4px 8px rgba(0,0,0,0.3)' }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <h4 style={{ color: '#fff', fontSize: '0.9rem', margin: 0, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {getCardDisplayName(activeCard.name, activeCard.language)}
-                </h4>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                  {activeCard.set_name} • #{activeCard.number} ({activeCard.rarity})
-                </div>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                  Printing: {activeCard.printing} • Condition: {activeCard.condition}
-                </div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.9rem', color: 'var(--accent-yellow)', fontWeight: 800 }}>
-                  ${(activeCard.price_trend || 0).toFixed(2)}
-                </div>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                  Spent: ${((activeCard.purchase_price || 0) * activeCard.quantity).toFixed(2)}
-                </div>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.75rem', flexWrap: 'wrap' }}>
-              {/* Quantity Adjuster */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Qty:</span>
-                <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.3)', borderRadius: '4px', border: '1px solid var(--border-glass)', padding: '2px' }}>
-                  <button 
-                    type="button"
-                    className="btn btn-secondary btn-icon-only"
-                    onClick={async () => {
-                      if (activeCard.quantity <= 1) return;
-                      const res = await fetch(`/api/collection/${activeCard.entry_id}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ...activeCard, quantity: activeCard.quantity - 1 })
-                      });
-                      if (res.ok) {
-                        fetchLocationCards(activeLocationId);
-                        onUpdate();
-                      }
-                    }}
-                    style={{ width: '20px', height: '20px', padding: 0 }}
-                  >
-                    -
-                  </button>
-                  <span style={{ width: '24px', textAlign: 'center', fontSize: '0.75rem', fontWeight: 700, color: '#fff' }}>{activeCard.quantity}</span>
-                  <button 
-                    type="button"
-                    className="btn btn-secondary btn-icon-only"
-                    onClick={async () => {
-                      const res = await fetch(`/api/collection/${activeCard.entry_id}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ...activeCard, quantity: activeCard.quantity + 1 })
-                      });
-                      if (res.ok) {
-                        fetchLocationCards(activeLocationId);
-                        onUpdate();
-                      }
-                    }}
-                    style={{ width: '20px', height: '20px', padding: 0 }}
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-
-              {/* Row/Position display for boxes (read-only) */}
-              {(selectedLoc?.type === 'Box' || selectedLoc?.type === 'Toploader Box' || selectedLoc?.type === 'Graded Slab Box' || selectedLoc?.type === 'Display Shelf / Stand') && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flex: 1 }}>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Location:</span>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#fff', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border-glass)', borderRadius: '4px', padding: '2px 8px' }}>
-                    {activeCard.sub_location_1 || '—'}{activeCard.sub_location_2 ? `, Pos ${activeCard.sub_location_2}` : ''}
-                  </span>
-                </div>
-              )}
-
-              {/* Quick Actions */}
-              <div style={{ display: 'flex', gap: '0.4rem' }}>
-                <button
-                  type="button"
-                  className={`btn ${activeMoveCard?.entry_id === activeCard.entry_id ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => {
-                    if (activeMoveCard?.entry_id === activeCard.entry_id) {
-                      setActiveMoveCard(null);
-                    } else {
-                      setActiveMoveCard(activeCard);
-                      showToast(`Selected ${activeCard.name} for relocation.`);
-                    }
-                  }}
-                  style={{ fontSize: '0.7rem', padding: '0.3rem 0.6rem', height: '26px' }}
-                >
-                  {activeMoveCard?.entry_id === activeCard.entry_id ? 'Moving...' : 'Move'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-danger"
-                  onClick={async () => {
-                    if (window.confirm(`Unsort ${activeCard.name} (move back to Unsorted)?`)) {
-                      await moveCardToLocation(activeCard.entry_id, null, '', '');
-                      showToast(`Unsorted ${activeCard.name}`);
-                      fetchLocationCards(activeLocationId);
-                      onUpdate();
-                    }
-                  }}
-                  style={{ fontSize: '0.7rem', padding: '0.3rem 0.6rem', height: '26px' }}
-                >
-                  Unsort
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  const fetchLocations = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch('/api/locations');
-      if (response.ok) {
-        const data = await response.json();
-        setLocations(data);
-        if (data.length > 0 && !activeLocationId) {
-          // Auto select first location
-          setActiveLocationId(data[0].id);
-        }
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Error loading physical storage locations.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchLocationCards = async (locId) => {
-    try {
-      const response = await fetch('/api/collection');
-      if (response.ok) {
-        const allCards = await response.json();
-        setAllCards(allCards);
-
-        // Unsorted cards: location_id is null or empty
-        const unsorted = allCards.filter(c => !c.location_id);
-        setUnsortedCards(unsorted);
-
-        if (!locId) {
-          setLocationCards([]);
-          return;
-        }
-
-        // Filter by selected location id
-        const filtered = allCards.filter(c => c.location_id === locId);
-        
-        // Sort cards by position float value
-        filtered.sort((a, b) => (a.position || 0) - (b.position || 0));
-        
-        setLocationCards(filtered);
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Error loading cards.');
-    }
-  };
-
-  const handleCardMouseMove = (e) => {
-    const card = e.currentTarget;
-    const rect = card.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const xc = rect.width / 2;
-    const yc = rect.height / 2;
-    const angleX = (yc - y) / 10;
-    const angleY = (x - xc) / 10;
-    card.style.transform = `perspective(600px) rotateX(${angleX}deg) rotateY(${angleY}deg) scale(1.05)`;
-    
-    const shine = card.querySelector('.holo-shine-overlay, .reverse-holo-shine-overlay');
-    if (shine) {
-      shine.style.backgroundPosition = `${(x / rect.width) * 100}% ${(y / rect.height) * 100}%`;
-    }
-  };
-
-  const handleCardMouseLeave = (e) => {
-    const card = e.currentTarget;
-    card.style.transform = 'perspective(600px) rotateX(0deg) rotateY(0deg) scale(1)';
-    const shine = card.querySelector('.holo-shine-overlay, .reverse-holo-shine-overlay');
-    if (shine) {
-      shine.style.backgroundPosition = '50% 50%';
-    }
-  };
-
-  // Double page flip helper
-  const handleTurnPage = (newPage) => {
-    setIsFlipping(true);
-    setSelectedPage(newPage);
-    setTimeout(() => {
-      setIsFlipping(false);
-    }, 350);
-  };
-
-  // Touch Swipe handlers for swiping between binder pages like a book
-  const handleTouchStart = (e) => {
-    setTouchStart(e.targetTouches[0].clientX);
-  };
-  const handleTouchMove = (e) => {
-    setTouchEnd(e.targetTouches[0].clientX);
-  };
-  const handleTouchEnd = () => {
-    if (!touchStart || !touchEnd) return;
-    const distance = touchStart - touchEnd;
-    const maxPages = selectedLoc?.max_pages || 30;
-
-    // Narrow viewports show one page at a time (see isNarrowViewport), so a
-    // swipe steps by a single page instead of the two-page spread below.
-    if (isNarrowViewport) {
-      if (distance > 60 && selectedPage < maxPages) handleTurnPage(selectedPage + 1);
-      else if (distance < -60 && selectedPage > 1) handleTurnPage(selectedPage - 1);
-      setTouchStart(null);
-      setTouchEnd(null);
-      return;
-    }
-
-    const isFirstPageSolo = selectedLoc ? !!parseAdvancedConfig(selectedLoc).firstPageSolo : false;
-
-    let leftPage;
-    if (isFirstPageSolo) {
-      leftPage = selectedPage === 1 ? null : 2 * Math.floor(selectedPage / 2);
-    } else {
-      leftPage = 2 * Math.floor((selectedPage - 1) / 2) + 1;
-    }
-
-    if (distance > 60) {
-      // Swipe Left -> next page pair
-      if (isFirstPageSolo) {
-        if (leftPage === null) {
-          if (2 <= maxPages) handleTurnPage(2);
-        } else if (leftPage + 2 <= maxPages) {
-          handleTurnPage(leftPage + 2);
-        }
-      } else {
-        if (leftPage + 2 <= maxPages) handleTurnPage(leftPage + 2);
-      }
-    } else if (distance < -60) {
-      // Swipe Right -> prev page pair
-      if (isFirstPageSolo) {
-        if (leftPage === 2) {
-          handleTurnPage(1);
-        } else if (leftPage !== null && leftPage > 2) {
-          handleTurnPage(leftPage - 2);
-        }
-      } else {
-        if (leftPage > 1) handleTurnPage(leftPage - 2);
-      }
-    }
-    setTouchStart(null);
-    setTouchEnd(null);
-  };
-
-  // Drag and Drop handlers for relocating cards in the grid
-  const handleDragStart = (e, card) => {
-    e.dataTransfer.setData('card_entry_id', card.entry_id.toString());
-  };
-
-  const moveCardToLocation = async (cardEntryId, locationId, sub1, sub2, position) => {
-    try {
-      const targetCard = unsortedCards.find(c => c.entry_id == cardEntryId) || 
-                         locationCards.find(c => c.entry_id == cardEntryId);
-      if (!targetCard) return;
-
-      const body = {
-        location_id: locationId,
-        sub_location_1: sub1,
-        sub_location_2: sub2,
-        quantity: targetCard.quantity,
-        condition: targetCard.condition,
-        printing: targetCard.printing,
-        language: targetCard.language,
-        purchase_price: targetCard.purchase_price || 0,
-        is_trade: targetCard.is_trade || 0,
-        list_type: targetCard.list_type || 'collection'
-      };
-
-      if (position !== undefined) {
-        body.position = position;
-      }
-
-      const response = await fetch(`/api/collection/${cardEntryId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-
-      if (response.ok) {
-        showToast(`Moved ${targetCard.name} successfully!`);
-        fetchLocations();
-        fetchLocationCards(activeLocationId);
-        onUpdate();
-      } else {
-        showToast('Failed to relocate card.');
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Error moving card.');
-    }
-  };
-
-  // extraCards lets this also pull cards in from the Unsorted pile (see
-  // "Sort Unsorted Into This Container" in Assistant Mode) instead of only
-  // ever re-sorting cards already placed in the container.
-  const autoSortContainerCards = async (orderMode, extraCards = []) => {
-    if (locationCards.length === 0 && extraCards.length === 0) return;
-
-    const totalCount = locationCards.length + extraCards.length;
-    const verb = extraCards.length > 0 ? `sort ${totalCount} cards (including ${extraCards.length} from Unsorted) into` : 'auto-sort all cards in';
-    if (!window.confirm(`Are you sure you want to ${verb} this container by "${orderMode}"? This will overwrite their current page/row coordinates.`)) {
-      return;
-    }
-
-    try {
-      showToast('Sorting container...');
-      const sorted = sortCardsByOrder([...locationCards, ...extraCards], orderMode, selectedLoc?.foil_sorting);
-
-      const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
-      const maxPages = selectedLoc.max_pages || 30;
-
-      const maxRows = selectedLoc.max_rows || 3;
-      const advConfig = parseAdvancedConfig(selectedLoc);
-      const rowCapacity = advConfig.rowCapacity || 40;
-      const maxBoxCapacity = maxRows * rowCapacity;
-      const isBinderType = selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder';
-
-      let excessCount = 0;
-
-      const updates = sorted.map((card, index) => {
-        let sub1 = card.sub_location_1;
-        let sub2 = card.sub_location_2;
-        let locId = selectedLoc.id;
-
-        if (isBinderType) {
-          // Same category-anchored placement as the Assistant Mode one-by-one
-          // guide (getCategoryAnchor) — otherwise bulk sort and per-card
-          // recommendations would place the same card in different slots.
-          const anchor = getCategoryAnchor(orderMode, card, sorted, advConfig, maxPages);
-          let page, slot;
-          if (anchor) {
-            const localIndex = anchor.sameCategory.findIndex(c => c.entry_id === card.entry_id);
-            page = anchor.startPage + Math.floor(localIndex / pocketsCount);
-            slot = (localIndex % pocketsCount) + 1;
-          } else {
-            page = Math.floor(index / pocketsCount) + 1;
-            slot = (index % pocketsCount) + 1;
-          }
-          if (page <= maxPages) {
-            sub1 = `Page ${page}`;
-            sub2 = `Slot ${slot}`;
-          } else {
-            locId = null; // Unsort excess
-            sub1 = '';
-            sub2 = '';
-            excessCount++;
-          }
-        } else if (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand') {
-          if (index < maxBoxCapacity) {
-            const rowNum = Math.floor(index / rowCapacity) + 1;
-            const seq = (index % rowCapacity) + 1;
-            sub1 = `Row ${rowNum}`;
-            sub2 = String(seq);
-          } else {
-            locId = null; // Unsort excess
-            sub1 = '';
-            sub2 = '';
-            excessCount++;
-          }
-        } else {
-          sub1 = 'Compartment 1';
-          sub2 = `Slot ${index + 1}`;
-        }
-
-        return {
-          entry_id: card.entry_id,
-          location_id: locId,
-          sub_location_1: sub1,
-          sub_location_2: sub2,
-          position: locId ? (index + 1) * 1000 : 0,
-          quantity: card.quantity,
-          condition: card.condition,
-          printing: card.printing,
-          language: card.language,
-          purchase_price: card.purchase_price || 0,
-          is_trade: card.is_trade || 0,
-          list_type: card.list_type || 'collection'
-        };
-      });
-
-      await Promise.all(updates.map(up => 
-        fetch(`/api/collection/${up.entry_id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(up)
-        })
-      ));
-
-      if (excessCount > 0) {
-        showToast(`Auto-sorted! ${excessCount} excess cards moved to Unsorted Pile.`);
-      } else if (extraCards.length > 0) {
-        showToast(`Sorted ${extraCards.length} unsorted card(s) into the container!`);
-      } else {
-        showToast('Container auto-sorted successfully!');
-      }
-
-      fetchLocations();
-      fetchLocationCards(selectedLoc.id);
-      onUpdate();
-    } catch (err) {
-      console.error(err);
-      showToast('Error auto-sorting container.');
-    }
-  };
-
-  // Lets Assistant Mode change a container's sort scheme (and foil order)
-  // without leaving the panel to open Edit Container Settings. Backend PUT
-  // uses COALESCE, so sending only one field leaves everything else untouched.
-  const handleQuickSetContainerField = async (field, value) => {
-    if (!selectedLoc) return;
-    try {
-      const response = await fetch(`/api/locations/${selectedLoc.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [field]: value })
-      });
-      if (response.ok) {
-        fetchLocations();
-      } else {
-        showToast(`Failed to update ${field.replace('_', ' ')}.`);
-      }
-    } catch (err) {
-      console.error(err);
-      showToast(`Error updating ${field.replace('_', ' ')}.`);
-    }
-  };
-  const handleQuickSetSortOrder = (newOrder) => handleQuickSetContainerField('sort_order', newOrder);
-  const handleQuickSetFoilSorting = (newFoilOrder) => handleQuickSetContainerField('foil_sorting', newFoilOrder);
-
-  const handleDrop = async (e, targetSlot, targetPageNum = selectedPage) => {
-    e.preventDefault();
-    const entryId = parseInt(e.dataTransfer.getData('card_entry_id'), 10);
-    if (!entryId) return;
-    const sourceCard = locationCards.find(c => c.entry_id === entryId) || 
-                       unsortedCards.find(c => c.entry_id === entryId);
-    if (!sourceCard) return;
-
-    const targetCard = locationCards.find(c => getPageNum(c.sub_location_1) === targetPageNum && getSlotNum(c.sub_location_2) === targetSlot);
-
-    if (targetCard) {
-      try {
-        const res1 = await fetch(`/api/collection/${sourceCard.entry_id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            location_id: activeLocationId,
-            sub_location_1: `Page ${targetPageNum}`,
-            sub_location_2: `Slot ${targetSlot}`,
-            position: targetCard.position || 0,
-            quantity: sourceCard.quantity,
-            condition: sourceCard.condition,
-            printing: sourceCard.printing,
-            language: sourceCard.language,
-            purchase_price: sourceCard.purchase_price || 0,
-            list_type: sourceCard.list_type || 'collection',
-            is_trade: sourceCard.is_trade || 0
-          })
-        });
-
-        const res2 = await fetch(`/api/collection/${targetCard.entry_id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            location_id: sourceCard.location_id ? sourceCard.location_id : null,
-            sub_location_1: sourceCard.sub_location_1 ? sourceCard.sub_location_1 : null,
-            sub_location_2: sourceCard.sub_location_2 ? sourceCard.sub_location_2 : null,
-            position: sourceCard.position || 0,
-            quantity: targetCard.quantity,
-            condition: targetCard.condition,
-            printing: targetCard.printing,
-            language: targetCard.language,
-            purchase_price: targetCard.purchase_price || 0,
-            list_type: targetCard.list_type || 'collection',
-            is_trade: targetCard.is_trade || 0
-          })
-        });
-
-        if (res1.ok && res2.ok) {
-          showToast(`Relocated cards successfully!`);
-          fetchLocations();
-          fetchLocationCards(activeLocationId);
-          onUpdate();
-        } else {
-          showToast('Failed to swap cards.');
-        }
-      } catch (err) {
-        console.error(err);
-        showToast('Error swapping cards.');
-      }
-    } else {
-      try {
-        const pocketsCount = selectedLoc?.page_style === '2x2' ? 4 : selectedLoc?.page_style === '3x4' ? 12 : 9;
-        const targetSlotIndex = (targetPageNum - 1) * pocketsCount + (targetSlot - 1);
-        const otherCards = locationCards.filter(c => c.entry_id !== sourceCard.entry_id);
-
-        let prevCard = null;
-        let nextCard = null;
-
-        otherCards.forEach(c => {
-          const p = getPageNum(c.sub_location_1);
-          const s = getSlotNum(c.sub_location_2);
-          const idx = (p - 1) * pocketsCount + (s - 1);
-          
-          if (idx < targetSlotIndex) {
-            if (!prevCard || idx > (getPageNum(prevCard.sub_location_1) - 1) * pocketsCount + (getSlotNum(prevCard.sub_location_2) - 1)) {
-              prevCard = c;
-            }
-          }
-          if (idx > targetSlotIndex) {
-            if (!nextCard || idx < (getPageNum(nextCard.sub_location_1) - 1) * pocketsCount + (getSlotNum(nextCard.sub_location_2) - 1)) {
-              nextCard = c;
-            }
-          }
-        });
-
-        let pos = 1000;
-        if (prevCard && nextCard) {
-          pos = (prevCard.position + nextCard.position) / 2;
-        } else if (prevCard) {
-          pos = prevCard.position + 1000;
-        } else if (nextCard) {
-          pos = nextCard.position / 2;
-        }
-
-        const response = await fetch(`/api/collection/${sourceCard.entry_id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            location_id: activeLocationId,
-            sub_location_1: `Page ${targetPageNum}`,
-            sub_location_2: `Slot ${targetSlot}`,
-            position: pos,
-            quantity: sourceCard.quantity,
-            condition: sourceCard.condition,
-            printing: sourceCard.printing,
-            language: sourceCard.language,
-            purchase_price: sourceCard.purchase_price || 0,
-            list_type: sourceCard.list_type || 'collection',
-            is_trade: sourceCard.is_trade || 0
-          })
-        });
-        if (response.ok) {
-          showToast(`Moved ${sourceCard.name} to Page ${targetPageNum} Slot ${targetSlot}`);
-          fetchLocations();
-          fetchLocationCards(activeLocationId);
-          onUpdate();
-        } else {
-          showToast('Failed to move card.');
-        }
-      } catch (err) {
-        console.error(err);
-        showToast('Error moving card.');
-      }
-    }
-  };
-
-  const handleDropToBoxRow = async (cardEntryId, rowName) => {
-    const entryId = parseInt(cardEntryId, 10);
-    if (!entryId) return;
-
-    const sourceCard = locationCards.find(c => c.entry_id === entryId) || 
-                       unsortedCards.find(c => c.entry_id === entryId);
-    if (!sourceCard) return;
-
-    const existingInRow = locationCards.filter(c => c.sub_location_1 === rowName);
-    const targetSeq = existingInRow.length + 1;
-    
-    const lastCard = existingInRow[existingInRow.length - 1];
-    const newPos = lastCard ? lastCard.position + 1000 : 1000;
-    
-    await moveCardToLocation(entryId, selectedLoc.id, rowName, String(targetSeq), newPos);
-  };
-
-
-
-  const handleQuickSearch = async (e) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-
-    try {
-      setSearching(true);
-      const response = await fetch(`/api/search?name=${encodeURIComponent(searchQuery)}`);
-      if (response.ok) {
-        const data = await response.json();
-        setSearchResults(data);
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Search failed.');
-    } finally {
-      setSearching(false);
-    }
-  };
-
-  const handleQuickAddSubmit = async (e) => {
-    e.preventDefault();
-    if (!selectedCard) return;
-
-    try {
-      const response = await fetch('/api/collection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          card_id: selectedCard.id,
-          quantity: parseInt(quickQty, 10),
-          condition: quickCond,
-          printing: quickPrint,
-          language: quickLang,
-          purchase_price: parseFloat(quickPrice) || 0,
-          location_id: activeLocationId,
-          sub_location_1: `Page ${selectedPage}`,
-          sub_location_2: `Slot ${targetSlot}`
-        })
-      });
-
-      if (response.ok) {
-        showToast(`Added ${selectedCard.name} to Page ${selectedPage}, Slot ${targetSlot}`);
-        setShowQuickAdd(false);
-        setSelectedCard(null);
-        setSearchQuery('');
-        setSearchResults([]);
-        // Refresh cards
-        fetchLocationCards(activeLocationId);
-        onUpdate();
-      } else {
-        showToast('Failed to add card.');
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Error saving card.');
-    }
-  };
+  const selectedLoc = locations.find(l => l.id === activeLocationId);
+  const isBinderType = selectedLoc?.type === 'Binder' || selectedLoc?.type === 'Toploader Binder';
+  const unsortedCards = useMemo(() => {
+    let cards = allCards.filter(c => !c.location_id && (
+      c.name.toLowerCase().includes(unsortedSearch.toLowerCase()) ||
+      (c.set_name || '').toLowerCase().includes(unsortedSearch.toLowerCase())
+    ));
+    return sortCardsByOrder([...cards], unsortedSort, selectedLoc?.foil_sorting);
+  }, [allCards, unsortedSearch, unsortedSort, selectedLoc]);
+
+  const availableSetNames = useMemo(() =>
+    Array.from(new Set(allCards.map(c => c.set_name).filter(Boolean))).sort(),
+  [allCards]);
+
+  const cardsByCompartment = useMemo(() => {
+    const map = new Map();
+    allCards.forEach(c => {
+      if (!c.compartment_id) return;
+      if (!map.has(c.compartment_id)) map.set(c.compartment_id, []);
+      map.get(c.compartment_id).push(c);
+    });
+    return map;
+  }, [allCards]);
 
   const handleCreateLocation = async (e) => {
-    if (e && e.preventDefault) e.preventDefault();
-    if (!name) return;
-
-    const finalDescription = Object.keys(createAdvancedConfig).length > 0 
-      ? JSON.stringify(createAdvancedConfig) 
-      : description;
-
+    e.preventDefault();
+    if (!newName.trim()) return;
     try {
-      const response = await fetch('/api/locations', {
+      const res = await fetch('/api/locations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          name, 
-          type, 
-          description: finalDescription,
-          sort_order: sortOrder,
-          max_pages: (type === 'Binder' || type === 'Toploader Binder') ? parseInt(maxPages, 10) : 30,
-          page_style: (type === 'Binder' || type === 'Toploader Binder') ? pageStyle : '3x3',
-          max_rows: (type === 'Box' || type === 'Toploader Box' || type === 'Graded Slab Box' || type === 'Display Shelf / Stand') ? parseInt(maxRows, 10) : 3,
-          max_capacity: (type !== 'Binder' && type !== 'Toploader Binder' && type !== 'Box' && type !== 'Toploader Box' && type !== 'Graded Slab Box' && type !== 'Display Shelf / Stand') ? parseInt(maxCapacity, 10) : 1000,
-          foil_sorting: foilSorting
-        })
+        body: JSON.stringify({ name: newName.trim(), type: newType })
       });
-
-      if (response.ok) {
-        const data = await response.json();
-        showToast('Storage container created successfully!');
-        setName('');
-        setDescription('');
-        setCreateAdvancedConfig({});
-        setShowCreateAdvanced(false);
-        setIsAdding(false);
-        onUpdate();
+      const data = await res.json();
+      if (res.ok) {
+        showToast('Storage container created!');
+        setNewName('');
+        setShowCreate(false);
+        await fetchLocations();
         setActiveLocationId(data.id);
+        onUpdate();
       } else {
-        showToast('Failed to create storage container.');
+        showToast(data.error || 'Failed to create container.');
       }
     } catch (err) {
       console.error(err);
-      showToast('Error connecting to backend.');
+      showToast('Error creating container.');
     }
   };
 
-  const handleDeleteLocation = async (locId, locName) => {
-    if (!window.confirm(`Are you sure you want to delete "${locName}"? Any cards stored inside will be marked as "Unassigned" and not deleted.`)) {
-      return;
-    }
-
+  const handleDeleteLocation = async (locId, name) => {
+    if (!window.confirm(`Delete "${name}"? Stored cards will move to Unsorted.`)) return;
     try {
-      const response = await fetch(`/api/locations/${locId}`, {
-        method: 'DELETE'
-      });
-
-      if (response.ok) {
-        showToast(`Deleted storage container "${locName}".`);
-        setIsEditing(false);
+      const res = await fetch(`/api/locations/${locId}`, { method: 'DELETE' });
+      if (res.ok) {
+        showToast(`Deleted "${name}".`);
+        if (activeLocationId === locId) setActiveLocationId(null);
+        await refreshAll();
         onUpdate();
-        fetchLocations();
-        if (activeLocationId === locId) {
-          const remaining = locations.filter(l => l.id !== locId);
-          setActiveLocationId(remaining.length > 0 ? remaining[0].id : null);
-        }
       } else {
-        const data = await response.json().catch(() => ({}));
-        showToast(data.error || 'Failed to delete container.');
+        showToast('Failed to delete container.');
       }
     } catch (err) {
       console.error(err);
@@ -1819,1011 +429,238 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     }
   };
 
-  const handleUpdateLocation = async () => {
-    if (!editName) return;
-
-    // Merge existing config with new box/binder-specific fields
-    const existingConfig = parseAdvancedConfig(selectedLoc);
-    const isBoxType = (editType === 'Box' || editType === 'Toploader Box' || editType === 'Graded Slab Box' || editType === 'Display Shelf / Stand');
-    const isBinderType = (editType === 'Binder' || editType === 'Toploader Binder');
-    let newDescription = selectedLoc.description || '';
-    if (isBoxType || isBinderType) {
-      const assignedSetsArray = editAssignedSets.trim() ? editAssignedSets.split('\n').map(s => s.trim()).filter(Boolean) : [];
-      const updatedConfig = {
-        ...existingConfig,
-        ...(isBoxType ? { rowCapacity: editRowCapacity || 40 } : {}),
-        assignedSets: assignedSetsArray
-      };
-      newDescription = JSON.stringify(updatedConfig);
-    }
-
+  const handleUpdateLocationField = async (field, value) => {
+    if (!selectedLoc) return;
     try {
-      const response = await fetch(`/api/locations/${selectedLoc.id}`, {
+      const res = await fetch(`/api/locations/${selectedLoc.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: editName,
-          type: editType,
-          description: newDescription,
-          sort_order: editSortOrder,
-          max_pages: (editType === 'Binder' || editType === 'Toploader Binder') ? parseInt(editMaxPages, 10) : 30,
-          page_style: (editType === 'Binder' || editType === 'Toploader Binder') ? editPageStyle : '3x3',
-          max_rows: isBoxType ? (parseInt(editMaxRowsStr, 10) || editMaxRows || 3) : 3,
-          max_capacity: (editType !== 'Binder' && editType !== 'Toploader Binder' && !isBoxType) ? parseInt(editMaxCapacity, 10) : 1000,
-          foil_sorting: editFoilSorting
-        })
+        body: JSON.stringify({ [field]: value })
       });
-
-      if (response.ok) {
-        showToast('Storage container settings updated!');
-        setIsEditing(false);
-        fetchLocations();
-        if (editSortOrder !== 'custom' && editSortOrder !== selectedLoc.sort_order) {
-          await autoSortContainerCards(editSortOrder);
-        }
+      if (res.ok) {
+        showToast('Container updated.');
+        await fetchLocations();
       } else {
-        const data = await response.json().catch(() => ({}));
-        showToast(data.error || 'Failed to update storage container.');
+        showToast('Failed to update container.');
       }
     } catch (err) {
       console.error(err);
-      showToast('Error updating storage container.');
+      showToast('Error updating container.');
     }
   };
 
-  // Default anchors matching what the Advanced Sorting Customizations panel
-  // pre-fills, so a container that never touched Advanced Settings still
-  // gets the same category-anchored placement as one that did.
-  const DEFAULT_ENERGY_RANGES = { 'Grass': 1, 'Fire': 4, 'Water': 7, 'Lightning': 10, 'Psychic': 13, 'Fighting': 16, 'Darkness': 19, 'Metal': 22, 'Dragon': 25, 'Colorless': 27, 'Trainers': 29 };
-  const DEFAULT_ALPHABET_GROUPS = ["A-C", "D-F", "G-I", "J-L", "M-O", "P-R", "S-U", "V-Z"];
+  const handleAddCompartment = async () => {
+    if (!selectedLoc) return;
+    try {
+      const res = await fetch(`/api/locations/${selectedLoc.id}/compartments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      if (res.ok) { showToast('Compartment added.'); await Promise.all([fetchCompartments(selectedLoc.id), fetchLocations()]); }
+      else showToast('Failed to add compartment.');
+    } catch (err) { console.error(err); showToast('Error adding compartment.'); }
+  };
 
-  // For sort schemes with a category concept (energy type, alphabet bucket,
-  // price tier), returns which category `card` falls into among `sortedCards`
-  // (already ordered by sortCardsByOrder) plus that category's start page —
-  // so cards get anchored to the page range configured in Advanced Sorting
-  // Customizations instead of a flat sequential index. Returns null for
-  // schemes with no category concept (set/number, scanned date, etc.), which
-  // keep the plain sequential behavior below.
-  const getCategoryAnchor = (sortingPref, card, sortedCards, config, maxPages) => {
-    if (sortingPref === 'type-name') {
-      const ranges = config.energyRanges || DEFAULT_ENERGY_RANGES;
-      const primaryType = (c) => (c.types && c.types[0]) || 'Colorless';
-      const cardType = primaryType(card);
-      const startPage = ranges[cardType] || ranges['Colorless'] || 1;
-      const sameCategory = sortedCards.filter(c => primaryType(c) === cardType);
-      return { startPage, sameCategory };
-    }
-    if (sortingPref === 'name-asc') {
-      const groups = (config.alphabetGroups || DEFAULT_ALPHABET_GROUPS).filter(Boolean);
-      if (groups.length === 0) return null;
-      const firstLetter = (card.name || '?').trim().charAt(0).toUpperCase();
-      const groupIdx = groups.findIndex(g => {
-        const [lo, hi] = g.toUpperCase().split('-').map(s => s.trim());
-        if (!lo) return false;
-        return firstLetter >= lo && firstLetter <= (hi || lo);
+  const handleRemoveCompartment = async (compartmentId) => {
+    if (!window.confirm('Remove this compartment?')) return;
+    try {
+      const res = await fetch(`/api/compartments/${compartmentId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) { showToast('Compartment removed.'); await Promise.all([fetchCompartments(activeLocationId), fetchLocations()]); }
+      else showToast(data.error || 'Failed to remove compartment.');
+    } catch (err) { console.error(err); showToast('Error removing compartment.'); }
+  };
+
+  const handleRenameCompartment = async (compartmentId, label) => {
+    try {
+      await fetch(`/api/compartments/${compartmentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) });
+      await fetchCompartments(activeLocationId);
+    } catch (err) { console.error(err); showToast('Error renaming compartment.'); }
+  };
+
+  const handleSetCapacity = async (compartmentId, capacity) => {
+    try {
+      await fetch(`/api/compartments/${compartmentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ capacity }) });
+      await fetchCompartments(activeLocationId);
+    } catch (err) { console.error(err); showToast('Error resizing compartment.'); }
+  };
+
+  const handleToggleCompartmentSet = async (compartment, setName) => {
+    const current = compartment.assignedSets || [];
+    const next = current.includes(setName) ? current.filter(s => s !== setName) : [...current, setName];
+    try {
+      await fetch(`/api/compartments/${compartment.id}/sets`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sets: next }) });
+      await fetchCompartments(activeLocationId);
+    } catch (err) { console.error(err); showToast('Error updating set assignment.'); }
+  };
+
+  const handleAutoAssignSets = async () => {
+    if (!selectedLoc) return;
+    if (!window.confirm(`Auto-distribute your owned sets across "${selectedLoc.name}"'s compartments by size? This replaces current set assignments.`)) return;
+    try {
+      const res = await fetch(`/api/locations/${selectedLoc.id}/auto-assign-sets`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data.skipped.length ? `Assigned sets. Didn't fit: ${data.skipped.join(', ')}` : 'Sets auto-assigned.');
+        await fetchCompartments(selectedLoc.id);
+      } else {
+        showToast(data.error || 'Failed to auto-assign sets.');
+      }
+    } catch (err) { console.error(err); showToast('Error auto-assigning sets.'); }
+  };
+
+  const handleMoveCard = async (entryId, compartmentId) => {
+    try {
+      const res = await fetch(`/api/collection/${entryId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ compartment_id: compartmentId })
       });
-      const idx = groupIdx === -1 ? groups.length - 1 : groupIdx;
-      // Pages divided evenly across the configured buckets, in order.
-      const startPage = Math.floor((maxPages * idx) / groups.length) + 1;
-      const inGroup = (c) => {
-        const l = (c.name || '?').trim().charAt(0).toUpperCase();
-        const gi = groups.findIndex(g => {
-          const [lo, hi] = g.toUpperCase().split('-').map(s => s.trim());
-          if (!lo) return false;
-          return l >= lo && l <= (hi || lo);
-        });
-        return (gi === -1 ? groups.length - 1 : gi) === idx;
-      };
-      return { startPage, sameCategory: sortedCards.filter(inGroup) };
-    }
-    if (sortingPref === 'price-desc') {
-      const priceHigh = config.priceHigh !== undefined ? config.priceHigh : 20;
-      const priceMid = config.priceMid !== undefined ? config.priceMid : 5;
-      const tierOf = (c) => (c.price_trend || 0) >= priceHigh ? 0 : (c.price_trend || 0) >= priceMid ? 1 : 2;
-      const tier = tierOf(card);
-      // High-value tier gets the front third of the container, mid the
-      // middle third, low-value/bulk the rest — keeps expensive cards up
-      // front where they're easy to check on and protect.
-      const startPage = Math.floor((maxPages * tier) / 3) + 1;
-      return { startPage, sameCategory: sortedCards.filter(c => tierOf(c) === tier) };
-    }
-    return null;
+      if (res.ok) { showToast('Card moved.'); await refreshAll(); }
+      else showToast('Failed to move card.');
+    } catch (err) { console.error(err); showToast('Error moving card.'); }
   };
 
-  const findNextRecommendedSlot = (card) => {
-    if (!selectedLoc) return null;
-
-    const config = parseAdvancedConfig(selectedLoc);
-    const sortingPref = selectedLoc.sort_order || 'name-asc';
-
-
-    if (sortingPref !== 'custom') {
-      const combined = [...locationCards];
-      const exists = combined.some(c => c.entry_id === card.entry_id);
-      if (!exists) {
-        combined.push(card);
-      }
-
-      sortCardsByOrder(combined, sortingPref, selectedLoc?.foil_sorting);
-
-      const isBinderType = selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder';
-      const maxP = selectedLoc.max_pages || 30;
-      const anchor = isBinderType ? getCategoryAnchor(sortingPref, card, combined, config, maxP) : null;
-
-      if (anchor) {
-        const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
-        const localIndex = anchor.sameCategory.findIndex(c => c.entry_id === card.entry_id);
-        const page = anchor.startPage + Math.floor(localIndex / pocketsCount);
-        const slot = (localIndex % pocketsCount) + 1;
-        const globalIndex = combined.findIndex(c => c.entry_id === card.entry_id);
-        let targetPosition = 1000;
-        if (combined.length > 1) {
-          if (globalIndex === 0) targetPosition = combined[1].position / 2;
-          else if (globalIndex === combined.length - 1) targetPosition = combined[globalIndex - 1].position + 1000;
-          else targetPosition = (combined[globalIndex - 1].position + combined[globalIndex + 1].position) / 2;
-        }
-        if (page <= maxP) {
-          return {
-            sub1: `Page ${page}`,
-            sub2: `Slot ${slot}`,
-            label: `Page ${page}, Slot ${slot}`,
-            position: targetPosition
-          };
-        }
-      }
-
-      const targetIndex = combined.findIndex(c => c.entry_id === card.entry_id);
-      if (targetIndex !== -1) {
-        let targetPosition = 1000;
-        if (combined.length > 1) {
-          if (targetIndex === 0) {
-            targetPosition = combined[1].position / 2;
-          } else if (targetIndex === combined.length - 1) {
-            targetPosition = combined[targetIndex - 1].position + 1000;
-          } else {
-            targetPosition = (combined[targetIndex - 1].position + combined[targetIndex + 1].position) / 2;
-          }
-        }
-
-        if (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') {
-          const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
-          const maxP = selectedLoc.max_pages || 30;
-          const page = Math.floor(targetIndex / pocketsCount) + 1;
-          const slot = (targetIndex % pocketsCount) + 1;
-
-          if (page <= maxP) {
-            return {
-              sub1: `Page ${page}`,
-              sub2: `Slot ${slot}`,
-              label: `Page ${page}, Slot ${slot}`,
-              position: targetPosition
-            };
-          }
-        } else if (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand') {
-          const maxRows = selectedLoc.max_rows || 3;
-          const rowCapacity = config.rowCapacity || 40;
-          const rowNum = Math.floor(targetIndex / rowCapacity) + 1;
-          const seq = (targetIndex % rowCapacity) + 1;
-
-          if (rowNum <= maxRows) {
-            return {
-              sub1: `Row ${rowNum}`,
-              sub2: String(seq),
-              label: `Row ${rowNum}, Pos ${seq}`,
-              position: targetPosition
-            };
-          }
-        }
-      }
-    }
-
-    const occupied = new Set();
-    locationCards.forEach(c => {
-      if (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') {
-        const p = getPageNum(c.sub_location_1);
-        const s = getSlotNum(c.sub_location_2);
-        if (p > 0 && s > 0) occupied.add(`${p}-${s}`);
-      } else {
-        if (c.sub_location_1 && c.sub_location_2) {
-          occupied.add(`${c.sub_location_1}-${c.sub_location_2}`);
-        }
-      }
-    });
-
-    if (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') {
-      const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
-      const maxP = selectedLoc.max_pages || 30;
-      for (let p = 1; p <= maxP; p++) {
-        for (let s = 1; s <= pocketsCount; s++) {
-          if (!occupied.has(`${p}-${s}`)) {
-            return { sub1: `Page ${p}`, sub2: `Slot ${s}`, label: `Page ${p}, Slot ${s} (Next Empty)` };
-          }
-        }
-      }
-    } else if (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand') {
-      const maxRows = selectedLoc.max_rows || 3;
-      const rowCapacity = config.rowCapacity || 40;
-      for (let r = 1; r <= maxRows; r++) {
-        const rowName = `Row ${r}`;
-        const existingInRow = locationCards.filter(c => c.sub_location_1 === rowName);
-        if (existingInRow.length < rowCapacity) {
-          const nextSeq = existingInRow.length + 1;
-          return { sub1: rowName, sub2: String(nextSeq), label: `${rowName}, Pos ${nextSeq}` };
-        }
-      }
-    } else {
-      if (selectedLoc.type === 'Deck Box') {
-        const targetDeckSize = parseInt(config.targetDeckSize, 10) || 60;
-        const currentCount = locationCards.reduce((acc, c) => acc + c.quantity, 0);
-        if (currentCount >= targetDeckSize) {
-          return { sub1: 'Compartment 1', sub2: `Slot ${locationCards.length + 1}`, label: `Slot ${locationCards.length + 1} (DECK EXCEEDS TARGET)` };
-        }
-      }
-      const count = locationCards.length + 1;
-      return { sub1: 'Compartment 1', sub2: `Slot ${count}`, label: `Slot ${count}` };
-    }
-
-    return null;
+  const handleDeleteCard = async (entryId) => {
+    if (!window.confirm('Remove this card from your collection?')) return;
+    try {
+      const res = await fetch(`/api/collection/${entryId}`, { method: 'DELETE' });
+      if (res.ok) { showToast('Card removed.'); await refreshAll(); onUpdate(); }
+      else showToast('Failed to remove card.');
+    } catch (err) { console.error(err); showToast('Error removing card.'); }
   };
 
-  const selectedLoc = locations.find(l => l.id === activeLocationId);
-
-  // Memoized so the binder visualizer doesn't recompute virtual slot indices for
-  // the whole location on every render (e.g. while typing in an unrelated search box).
-  const binderPocketsCount = useMemo(() => {
-    if (!selectedLoc) return 9;
-    return selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
-  }, [selectedLoc?.page_style]);
-
-  const binderVirtualIndices = useMemo(() => {
-    const map = new Map();
-    let currentSlot = 0;
-    locationCards.forEach((card, i) => {
-      if (i === 0) {
-        const p = parseInt((card.sub_location_1 || '').replace(/\D/g, ''), 10) || 1;
-        const s = parseInt((card.sub_location_2 || '').replace(/\D/g, ''), 10) || 1;
-        currentSlot = Math.max(0, (p - 1) * binderPocketsCount + (s - 1));
-      } else {
-        const prev = locationCards[i - 1];
-        const diff = card.position - prev.position;
-        const gap = Math.max(0, Math.floor(diff / 1000) - 1);
-        currentSlot = currentSlot + 1 + gap;
-      }
-      map.set(card.entry_id, currentSlot);
-    });
-    return map;
-  }, [locationCards, binderPocketsCount]);
-
-  const getAssistantQueue = () => {
-    let queue = [...unsortedCards].filter(c => {
-      const matchesSearch = c.name.toLowerCase().includes(unsortedSearch.toLowerCase()) ||
-                           (c.set_name || '').toLowerCase().includes(unsortedSearch.toLowerCase());
-      if (!matchesSearch) return false;
-
-      if (unsortedDateFilter === 'today') {
-        const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
-        const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
-        return addedTime >= todayMidnight;
-      }
-      if (unsortedDateFilter === 'yesterday') {
-        const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
-        const yesterdayMidnight = todayMidnight - 24 * 60 * 60 * 1000;
-        const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
-        return addedTime >= yesterdayMidnight && addedTime < todayMidnight;
-      }
-      if (unsortedDateFilter === 'week') {
-        const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-        const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
-        return addedTime >= sevenDaysAgo;
-      }
-      return true;
-    });
-
-    sortCardsByOrder(queue, unsortedSortOrder, selectedLoc?.foil_sorting);
-
-    if (unsortedDateFilter === 'batch10') {
-      queue = queue.slice(0, 10);
-    } else if (unsortedDateFilter === 'batch50') {
-      queue = queue.slice(0, 50);
-    }
-
-    let idx = assistantIndex;
-    if (idx >= queue.length) {
-      idx = Math.max(0, queue.length - 1);
-    }
-    const card = queue[idx];
-    return { queue, idx, card };
+  const handleFileCard = async (entryId, locationId) => {
+    try {
+      const res = await fetch(`/api/collection/${entryId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: locationId })
+      });
+      if (res.ok) { showToast('Card filed.'); await refreshAll(); onUpdate(); }
+      else showToast('Failed to file card.');
+    } catch (err) { console.error(err); showToast('Error filing card.'); }
   };
 
-  // Keep the box-row highlight in sync with the current assistant card as a proper
-  // effect instead of scheduling setState from inside render (which used to flicker
-  // under StrictMode's double-render).
-  useEffect(() => {
-    if (unsortedViewMode !== 'assistant') return;
-    const { card } = getAssistantQueue();
-    if (!card) {
-      setAssistantHighlightRow(null);
-      return;
-    }
-    const recommended = findNextRecommendedSlot(card);
-    const isBoxContainer = selectedLoc && (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand');
-    setAssistantHighlightRow(isBoxContainer && recommended ? recommended.sub1 : null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unsortedViewMode, unsortedCards, unsortedSearch, unsortedDateFilter, unsortedSortOrder, assistantIndex, selectedLoc, locationCards]);
+  const handleApplyAll = async () => {
+    if (!applyAllTarget || unsortedCards.length === 0) return;
+    const target = locations.find(l => l.id === parseInt(applyAllTarget, 10));
+    if (!window.confirm(`File all ${unsortedCards.length} unsorted card(s) into "${target?.name}"?`)) return;
+    try {
+      const res = await fetch(`/api/locations/${applyAllTarget}/apply-all`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entry_ids: unsortedCards.map(c => c.entry_id) })
+      });
+      const data = await res.json();
+      if (res.ok) { showToast(data.message); await refreshAll(); onUpdate(); }
+      else showToast(data.error || 'Failed to file batch.');
+    } catch (err) { console.error(err); showToast('Error filing batch.'); }
+  };
+
+  if (loading) return <div className="spinner" />;
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: `1fr ${isRightSidebarOpen ? '320px' : '0px'}`, gap: isRightSidebarOpen ? '1.25rem' : '0', height: 'calc(100vh - 120px)', minHeight: '650px', transition: 'grid-template-columns 0.3s ease' }} className="storage-workspace-grid">
-      {/* Column 2: visual Container contents (Center) */}
-      <div className="location-main-content-col" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', minWidth: 0 }}>
-        {selectedLoc ? (
-          <div className="glass-panel" style={{ flex: 1, padding: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', minHeight: 0, overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.4rem', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  {selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder' ? <BookOpen size={20} style={{ color: 'var(--accent-red)' }} /> : selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' ? <Archive size={20} style={{ color: 'var(--accent-red)' }} /> : <Layers size={20} style={{ color: 'var(--accent-red)' }} />}
-                  <select
-                    value={activeLocationId || ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (val) setActiveLocationId(parseInt(val, 10));
-                    }}
-                    className="select-control title-dropdown"
-                    style={{ 
-                      fontSize: '1.25rem', 
-                      fontWeight: 850, 
-                      background: 'rgba(255,255,255,0.04)', 
-                      border: '1px solid var(--border-glass)', 
-                      borderRadius: 'var(--radius-sm)', 
-                      color: '#fff', 
-                      cursor: 'pointer', 
-                      padding: '2px 8px', 
-                      height: '34px' 
-                    }}
-                  >
-                    {locations.map(loc => (
-                      <option key={loc.id} value={loc.id} style={{ background: '#1e1c18', color: '#fff' }}>
-                        {loc.name} ({loc.type})
-                      </option>
-                    ))}
-                  </select>
-
-                  <button 
-                    type="button"
-                    className="btn btn-secondary btn-icon-only" 
-                    onClick={() => setIsAdding(true)}
-                    style={{ width: '36px', height: '36px', padding: 0, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                    title="Create New Container"
-                  >
-                    <Plus size={18} />
-                  </button>
-
-                  <button 
-                    type="button"
-                    className="btn btn-secondary btn-icon-only" 
-                    onClick={() => {
-                      setEditName(selectedLoc.name);
-                      setEditType(selectedLoc.type);
-                      setEditSortOrder(selectedLoc.sort_order || 'custom');
-                      setEditMaxPages(selectedLoc.max_pages || 30);
-                      setEditPageStyle(selectedLoc.page_style || '3x3');
-                      const rows = selectedLoc.max_rows || 3;
-                      setEditMaxRows(rows);
-                      setEditMaxRowsStr(String(rows));
-                      setEditMaxCapacity(selectedLoc.max_capacity || 1000);
-                      setEditFoilSorting(selectedLoc.foil_sorting || 'normals_first');
-                      // Load box-specific config from description JSON
-                      const cfg = parseAdvancedConfig(selectedLoc);
-                      const rowCap = cfg.rowCapacity || 40;
-                      setEditRowCapacity(rowCap);
-                      setEditRowCapacityStr(String(rowCap));
-                      setEditAssignedSets((cfg.assignedSets || []).join('\n'));
-                      setIsEditing(true);
-                    }}
-                    style={{ width: '36px', height: '36px', padding: 0, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem' }}
-                    title="Edit Container Settings (rename, resize, sort scheme)"
-                  >
-                    ⚙️
-                  </button>
-
-                  <button
-                    type="button"
-                    className="btn btn-danger btn-icon-only"
-                    onClick={() => handleDeleteLocation(selectedLoc.id, selectedLoc.name)}
-                    style={{ width: '36px', height: '36px', padding: 0, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                    title={`Delete "${selectedLoc.name}"`}
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', marginTop: '0.3rem', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
-                    {selectedLoc.type} • {selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder' ? `${selectedLoc.max_pages || 30} pages (${selectedLoc.page_style || '3x3'})` : `${selectedLoc.max_rows || 3} rows`} • Value: <strong style={{ color: 'var(--accent-yellow)' }}>${locationCards.reduce((acc, curr) => acc + (curr.quantity * (curr.price_trend || 0)), 0).toFixed(2)}</strong>
-                  </span>
-                  {(() => {
-                    const cap = capacityOf(selectedLoc);
-                    if (!cap || cap <= 0) return null;
-                    const used = locationCards.length;
-                    const pct = Math.min(100, Math.round((used / cap) * 100));
-                    const color = pct >= 95 ? 'var(--accent-red)' : pct >= 80 ? 'var(--accent-yellow)' : 'var(--text-secondary)';
-                    return (
-                      <span
-                        title={`${used} of ${cap} slots used`}
-                        style={{ fontSize: '0.7rem', fontWeight: 700, color, padding: '2px 7px', borderRadius: '10px', border: `1px solid ${color}`, whiteSpace: 'nowrap' }}
-                      >
-                        {used}/{cap} slots ({pct}%){pct >= 95 ? ' — nearly full' : ''}
-                      </span>
-                    );
-                  })()}
-                </div>
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary btn-icon-only"
-                onClick={() => setIsRightSidebarOpen(prev => !prev)}
-                style={{ width: '32px', height: '32px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
-                title={isRightSidebarOpen ? 'Hide Unsorted Cards panel (more room for cards)' : 'Show Unsorted Cards panel'}
-              >
-                {isRightSidebarOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-              </button>
-            </div>
-
-            {selectedLoc.type === 'Binder' && viewMode === 'grid' && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem', width: '100%' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.4rem 0.8rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Binder Page:</span>
-                  <select 
-                    className="select-control" 
-                    value={selectedPage} 
-                    onChange={(e) => setSelectedPage(parseInt(e.target.value, 10))}
-                    style={{ width: '100px', padding: '0.2rem 0.4rem', fontSize: '0.8rem' }}
-                  >
-                    {Array.from({ length: selectedLoc.max_pages || 30 }, (_, i) => i + 1).map(p => (
-                      <option key={p} value={p}>Page {p}</option>
-                    ))}
-                  </select>
-                </div>
-                
-                {/* Highlight Search Bar */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: '220px' }}>
-                  <input
-                    type="text"
-                    className="input-control"
-                    placeholder="Search/Highlight cards on page..."
-                    value={visualizerSearch}
-                    onChange={(e) => setVisualizerSearch(e.target.value)}
-                    style={{ width: '100%', padding: '0.35rem 0.75rem', fontSize: '0.8rem', height: '32px' }}
-                  />
-                  {visualizerSearch && (
-                    <button 
-                      type="button" 
-                      className="btn btn-secondary btn-sm" 
-                      onClick={() => setVisualizerSearch('')}
-                      style={{ padding: '0.35rem 0.6rem', height: '32px', display: 'flex', alignItems: 'center' }}
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {(selectedLoc.type !== 'Binder' && selectedLoc.type !== 'Toploader Binder' && selectedLoc.type !== 'Box' && selectedLoc.type !== 'Toploader Box' && selectedLoc.type !== 'Graded Slab Box' && selectedLoc.type !== 'Display Shelf / Stand' && locationCards.length === 0) ? (
-              <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem' }}>
-                <p>This container is currently empty. Go to Search or Scanner to add cards to this location, or drag/place cards here!</p>
-              </div>
-            ) : (selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder') ? (
-              /* Binder Double Page Book Visualizer (Left & Right Pages side-by-side) */
-              (() => {
-                const pocketsCount = binderPocketsCount;
-                const virtualIndices = binderVirtualIndices;
-
-                const isFirstPageSolo = selectedLoc ? !!parseAdvancedConfig(selectedLoc).firstPageSolo : false;
-
-                let leftPageNum, rightPageNum;
-                if (isFirstPageSolo) {
-                  if (selectedPage === 1) {
-                    leftPageNum = null;
-                    rightPageNum = 1;
-                  } else {
-                    leftPageNum = 2 * Math.floor(selectedPage / 2);
-                    rightPageNum = leftPageNum + 1;
-                  }
-                } else {
-                  leftPageNum = 2 * Math.floor((selectedPage - 1) / 2) + 1;
-                  rightPageNum = leftPageNum + 1;
-                }
-
-                const renderBinderPageGrid = (pageNum, sideClass) => {
-                  const pocketsCols = selectedLoc.page_style === '2x2' ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)';
-                  const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
-
-                  if (pageNum === null) {
-                    return (
-                      <div className="binder-page-left inside-cover" style={{ 
-                        flex: 1,
-                        background: 'linear-gradient(135deg, rgba(20,20,25,0.95), rgba(10,10,12,0.98))', 
-                        border: '1.5px solid rgba(255,255,255,0.03)', 
-                        borderRadius: '12px', 
-                        display: 'flex', 
-                        flexDirection: 'column',
-                        alignItems: 'center', 
-                        justifyContent: 'center', 
-                        color: 'var(--text-muted)',
-                        boxShadow: 'inset 0 0 40px rgba(0,0,0,0.8), 0 8px 30px rgba(0,0,0,0.6)',
-                        position: 'relative',
-                        overflow: 'hidden',
-                        minHeight: '400px'
-                      }}>
-                        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0.03, background: 'radial-gradient(circle, #fff 10%, transparent 11%)', backgroundSize: '12px 12px' }}></div>
-                        <div style={{ textAlign: 'center', padding: '2rem', zIndex: 2 }}>
-                          <div style={{ fontSize: '3.5rem', marginBottom: '1rem', filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.4))' }}>📕</div>
-                          <h4 style={{ fontSize: '0.85rem', fontWeight: 900, letterSpacing: '0.2em', color: '#fff', margin: '0 0 0.5rem 0', textTransform: 'uppercase' }}>Pokédex Binder</h4>
-                          <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', fontWeight: 550, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Premium Storage System</span>
-                        </div>
-                        <div style={{ position: 'absolute', right: '4px', top: '10%', bottom: '10%', width: '4px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', opacity: 0.4 }}>
-                          {[1,2,3,4,5,6].map(i => (
-                            <div key={i} style={{ width: '4px', height: '12px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px' }}></div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div className={sideClass} style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '0.35rem' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <span style={{ fontSize: '0.75rem', fontWeight: 850, color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>PAGE {pageNum}</span>
-                              {isNarrowViewport ? (
-                                // Single page shown at a time on narrow viewports, so both
-                                // directions live together instead of split across two sides.
-                                <>
-                                  <button
-                                    type="button"
-                                    className="btn btn-secondary btn-icon-only"
-                                    onClick={() => handleTurnPage(pageNum - 1)}
-                                    disabled={pageNum <= 1}
-                                    style={{ width: '32px', height: '32px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
-                                    title="Previous Page"
-                                  >
-                                    <ChevronLeft size={16} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-secondary btn-icon-only"
-                                    onClick={() => handleTurnPage(pageNum + 1)}
-                                    disabled={pageNum >= (selectedLoc.max_pages || 30)}
-                                    style={{ width: '32px', height: '32px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
-                                    title="Next Page"
-                                  >
-                                    <ChevronRight size={16} />
-                                  </button>
-                                </>
-                              ) : sideClass === 'binder-page-left' ? (
-                                <button
-                                  type="button"
-                                  className="btn btn-secondary btn-icon-only"
-                                  onClick={() => {
-                                    if (isFirstPageSolo) {
-                                      if (leftPageNum === 2) handleTurnPage(1);
-                                      else handleTurnPage(leftPageNum - 2);
-                                    } else {
-                                      handleTurnPage(leftPageNum - 2);
-                                    }
-                                  }}
-                                  disabled={isFirstPageSolo ? (leftPageNum === null) : (leftPageNum === 1)}
-                                  style={{ width: '32px', height: '32px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
-                                  title="Previous Page"
-                                >
-                                  <ChevronLeft size={16} />
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="btn btn-secondary btn-icon-only"
-                                  onClick={() => {
-                                    if (isFirstPageSolo) {
-                                      if (leftPageNum === null) handleTurnPage(2);
-                                      else handleTurnPage(leftPageNum + 2);
-                                    } else {
-                                      handleTurnPage(leftPageNum + 2);
-                                    }
-                                  }}
-                                  disabled={isFirstPageSolo ?
-                                    (leftPageNum === null ? 2 > (selectedLoc.max_pages || 30) : (leftPageNum + 2 > (selectedLoc.max_pages || 30))) :
-                                    (leftPageNum + 1 >= (selectedLoc.max_pages || 30))
-                                  }
-                                  style={{ width: '32px', height: '32px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
-                                  title="Next Page"
-                                >
-                                  <ChevronRight size={16} />
-                                </button>
-                              )}
-                              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                               {locationCards.filter(c => Math.floor((virtualIndices.get(c.entry_id) ?? -100) / pocketsCount) + 1 === pageNum).length} Card(s)
-                             </span>
-                            </div>
-                          </div>
-
-                          <div style={{
-                            display: 'grid',
-                            gridTemplateColumns: pocketsCols,
-                            gap: '0.2rem',
-                            background: 'rgba(0,0,0,0.25)',
-                            padding: '0.2rem',
-                            borderRadius: 'var(--radius-sm)',
-                            boxShadow: 'inset 0 4px 15px rgba(0,0,0,0.6)'
-                          }}>
-                            {Array.from({ length: pocketsCount }, (_, i) => i + 1).map(slotNum => {
-                          const targetSlotIndex = (pageNum - 1) * pocketsCount + (slotNum - 1);
-                          const slotCards = locationCards.filter(c => virtualIndices.get(c.entry_id) === targetSlotIndex);
-                          const card = slotCards[0];
-                          const isTargetable = !!activeMoveCard;
-
-                          const rowsCount = selectedLoc.page_style === '2x2' ? 2 : selectedLoc.page_style === '3x4' ? 4 : 3;
-                          const maxSlotHeight = `calc((100vh - 230px) / ${rowsCount})`;
-                          const rarityStyle = card ? getCardRarityBorder(card.rarity) : null;
-
-                          return (
-                            <div 
-                              key={slotNum} 
-                              onDragOver={(e) => e.preventDefault()}
-                              onDrop={(e) => handleDrop(e, slotNum, pageNum)}
-                              onClick={() => {
-                                if (activeMoveCard) {
-                                  handlePlaceCardInSlot(pageNum, slotNum);
-                                }
-                              }}
-                              className={isTargetable ? 'slot-move-targetable' : ''}
-                              style={{ 
-                                aspectRatio: 0.718, 
-                                maxHeight: maxSlotHeight,
-                                border: card 
-                                  ? (isTargetable ? '2px dashed var(--accent-yellow)' : rarityStyle.border) 
-                                  : (isTargetable ? '2px dashed var(--accent-yellow)' : '2px dashed var(--border-glass)'),
-                                borderRadius: 'var(--radius-sm)',
-                                background: card ? 'transparent' : isTargetable ? 'rgba(234, 179, 8, 0.08)' : 'rgba(0,0,0,0.3)',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                justifyContent: 'center',
-                                alignItems: 'center',
-                                position: 'relative',
-                                overflow: 'hidden',
-                                cursor: (card || isTargetable) ? 'pointer' : 'default',
-                                padding: '0px',
-                                boxShadow: card ? `0 5px 12px rgba(0,0,0,0.45), ${rarityStyle.boxShadow}` : 'none',
-                                transition: 'all 0.2s ease'
-                              }}
-                            >
-                              {/* Slot Label */}
-                              <span style={{ position: 'absolute', top: '4px', left: '6px', fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 800, zIndex: 10 }}>#{slotNum}</span>
-
-                              {/* Stack Count Badge */}
-                              {slotCards.length > 1 && (
-                                <span style={{
-                                  position: 'absolute',
-                                  top: '4px',
-                                  right: '6px',
-                                  background: 'var(--accent-red)',
-                                  color: '#fff',
-                                  fontSize: '0.6rem',
-                                  fontWeight: 800,
-                                  padding: '1px 4px',
-                                  borderRadius: '4px',
-                                  zIndex: 10,
-                                  boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
-                                  border: '1px solid rgba(255,255,255,0.1)'
-                                }}>
-                                  +{slotCards.length - 1} More
-                                </span>
-                              )}
-
-                              {card ? (
-                                <div 
-                                  draggable={!isMobile}
-                                  onDragStart={(e) => handleDragStart(e, card)}
-                                  onMouseMove={handleCardMouseMove}
-                                  onMouseLeave={handleCardMouseLeave}
-                                  className="tilt-card-wrapper"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (activeMoveCard) {
-                                      handlePlaceCardInSlot(pageNum, slotNum);
-                                    } else {
-                                      setActiveMoveCard(card);
-                                      showToast(`Selected ${card.name} for relocation. Tap a destination slot, row, or Unsorted to place.`);
-                                    }
-                                  }}
-                                  style={{ width: '100%', height: '100%', position: 'relative', cursor: 'pointer' }}
-                                  title={activeMoveCard ? "Click to swap/relocate" : "Click to view stack / Drag to relocate"}
-                                >
-                                  <img src={card.image_url} alt={card.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px' }} />
-                                  {/* Shiny holo overlay */}
-                                  {card.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '8px' }} />}
-                                  {card.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '8px' }} />}
-                                  {/* Finish badge (shared style) */}
-                                  <PrintingBadge printing={card.printing} />
-                                  
-                                  {/* Card Rarity Indicator Badge */}
-                                  <span style={{
-                                    position: 'absolute',
-                                    bottom: '22px',
-                                    left: '4px',
-                                    ...getRarityBadgeStyle(card.rarity),
-                                    fontSize: '0.55rem',
-                                    fontWeight: 900,
-                                    padding: '1px 3px',
-                                    borderRadius: '3px',
-                                    zIndex: 10,
-                                    boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
-                                    textTransform: 'uppercase',
-                                    letterSpacing: '0.5px'
-                                  }}>
-                                    {getRarityBadgeLabel(card.rarity)}
-                                  </span>
-
-                                  <div style={{
-                                    position: 'absolute',
-                                    bottom: 0, left: 0, right: 0,
-                                    background: 'rgba(0,0,0,0.85)',
-                                    backdropFilter: 'blur(1px)',
-                                    padding: '3.5px',
-                                    textAlign: 'center',
-                                    fontSize: '0.65rem',
-                                    color: '#fff',
-                                    whiteSpace: 'nowrap',
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    fontWeight: 600,
-                                    borderBottomLeftRadius: '4px',
-                                    borderBottomRightRadius: '4px'
-                                  }}>
-                                    {getCardDisplayName(card.name, card.language)}{card.quantity > 1 ? ` ×${card.quantity}` : ''}
-                                  </div>
-                                </div>
-                              ) : (
-                                !activeMoveCard ? (
-                                  <button 
-                                    className="btn btn-secondary btn-icon-only" 
-                                    style={{ borderRadius: '50%', width: '28px', height: '28px', padding: 0 }}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setTargetSlot(slotNum);
-                                      handleTurnPage(pageNum);
-                                      setShowQuickAdd(true);
-                                    }}
-                                  >
-                                    <Plus size={12} />
-                                  </button>
-                                ) : (
-                                  <span style={{ fontSize: '0.9rem', color: 'var(--accent-yellow)', opacity: 0.65 }} title="Click to place card here">🎯</span>
-                                )
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                };
-
-
-                return (
-                  <div 
-                    style={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      justifyContent: 'center', 
-                      gap: '1rem', 
-                      width: '100%', 
-                      margin: '0 auto',
-                      userSelect: 'none'
-                    }}
-                    onTouchStart={handleTouchStart}
-                    onTouchMove={handleTouchMove}
-                    onTouchEnd={handleTouchEnd}
-                  >
-                    {/* Book Container: single page on narrow viewports, two-page spread otherwise */}
-                    <div className={`binder-page-container ${isNarrowViewport ? 'single-page' : ''} ${isFlipping ? 'page-flip-effect' : ''}`} style={{ flex: 1, width: '100%' }}>
-                      {isNarrowViewport ? (
-                        renderBinderPageGrid(Math.min(Math.max(selectedPage, 1), selectedLoc.max_pages || 30), 'binder-page-left')
-                      ) : (
-                        <>
-                          {/* Left Page (Odd Page) */}
-                          {renderBinderPageGrid(leftPageNum, 'binder-page-left')}
-
-                          {/* Binder Spine Metal Rings */}
-                          <div className="binder-spine"></div>
-
-                          {/* Right Page (Even Page) */}
-                          {rightPageNum <= (selectedLoc.max_pages || 30) && renderBinderPageGrid(rightPageNum, 'binder-page-right')}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()
-            ) : (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand') ? (
-              /* Box Row Visualizer — horizontal row strips */
-              renderBoxVisualizer()
-            ) : (
-              /* Cover Flow cards visualizer for all other containers */
-              renderCardCoverFlow()
-            )}
-          </div>
-        ) : (
-          <div className="glass-panel" style={{ flex: 1, padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center', justifyContent: 'center', textAlign: 'center', minHeight: 0 }}>
-            <div style={{ fontSize: '3rem' }}>📂</div>
-            <h3 style={{ fontSize: '1.1rem', color: '#fff', fontWeight: 800, margin: 0 }}>No Storage Containers Found</h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', maxWidth: '320px', margin: 0 }}>
-              Storage containers let you organize your cards in virtual Binders (with grid pages) or boxes (with rows and slots).
-            </p>
-            <button 
-              type="button" 
-              className="btn btn-primary" 
-              onClick={() => setIsAdding(true)}
-              style={{ marginTop: '0.5rem', padding: '0.5rem 1.5rem' }}
-            >
-              + Create Storage Container
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Column 3: Unsorted Cards Sidebar Panel (Right) */}
-      <div 
-        className="location-unsorted-col"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => handleDrop(e, null)}
-        onClick={() => {
-          if (activeMoveCard) {
-            moveCardToLocation(activeMoveCard.entry_id, null, '', '');
-            showToast(`Moved ${activeMoveCard.name} back to Unsorted Pile`);
-            setActiveMoveCard(null);
-          }
-        }}
-        style={{ 
-          display: isRightSidebarOpen ? 'flex' : 'none', 
-          flexDirection: 'column', 
-          gap: '1rem', 
-          height: '100%', 
-          overflowY: 'auto',
-          borderLeft: '1px solid var(--border-glass)',
-          paddingLeft: '0.75rem',
-          background: 'rgba(0,0,0,0.1)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '0.5rem',
-          cursor: activeMoveCard ? 'pointer' : 'default'
-        }}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.75rem', fontWeight: 850, color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>UNSORTED CARDS</span>
-            <span style={{ fontSize: '0.65rem', background: 'var(--accent-red)', color: '#fff', padding: '1px 6px', borderRadius: '10px', fontWeight: 700 }}>
-              {unsortedCards.length} left
-            </span>
-          </div>
-          <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Drag cards here from storage to unsort them</span>
-          
-          <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>
-            <button 
-              type="button" 
-              onClick={() => setUnsortedViewMode('list')} 
-              className={`btn ${unsortedViewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem', flex: 1, borderRadius: '2px' }}
-            >
-              List View
-            </button>
-            <button 
-              type="button" 
-              onClick={() => setUnsortedViewMode('assistant')} 
-              className={`btn ${unsortedViewMode === 'assistant' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem', flex: 1, borderRadius: '2px' }}
-            >
-              Assistant Mode
-            </button>
-          </div>
+    <div className="storage-workspace-grid">
+      {/* Locations sidebar */}
+      <div className="glass-panel location-sidebar-col" style={{ padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <strong style={{ fontSize: '0.85rem' }}>Storage</strong>
+          <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setShowCreate(s => !s)} style={{ width: '28px', height: '28px', padding: 0 }}>
+            <Plus size={14} />
+          </button>
         </div>
 
-        {unsortedCards.length > 0 ? (
-          unsortedViewMode === 'assistant' ? (
-            (() => {
-              const { queue, idx, card } = getAssistantQueue();
-              if (!card) {
+        {showCreate && (
+          <form onSubmit={handleCreateLocation} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
+            <input className="input-control" placeholder="Name" value={newName} onChange={(e) => setNewName(e.target.value)} style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }} />
+            <select className="select-control" value={newType} onChange={(e) => setNewType(e.target.value)} style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}>
+              {CONTAINER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <button type="submit" className="btn btn-primary" style={{ fontSize: '0.75rem', padding: '0.35rem' }}>Create</button>
+          </form>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+          {locations.map(loc => (
+            <div
+              key={loc.id}
+              onClick={() => setActiveLocationId(loc.id)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                background: activeLocationId === loc.id ? 'rgba(255,71,71,0.1)' : 'transparent',
+                border: activeLocationId === loc.id ? '1px solid var(--accent-red)' : '1px solid transparent'
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{loc.name}</div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{loc.type} • {loc.total_cards || 0} cards</div>
+              </div>
+              <button type="button" onClick={(e) => { e.stopPropagation(); handleDeleteLocation(loc.id, loc.name); }} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
+          {locations.length === 0 && <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>No storage containers yet.</p>}
+        </div>
+      </div>
+
+      {/* Selected location detail */}
+      <div className="glass-panel" style={{ padding: '0.9rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', overflowY: 'auto' }}>
+        {!selectedLoc ? (
+          <p style={{ color: 'var(--text-secondary)' }}>Select a container to view its compartments.</p>
+        ) : (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
+              <div>
+                {editingName ? (
+                  <input
+                    autoFocus
+                    className="input-control"
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onBlur={() => { setEditingName(false); if (nameDraft.trim() && nameDraft.trim() !== selectedLoc.name) handleUpdateLocationField('name', nameDraft.trim()); }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.target.blur();
+                      if (e.key === 'Escape') setEditingName(false);
+                    }}
+                    style={{ fontSize: '1rem', padding: '0.25rem 0.5rem', fontWeight: 700 }}
+                  />
+                ) : (
+                  <h3
+                    onDoubleClick={() => { setNameDraft(selectedLoc.name); setEditingName(true); }}
+                    title="Double-click to rename"
+                    style={{ margin: 0, cursor: 'pointer' }}
+                  >
+                    {selectedLoc.name}
+                  </h3>
+                )}
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{selectedLoc.type} • {compartments.length} compartments</span>
+              </div>
+
+              {(() => {
+                const { base, foilAware } = splitSortOrder(selectedLoc.sort_order);
+                const setBase = (newBase) => handleUpdateLocationField('sort_order', newBase === 'set-number' && foilAware ? 'set-number-printing' : newBase);
+                const setFoilAware = (checked) => handleUpdateLocationField('sort_order', checked ? 'set-number-printing' : 'set-number');
                 return (
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginTop: '1rem', fontStyle: 'italic' }}>
-                    No matches.
-                  </div>
-                );
-              }
-
-              const recommended = findNextRecommendedSlot(card);
-              const bestContainer = suggestBestContainer(card, locations, locationProfiles);
-              const suggestsElsewhere = bestContainer && bestContainer.location.id !== selectedLoc?.id;
-
-              return (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
-                    <input 
-                      type="text" 
-                      className="input-control" 
-                      placeholder="Search queue..." 
-                      value={unsortedSearch}
-                      onChange={(e) => {
-                        setUnsortedSearch(e.target.value);
-                        setAssistantIndex(0);
-                      }}
-                      style={{ padding: '0.3rem 0.5rem', fontSize: '0.75rem' }}
-                    />
-                    <div style={{ display: 'flex', gap: '0.4rem' }}>
-                      <select 
-                        className="select-control" 
-                        value={unsortedSortOrder}
-                        onChange={(e) => {
-                          setUnsortedSortOrder(e.target.value);
-                          setAssistantIndex(0);
-                        }}
-                        style={{ padding: '0.3rem 0.5rem', fontSize: '0.7rem', flex: 1 }}
-                      >
-                        <option value="name-asc">A-Z Alphabetical</option>
-                        <option value="scanned-desc">Scanned (Newest First)</option>
-                        <option value="scanned-asc">Scanned (Oldest First)</option>
-                        <option value="price-desc">Value (High-Low)</option>
-                        <option value="set-number">Set & Number</option>
-                        <option value="set-number-printing">Set, Number & Printing</option>
-                        <option value="type-name">Energy Type</option>
-                      </select>
-                      <select 
-                        className="select-control" 
-                        value={unsortedDateFilter}
-                        onChange={(e) => {
-                          setUnsortedDateFilter(e.target.value);
-                          setAssistantIndex(0);
-                        }}
-                        style={{ padding: '0.3rem 0.5rem', fontSize: '0.7rem', flex: 1 }}
-                      >
-                        <option value="all">All Unsorted</option>
-                        <option value="today">Scanned Today</option>
-                        <option value="yesterday">Scanned Yesterday</option>
-                        <option value="week">Scanned This Week</option>
-                        <option value="batch10">Latest Batch (10)</option>
-                        <option value="batch50">Latest Batch (50)</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* How the container's slots are ordered — this is what "Recommended Target"
-                      below is based on. A container left on Custom order just fills the next
-                      empty slot, so this is the fix for "the assistant doesn't organize by set":
-                      the physical placement guide below reads this, card by card, as you scan a
-                      pile and walk each one to its slot. */}
-                  <div className="glass-panel" style={{ padding: '0.5rem 0.6rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', border: '1px solid rgba(234, 179, 8, 0.3)', background: 'rgba(234, 179, 8, 0.05)' }}>
-                    <span style={{ fontSize: '0.6rem', color: 'var(--accent-yellow)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                      Place Into "{selectedLoc?.name || '...'}" Sorted By
-                    </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', alignItems: 'flex-end' }}>
                     <select
                       className="select-control"
-                      value={selectedLoc?.sort_order || 'custom'}
-                      onChange={(e) => handleQuickSetSortOrder(e.target.value)}
-                      disabled={!selectedLoc}
-                      style={{ padding: '0.3rem 0.5rem', fontSize: '0.7rem' }}
+                      value={base}
+                      onChange={(e) => setBase(e.target.value)}
+                      style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
                     >
-                      <option value="custom">Custom (next empty slot, no grouping)</option>
-                      <option value="set-number-printing">Set, Number &amp; Printing (foil-aware)</option>
-                      <option value="set-number">Set &amp; Number</option>
-                      <option value="name-asc">A-Z Alphabetical</option>
-                      <option value="price-desc">Value (High-Low)</option>
-                      <option value="type-name">Energy Type</option>
+                      {SORT_BASES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
-                    {selectedLoc?.sort_order === 'set-number-printing' && (
+                    {base === 'set-number' && (
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
+                        <input type="checkbox" checked={foilAware} onChange={(e) => setFoilAware(e.target.checked)} />
+                        Split by printing (foil-aware)
+                      </label>
+                    )}
+                    {base === 'set-number' && foilAware && (
                       <div style={{ display: 'flex', gap: '4px' }}>
                         {[{ v: 'normals_first', label: 'Normals First' }, { v: 'foils_first', label: 'Foils First' }].map(opt => (
                           <button
                             key={opt.v}
                             type="button"
-                            onClick={() => handleQuickSetFoilSorting(opt.v)}
+                            onClick={() => handleUpdateLocationField('foil_sorting', opt.v)}
                             className={`btn ${(selectedLoc.foil_sorting || 'normals_first') === opt.v ? 'btn-primary' : 'btn-secondary'}`}
-                            style={{ fontSize: '0.6rem', padding: '0.25rem 0.4rem', flex: 1, borderRadius: '3px' }}
+                            style={{ fontSize: '0.6rem', padding: '0.2rem 0.4rem' }}
                           >
                             {opt.label}
                           </button>
@@ -2831,1010 +668,400 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       </div>
                     )}
                   </div>
-
-                  <div className="glass-panel" style={{ padding: '0.6rem', display: 'flex', gap: '0.65rem', border: '1px solid var(--border-glass-hover)', background: 'rgba(255, 255, 255, 0.02)', alignItems: 'flex-start' }}>
-                    <img src={card.image_url} alt={card.name} style={{ width: '65px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '4px', boxShadow: '0 4px 10px rgba(0,0,0,0.5)', flexShrink: 0 }} />
-                    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                      <div>
-                        <h4 style={{ color: '#fff', fontSize: '0.8rem', margin: 0, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{getCardDisplayName(card.name, card.language)}</h4>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.set_name} • #{card.number}</div>
-                      </div>
-                      
-                      <div style={{ display: 'flex', gap: '8px', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
-                        <div>Cond: <strong style={{ color: '#fff' }}>{card.condition}</strong></div>
-                        <div>Value: <strong style={{ color: 'var(--accent-yellow)' }}>${(card.price_trend || 0).toFixed(2)}</strong></div>
-                      </div>
-
-                      {suggestsElsewhere && (
-                        <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.25)', padding: '0.4rem 0.5rem', borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                          <span style={{ fontSize: '0.55rem', color: 'var(--accent-blue)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>💡 Best fit: {bestContainer.location.name}</span>
-                          <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>{bestContainer.reason} • {bestContainer.free} free</span>
-                          <button
-                            type="button"
-                            className="btn btn-secondary"
-                            onClick={async () => {
-                              await handleRelocateCardToContainer(card.entry_id, bestContainer.location);
-                              if (idx >= queue.length - 1) setAssistantIndex(0);
-                            }}
-                            style={{ width: '100%', marginTop: '2px', fontSize: '0.62rem', padding: '0.22rem', height: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                          >
-                            Send to {bestContainer.location.name}
-                          </button>
-                        </div>
-                      )}
-
-                      {recommended ? (() => {
-                        const sortLabels = { 'custom': 'Custom', 'name-asc': 'A-Z', 'price-desc': 'Value', 'set-number': 'Set & Number', 'set-number-printing': 'Set/Number/Printing', 'type-name': 'Energy Type' };
-                        const sortScheme = sortLabels[selectedLoc?.sort_order] || 'Default';
-                        
-                        // Row highlight is kept in sync by the useEffect above, not here.
-                        const isBoxContainer = selectedLoc && (selectedLoc.type === 'Box' || selectedLoc.type === 'Toploader Box' || selectedLoc.type === 'Graded Slab Box' || selectedLoc.type === 'Display Shelf / Stand');
-
-                        return (
-                        <div style={{ background: 'rgba(255, 71, 71, 0.05)', border: '1px solid rgba(255, 71, 71, 0.15)', padding: '0.4rem', borderRadius: '4px', display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'center' }}>
-                          <span style={{ fontSize: '0.55rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Recommended Target ({sortScheme})</span>
-                          <strong style={{ fontSize: '0.75rem', color: 'var(--accent-red)' }}>{recommended.label}</strong>
-                          {isBoxContainer && (
-                            <span style={{ fontSize: '0.55rem', color: '#eab308', fontStyle: 'italic' }}>↑ See highlighted row above</span>
-                          )}
-                          
-                          <button 
-                            type="button" 
-                            className="btn btn-primary"
-                            onClick={async () => {
-                              await moveCardToLocation(card.entry_id, selectedLoc.id, recommended.sub1, recommended.sub2, recommended.position);
-                              showToast(`Placed ${card.name} in ${recommended.label}`);
-                              setAssistantHighlightRow(null);
-                              if (idx >= queue.length - 1) {
-                                setAssistantIndex(0);
-                              }
-                            }}
-                            style={{ width: '100%', marginTop: '3px', fontSize: '0.65rem', padding: '0.25rem', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                          >
-                            Place Card Here
-                          </button>
-                        </div>
-                        );
-                      })() : (
-                        <div style={{ fontSize: '0.65rem', color: 'var(--accent-red)', fontStyle: 'italic' }}>
-                          Container full / none active.
-                        </div>
-                      )}
-
-                      <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
-                        <button 
-                          type="button" 
-                          className="btn btn-secondary" 
-                          onClick={() => { setAssistantIndex(prev => Math.max(0, prev - 1)); setAssistantHighlightRow(null); }}
-                          disabled={idx === 0}
-                          style={{ flex: 1, fontSize: '0.65rem', padding: '0.2rem 0', height: '22px' }}
-                        >
-                          Prev
-                        </button>
-                        <span style={{ flex: 1.5, textAlign: 'center', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
-                          {idx + 1}/{queue.length}
-                        </span>
-                        <button 
-                          type="button" 
-                          className="btn btn-secondary" 
-                          onClick={() => { setAssistantIndex(prev => (prev + 1) % queue.length); setAssistantHighlightRow(null); }}
-                          style={{ flex: 1, fontSize: '0.65rem', padding: '0.2rem 0', height: '22px' }}
-                        >
-                          Skip
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Separate from the physical placement guide above: this instantly
-                      reassigns every card in the queue in software, with nothing to walk
-                      over and place. Only useful if the pile is already physically sorted
-                      (or you're okay re-sorting it afterward to match) — not the normal
-                      "scan a pile, get told where each one goes" flow. */}
-                  {selectedLoc?.sort_order !== 'custom' && queue.length > 0 && (
-                    <details style={{ fontSize: '0.65rem' }}>
-                      <summary style={{ cursor: 'pointer', color: 'var(--text-muted)' }}>Instant software sort (no physical placement)</summary>
-                      <div style={{ marginTop: '0.4rem', color: 'var(--text-secondary)', fontStyle: 'italic', marginBottom: '0.4rem' }}>
-                        Assigns all {queue.length} cards to slots immediately without walking you through placing them — only use this if the pile is already physically in this container (or you're re-sorting it to match right after).
-                      </div>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        onClick={() => autoSortContainerCards(selectedLoc.sort_order, queue)}
-                        style={{ width: '100%', fontSize: '0.65rem', padding: '0.35rem' }}
-                      >
-                        Instantly Assign All {queue.length} to Slots
-                      </button>
-                    </details>
-                  )}
-                </div>
-              );
-            })()
-          ) : (
-            <>
-            {/* Sorting & Search */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-              <input 
-                type="text" 
-                className="input-control" 
-                placeholder="Search unsorted..." 
-                value={unsortedSearch}
-                onChange={(e) => setUnsortedSearch(e.target.value)}
-                style={{ padding: '0.3rem 0.5rem', fontSize: '0.75rem' }}
-              />
-              <div style={{ display: 'flex', gap: '0.4rem' }}>
-                <select 
-                  className="select-control" 
-                  value={unsortedSortOrder}
-                  onChange={(e) => setUnsortedSortOrder(e.target.value)}
-                  style={{ padding: '0.3rem 0.5rem', fontSize: '0.7rem', flex: 1 }}
-                >
-                  <option value="name-asc">A-Z Alphabetical</option>
-                  <option value="scanned-desc">Scanned (Newest First)</option>
-                  <option value="scanned-asc">Scanned (Oldest First)</option>
-                  <option value="price-desc">Value (High-Low)</option>
-                  <option value="set-number">Set & Number</option>
-                  <option value="set-number-printing">Set, Number & Printing</option>
-                  <option value="type-name">Energy Type</option>
-                </select>
-                <select 
-                  className="select-control" 
-                  value={unsortedDateFilter}
-                  onChange={(e) => setUnsortedDateFilter(e.target.value)}
-                  style={{ padding: '0.3rem 0.5rem', fontSize: '0.7rem', flex: 1 }}
-                >
-                  <option value="all">All Unsorted</option>
-                  <option value="today">Scanned Today</option>
-                  <option value="yesterday">Scanned Yesterday</option>
-                  <option value="week">Scanned This Week</option>
-                  <option value="batch10">Latest Batch (10)</option>
-                  <option value="batch50">Latest Batch (50)</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Unsorted scroll list */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto', flex: 1 }}>
-              {(() => {
-                let filteredUnsorted = [...unsortedCards].filter(c => {
-                  const matchesSearch = c.name.toLowerCase().includes(unsortedSearch.toLowerCase()) || 
-                                       (c.set_name || '').toLowerCase().includes(unsortedSearch.toLowerCase());
-                  if (!matchesSearch) return false;
-
-                  if (unsortedDateFilter === 'today') {
-                    const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
-                    const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
-                    return addedTime >= todayMidnight;
-                  }
-                  if (unsortedDateFilter === 'yesterday') {
-                    const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
-                    const yesterdayMidnight = todayMidnight - 24 * 60 * 60 * 1000;
-                    const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
-                    return addedTime >= yesterdayMidnight && addedTime < todayMidnight;
-                  }
-                  if (unsortedDateFilter === 'week') {
-                    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-                    const addedTime = c.added_at ? new Date(c.added_at).getTime() : Date.now();
-                    return addedTime >= sevenDaysAgo;
-                  }
-                  return true;
-                });
-
-                sortCardsByOrder(filteredUnsorted, unsortedSortOrder, selectedLoc?.foil_sorting);
-
-                if (unsortedDateFilter === 'batch10') {
-                  filteredUnsorted = filteredUnsorted.slice(0, 10);
-                } else if (unsortedDateFilter === 'batch50') {
-                  filteredUnsorted = filteredUnsorted.slice(0, 50);
-                }
-
-                if (filteredUnsorted.length === 0) {
-                  return (
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', marginTop: '1rem', fontStyle: 'italic' }}>
-                      No matches found.
-                    </div>
-                  );
-                }
-
-                return filteredUnsorted.map((card) => {
-                  const isSelected = activeMoveCard?.entry_id === card.entry_id;
-                  return (
-                    <div 
-                      key={card.entry_id}
-                      draggable
-                      onDragStart={(e) => handleDragStart(e, card)}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleCardSelectForMove(card);
-                      }}
-                      className={isSelected ? 'card-move-selecting' : ''}
-                      style={{ 
-                        display: 'flex', 
-                        gap: '0.5rem', 
-                        alignItems: 'center', 
-                        background: 'rgba(255,255,255,0.02)', 
-                        padding: '0.4rem', 
-                        borderRadius: 'var(--radius-sm)', 
-                        border: isSelected ? '1.5px solid var(--accent-yellow)' : '1px solid var(--border-glass)',
-                        cursor: 'pointer'
-                      }}
-                      title={`${card.name} - Click to select & move / Drag to relocate`}
-                    >
-                      <img src={card.image_url} alt={card.name} style={{ width: '36px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '3px' }} />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ color: '#fff', fontSize: '0.75rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {getCardDisplayName(card.name, card.language)}
-                        </div>
-                        <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {card.set_name} • #{card.number}
-                        </div>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--accent-yellow)', fontWeight: 700 }}>x{card.quantity}</div>
-                        <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>${(card.price_trend || 0).toFixed(2)}</div>
-                      </div>
-                    </div>
-                  );
-                });
+                );
               })()}
             </div>
-            </>
-          )
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', flex: 1, color: 'var(--text-secondary)', textAlign: 'center', padding: '1rem' }}>
-            <span style={{ fontSize: '2rem' }}>🎉</span>
-            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#fff' }}>All Sorted!</span>
-            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Every card in your collection has been successfully assigned to a location.</span>
-          </div>
+
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <button type="button" className="btn btn-secondary" onClick={handleAddCompartment} style={{ fontSize: '0.7rem', padding: '0.35rem 0.6rem' }}>
+                {isBinderType ? '+ Add Page' : '+ Add Compartment'}
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={handleAutoAssignSets} style={{ fontSize: '0.7rem', padding: '0.35rem 0.6rem' }}>
+                Auto-Assign Sets by Size
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAutoAssignInfo(s => !s)}
+                title="What does this do?"
+                style={{ background: 'transparent', border: '1px solid var(--border-glass)', borderRadius: '50%', width: '20px', height: '20px', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.7rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                ?
+              </button>
+            </div>
+
+            {showAutoAssignInfo && (
+              <p style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', margin: 0, background: 'rgba(0,0,0,0.2)', padding: '0.5rem', borderRadius: 'var(--radius-sm)' }}>
+                Dedicates each compartment to a specific set instead of letting any card land anywhere. It counts how many cards you own in each set, figures out how many compartments each one needs to fit (based on compartment capacity), and assigns that many consecutive compartments to it — biggest sets first. Use it once to lay out a box/binder by set instead of doing it compartment-by-compartment; it overwrites current set assignments.
+              </p>
+            )}
+
+            {selectedLoc.sort_order !== 'custom' && (
+              <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', margin: 0 }}>
+                Sort order isn't Custom — cards file automatically by this scheme; manual per-card moves are disabled until you switch to Custom.
+              </p>
+            )}
+
+            {isBinderType && compartments.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem', margin: '0.2rem 0', background: 'rgba(0,0,0,0.1)', padding: '0.4rem', borderRadius: 'var(--radius-sm)' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={activePageIndex <= 0}
+                  onClick={() => setActivePageIndex(prev => Math.max(0, isMobile ? prev - 1 : prev - 2))}
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                >
+                  &larr; Prev
+                </button>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>
+                  {isMobile ? (
+                    `Page ${activePageIndex + 1} of ${compartments.length}`
+                  ) : (
+                    `Pages ${Math.floor(activePageIndex / 2) * 2 + 1}${Math.floor(activePageIndex / 2) * 2 + 2 <= compartments.length ? `-${Math.floor(activePageIndex / 2) * 2 + 2}` : ''} of ${compartments.length}`
+                  )}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={isMobile ? activePageIndex >= compartments.length - 1 : Math.floor(activePageIndex / 2) * 2 + 2 >= compartments.length}
+                  onClick={() => setActivePageIndex(prev => {
+                    const next = isMobile ? prev + 1 : prev + 2;
+                    return next < compartments.length ? next : prev;
+                  })}
+                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                >
+                  Next &rarr;
+                </button>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: isBinderType ? '1rem' : '0.6rem' }}>
+              {isBinderType ? (() => {
+                if (compartments.length === 0) return null;
+                const pageProps = (c, idx) => ({
+                  compartment: c,
+                  cards: cardsByCompartment.get(c.id) || [],
+                  sortOrder: selectedLoc.sort_order,
+                  availableSets: availableSetNames,
+                  canRemove: idx === compartments.length - 1 && compartments.length > 1 && (cardsByCompartment.get(c.id) || []).length === 0,
+                  moveTargets: compartments,
+                  onRename: (label) => handleRenameCompartment(c.id, label),
+                  onSetCapacity: (cap) => handleSetCapacity(c.id, cap),
+                  onToggleSet: (setName) => handleToggleCompartmentSet(c, setName),
+                  onRemove: () => handleRemoveCompartment(c.id),
+                  onDeleteCard: handleDeleteCard,
+                  onMoveCard: handleMoveCard
+                });
+
+                if (isMobile) {
+                  const targetIdx = Math.min(activePageIndex, compartments.length - 1);
+                  const activePage = compartments[targetIdx];
+                  if (!activePage) return null;
+                  return (
+                    <div
+                      className="binder-page-container"
+                      onTouchStart={handleTouchStart}
+                      onTouchEnd={handleTouchEnd}
+                      style={{ touchAction: 'pan-y' }}
+                    >
+                      <div className="binder-page-left" style={{ width: '100%' }}>
+                        <BinderPageContent {...pageProps(activePage, targetIdx)} />
+                      </div>
+                    </div>
+                  );
+                } else {
+                  const spreadIdx = Math.floor(Math.min(activePageIndex, compartments.length - 1) / 2);
+                  const leftIdx = spreadIdx * 2;
+                  const rightIdx = leftIdx + 1;
+                  const left = compartments[leftIdx];
+                  const right = compartments[rightIdx];
+
+                  return (
+                    <div className="binder-page-container">
+                      <div className="binder-page-left">
+                        <BinderPageContent {...pageProps(left, leftIdx)} />
+                      </div>
+                      <div className="binder-spine" />
+                      {right && (
+                        <div className="binder-page-right">
+                          <BinderPageContent {...pageProps(right, rightIdx)} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+              })() : (() => {
+                if (compartments.length === 0) return <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No compartments/rows in this location.</p>;
+
+                const activeComp = compartments.find(c => c.id === activeCompartmentId) || compartments[0];
+                if (!activeComp) return null;
+
+                const activeCompCards = cardsByCompartment.get(activeComp.id) || [];
+                const activeCardIndex = Math.min(coverflowActiveIndex, Math.max(0, activeCompCards.length - 1));
+                const activeCard = activeCompCards[activeCardIndex];
+
+                const isCustom = selectedLoc.sort_order === 'custom';
+                const canRemoveActive = compartments.length > 1 && activeCompCards.length === 0;
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {/* Row Selection Header */}
+                    <div className="row-selection-grid">
+                      {compartments.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className={`row-tab-btn ${activeCompartmentId === c.id ? 'active' : ''}`}
+                          onClick={() => {
+                            setActiveCompartmentId(c.id);
+                            setRowLabelDraft(c.display_label);
+                          }}
+                        >
+                          <span>{c.display_label}</span>
+                          <span style={{ fontSize: '0.65rem', opacity: 0.7 }}>({c.count}/{c.capacity})</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Active Compartment Settings & Inspector */}
+                    <div className="glass-panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', border: '1px solid var(--border-glass)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        {editingRowLabel ? (
+                          <input
+                            autoFocus
+                            className="input-control"
+                            value={rowLabelDraft}
+                            onChange={(e) => setRowLabelDraft(e.target.value)}
+                            onBlur={() => { setEditingRowLabel(false); handleRenameCompartment(activeComp.id, rowLabelDraft); }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { setEditingRowLabel(false); handleRenameCompartment(activeComp.id, rowLabelDraft); }
+                              if (e.key === 'Escape') setEditingRowLabel(false);
+                            }}
+                            style={{ padding: '0.15rem 0.4rem', fontSize: '0.75rem', width: '130px' }}
+                          />
+                        ) : (
+                          <strong
+                            onDoubleClick={() => { setRowLabelDraft(activeComp.display_label); setEditingRowLabel(true); }}
+                            title="Double-click to rename"
+                            style={{ cursor: 'pointer', fontSize: '0.8rem' }}
+                          >
+                            {activeComp.display_label}
+                          </strong>
+                        )}
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{activeComp.count} / {activeComp.capacity} cards</span>
+                        <button type="button" className="btn btn-secondary" onClick={() => setShowRowSets(s => !s)} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem' }}>
+                          {activeComp.assignedSets.length === 0 ? 'Any set' : activeComp.assignedSets.length === 1 ? activeComp.assignedSets[0] : `${activeComp.assignedSets.length} sets`}
+                        </button>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                          Capacity
+                          <input
+                            type="number" min="1" className="input-control" defaultValue={activeComp.capacity}
+                            onBlur={(e) => { const v = parseInt(e.target.value, 10); if (v > 0 && v !== activeComp.capacity) handleSetCapacity(activeComp.id, v); }}
+                            style={{ width: '50px', padding: '0.1rem 0.25rem', fontSize: '0.65rem' }}
+                          />
+                        </label>
+                        {canRemoveActive && (
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-icon-only"
+                            onClick={() => handleRemoveCompartment(activeComp.id)}
+                            title="Remove this compartment (must be empty)"
+                            style={{ width: '22px', height: '22px', padding: 0, marginLeft: 'auto' }}
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        )}
+                      </div>
+
+                      {showRowSets && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', padding: '0.4rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
+                          {availableSetNames.length === 0 ? (
+                            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>No sets in your collection yet.</span>
+                          ) : availableSetNames.map(setName => (
+                            <label key={setName} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.6rem' }}>
+                              <input type="checkbox" checked={activeComp.assignedSets.includes(setName)} onChange={() => handleToggleCompartmentSet(activeComp, setName)} />
+                              {setName}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* iPod Album Art Cover Flow Layout */}
+                    {activeCompCards.length === 0 ? (
+                      <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.8rem' }}>
+                        Empty row. Scan or file cards here!
+                      </div>
+                    ) : (
+                      <>
+                        <div className="box-coverflow-container">
+                          <button
+                            type="button"
+                            className="box-coverflow-nav left"
+                            disabled={activeCardIndex <= 0}
+                            onClick={() => setCoverflowActiveIndex(prev => Math.max(0, prev - 1))}
+                          >
+                            &larr;
+                          </button>
+
+                          <div className="box-coverflow-track">
+                            {activeCompCards.map((card, i) => {
+                              const offset = i - activeCardIndex;
+                              const absOffset = Math.abs(offset);
+
+                              let transform = '';
+                              let zIndex = 10 - absOffset;
+                              let opacity = 1;
+                              let filter = 'none';
+
+                              if (offset === 0) {
+                                transform = `translateX(0px) scale(1.22) translateZ(0px)`;
+                                opacity = 1;
+                              } else {
+                                const dir = offset > 0 ? 1 : -1;
+                                const translateX = dir * (85 + absOffset * 35);
+                                const rotateY = dir * -48;
+                                transform = `translateX(${translateX}px) scale(0.8) rotateY(${rotateY}deg)`;
+                                opacity = Math.max(0.12, 1 - absOffset * 0.22);
+                                filter = `brightness(${Math.max(0.35, 1 - absOffset * 0.18)})`;
+                              }
+
+                              return (
+                                <div
+                                  key={card.entry_id}
+                                  className={`box-coverflow-card ${offset === 0 ? 'active' : ''}`}
+                                  style={{
+                                    transform,
+                                    zIndex,
+                                    opacity,
+                                    filter,
+                                  }}
+                                  onClick={() => setCoverflowActiveIndex(i)}
+                                >
+                                  <img src={card.image_url} alt={card.name} />
+                                  <PrintingBadge printing={card.printing} />
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          <button
+                            type="button"
+                            className="box-coverflow-nav right"
+                            disabled={activeCardIndex >= activeCompCards.length - 1}
+                            onClick={() => setCoverflowActiveIndex(prev => Math.min(activeCompCards.length - 1, prev + 1))}
+                          >
+                            &rarr;
+                          </button>
+                        </div>
+
+                        {/* Focused Card Actions */}
+                        {activeCard && (
+                          <div className="focused-card-info-panel">
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                              <div>
+                                <strong style={{ fontSize: '0.85rem' }}>{activeCard.name}</strong>
+                                {activeCard.quantity > 1 && <span style={{ marginLeft: '0.4rem', fontSize: '0.7rem', background: 'rgba(255,255,255,0.1)', padding: '1px 5px', borderRadius: '3px' }}>x{activeCard.quantity}</span>}
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                                  {activeCard.set_name} • #{activeCard.set_number}
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                                {isCustom && compartments.length > 1 && (
+                                  <select
+                                    className="select-control"
+                                    value=""
+                                    onChange={(e) => { if (e.target.value) handleMoveCard(activeCard.entry_id, parseInt(e.target.value, 10)); }}
+                                    style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', width: '110px' }}
+                                  >
+                                    <option value="">Move to...</option>
+                                    {compartments.filter(t => t.id !== activeComp.id).map(t => (
+                                      <option key={t.id} value={t.id}>{t.display_label}</option>
+                                    ))}
+                                  </select>
+                                )}
+
+                                <button
+                                  type="button"
+                                  className="btn btn-danger"
+                                  onClick={() => handleDeleteCard(activeCard.entry_id)}
+                                  style={{ fontSize: '0.65rem', padding: '0.2rem 0.45rem' }}
+                                >
+                                  Remove Card
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          </>
         )}
       </div>
 
-      {/* Quick Add Card to Binder Slot Modal */}
-      {showQuickAdd && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999, padding: '1rem' }}>
-          <div className="glass-panel" style={{ maxWidth: '480px', width: '100%', padding: '1.75rem', position: 'relative' }}>
-            <button 
-              className="btn btn-secondary btn-icon-only" 
-              onClick={() => {
-                setShowQuickAdd(false);
-                setSelectedCard(null);
-                setSearchQuery('');
-                setSearchResults([]);
-              }} 
-              style={{ position: 'absolute', top: '1rem', right: '1rem', borderRadius: '50%' }}
-            >
-              <X size={16} />
+      {/* Unsorted queue */}
+      <div className="glass-panel location-unsorted-col" style={{ padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto' }}>
+        <strong style={{ fontSize: '0.85rem' }}>Unsorted ({unsortedCards.length})</strong>
+        <input
+          className="input-control" placeholder="Search..." value={unsortedSearch}
+          onChange={(e) => setUnsortedSearch(e.target.value)} style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
+        />
+        <select className="select-control" value={unsortedSort} onChange={(e) => setUnsortedSort(e.target.value)} style={{ fontSize: '0.7rem', padding: '0.3rem 0.5rem' }}>
+          <option value="scanned-desc">Scanned (Newest First)</option>
+          <option value="scanned-asc">Scanned (Oldest First)</option>
+          <option value="name-asc">A-Z</option>
+          <option value="price-desc">Value (High-Low)</option>
+          <option value="set-number">Set & Number</option>
+        </select>
+
+        {unsortedCards.length > 1 && (
+          <div style={{ display: 'flex', gap: '0.35rem' }}>
+            <select className="select-control" value={applyAllTarget} onChange={(e) => setApplyAllTarget(e.target.value)} style={{ fontSize: '0.65rem', padding: '0.25rem 0.4rem', flex: 1 }}>
+              <option value="">Apply all to...</option>
+              {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+            <button type="button" className="btn btn-primary" disabled={!applyAllTarget} onClick={handleApplyAll} style={{ fontSize: '0.65rem', padding: '0.25rem 0.5rem' }}>
+              Apply All
             </button>
-            
-            <h3 style={{ fontSize: '1.2rem', color: '#fff', marginBottom: '0.2rem' }}>Insert Card to Binder Slot</h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '1.25rem' }}>
-              Assigning card directly to <strong>Page {selectedPage}</strong>, <strong>Slot {targetSlot}</strong>.
-            </p>
+          </div>
+        )}
 
-            {/* Step 1: Search */}
-            {!selectedCard ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <form onSubmit={handleQuickSearch} style={{ display: 'flex', gap: '0.5rem' }}>
-                  <input 
-                    type="text" 
-                    className="input-control" 
-                    placeholder="Search card by name..." 
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    style={{ flex: 1 }}
-                  />
-                  <button type="submit" className="btn btn-primary" disabled={searching}>Search</button>
-                </form>
-
-                {searching ? (
-                  <div className="spinner" style={{ margin: '1rem auto' }}></div>
-                ) : searchResults.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '180px', overflowY: 'auto', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: 'var(--radius-sm)' }}>
-                    {searchResults.map(card => (
-                      <div 
-                        key={card.id} 
-                        className="search-row-item" 
-                        onClick={() => {
-                          setSelectedCard(card);
-                          setQuickPrice(0);
-                        }}
-                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.5rem', background: 'rgba(255,255,255,0.01)', borderRadius: '4px', border: '1px solid var(--border-glass)', cursor: 'pointer' }}
-                      >
-                        <img src={card.image_url} alt={card.name} style={{ width: '24px', height: '33px', objectFit: 'cover', borderRadius: '2px' }} />
-                        <span style={{ fontSize: '0.8rem', color: '#fff' }}>{card.name} ({card.set_name} • #{card.number})</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : searchQuery && (
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center' }}>No cards found.</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+          {unsortedCards.map(card => (
+            <div key={card.entry_id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.7rem', padding: '0.3rem 0', borderBottom: '1px solid var(--border-glass)' }}>
+              <div style={{ position: 'relative', width: '28px', flexShrink: 0, overflow: 'hidden', borderRadius: '3px', ...getCardRarityBorder(card.rarity) }}>
+                <img src={card.image_url} alt={card.name} style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', display: 'block' }} />
+                {getFoilOverlayClass(card.printing) && (
+                  <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '3px' }} />
                 )}
               </div>
-            ) : (
-              /* Step 2: Configure & Submit */
-              <form onSubmit={handleQuickAddSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                  <img src={selectedCard.image_url} alt={selectedCard.name} style={{ width: '60px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '4px' }} />
-                  <div>
-                    <div style={{ fontSize: '0.9rem', color: '#fff', fontWeight: 700 }}>{selectedCard.name}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{selectedCard.set_name} • #{selectedCard.number}</div>
-                    <button 
-                      type="button" 
-                      className="btn btn-secondary" 
-                      style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem', marginTop: '0.35rem' }}
-                      onClick={() => setSelectedCard(null)}
-                    >
-                      Change Card
-                    </button>
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
-                  <div className="form-group">
-                    <label>Quantity</label>
-                    <input 
-                      type="number" 
-                      className="input-control" 
-                      min="1" 
-                      value={quickQty} 
-                      onChange={(e) => setQuickQty(e.target.value)} 
-                      required 
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Purchase Price ($)</label>
-                    <input 
-                      type="number" 
-                      step="0.01" 
-                      className="input-control" 
-                      value={quickPrice} 
-                      onChange={(e) => setQuickPrice(e.target.value)} 
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
-                  <div className="form-group">
-                    <label>Condition</label>
-                    <select className="select-control" value={quickCond} onChange={(e) => setQuickCond(e.target.value)}>
-                      {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label>Printing</label>
-                    <select className="select-control" value={quickPrint} onChange={(e) => setQuickPrint(e.target.value)}>
-                      {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label>Language</label>
-                    <select className="select-control" value={quickLang} onChange={(e) => setQuickLang(e.target.value)}>
-                      {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
-                    </select>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                  <button 
-                    type="button" 
-                    className="btn btn-secondary" 
-                    style={{ flex: 1 }}
-                    onClick={() => {
-                      setShowQuickAdd(false);
-                      setSelectedCard(null);
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button type="submit" className="btn btn-primary" style={{ flex: 2 }}>Insert Card</button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
-
-      {activeMoveCard && (
-        <div style={{
-          position: 'fixed',
-          bottom: '1rem',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: 'calc(100% - 2rem)',
-          maxWidth: '480px',
-          background: 'rgba(20,18,16,0.95)',
-          backdropFilter: 'blur(10px)',
-          border: '1.5px solid var(--accent-red)',
-          borderRadius: 'var(--radius-md)',
-          padding: '0.6rem 0.8rem',
-          display: 'flex',
-          gap: '0.75rem',
-          alignItems: 'center',
-          boxShadow: '0 10px 30px rgba(0,0,0,0.8)',
-          zIndex: 99999
-        }}>
-          <div style={{ position: 'relative', width: '42px', aspectRatio: 0.718, flexShrink: 0, cursor: 'pointer' }} onClick={() => {
-            setSelectedCardFilter(activeMoveCard.name);
-            setActiveTab('collection');
-          }} title="Click to view in collection list">
-            <img src={activeMoveCard.image_url} alt={activeMoveCard.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }} />
-            {/* Shiny holo overlay */}
-            {activeMoveCard.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '4px' }} />}
-            {activeMoveCard.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '4px' }} />}
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div 
-              onClick={() => {
-                setSelectedCardFilter(activeMoveCard.name);
-                setActiveTab('collection');
-              }}
-              style={{ fontWeight: 800, color: '#fff', fontSize: '0.8rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
-              title="Click to view in collection list"
-            >
-              {getCardDisplayName(activeMoveCard.name, activeMoveCard.language)}
-            </div>
-            <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {activeMoveCard.set_name} • {activeMoveCard.condition}
-            </div>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '2px' }}>
-              <span style={{ fontSize: '0.65rem', color: 'var(--accent-yellow)', fontWeight: 700 }}>Val: ${(activeMoveCard.price_trend || 0).toFixed(2)}</span>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flexShrink: 0, alignItems: 'flex-end' }}>
-            {/* Qty Adjustment */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '3px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-glass)', borderRadius: '4px', padding: '1px 3px' }}>
-              <button
-                type="button"
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  if (activeMoveCard.quantity > 1) {
-                    await handleUpdateQuantity(activeMoveCard.entry_id, activeMoveCard.quantity - 1);
-                  }
-                }}
-                style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 900, padding: '0 4px', height: '18px', display: 'flex', alignItems: 'center' }}
+              <span
+                onClick={() => { setSelectedCardFilter(card.name); setActiveTab('collection'); }}
+                title="Find in Collection"
+                style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
               >
-                -
-              </button>
-              <span style={{ color: '#fff', fontSize: '0.7rem', fontWeight: 800, minWidth: '14px', textAlign: 'center' }}>{activeMoveCard.quantity}</span>
-              <button
-                type="button"
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  await handleUpdateQuantity(activeMoveCard.entry_id, activeMoveCard.quantity + 1);
-                }}
-                style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 900, padding: '0 4px', height: '18px', display: 'flex', alignItems: 'center' }}
+                {card.name}
+              </span>
+              <select
+                className="select-control" value=""
+                onChange={(e) => { if (e.target.value) handleFileCard(card.entry_id, parseInt(e.target.value, 10)); }}
+                style={{ fontSize: '0.6rem', padding: '0.15rem 0.25rem', maxWidth: '90px' }}
               >
-                +
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', gap: '4px' }}>
-              <button 
-                type="button" 
-                className="btn btn-secondary" 
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  await moveCardToLocation(activeMoveCard.entry_id, null, '', '');
-                  showToast(`Moved ${activeMoveCard.name} to Unsorted Pile`);
-                  setActiveMoveCard(null);
-                  onUpdate();
-                }}
-                style={{ fontSize: '0.65rem', padding: '2px 6px', minHeight: '20px', height: '20px' }}
-              >
-                Unsort
-              </button>
-              <button 
-                type="button" 
-                className="btn btn-danger" 
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  if (window.confirm(`Delete ${activeMoveCard.name} from collection?`)) {
-                    const res = await fetch(`/api/collection/${activeMoveCard.entry_id}`, { method: 'DELETE' });
-                    if (res.ok) {
-                      showToast(`Removed ${activeMoveCard.name}`);
-                      setActiveMoveCard(null);
-                      onUpdate();
-                    }
-                  }
-                }}
-                style={{ fontSize: '0.65rem', padding: '2px 6px', minHeight: '20px', height: '20px' }}
-              >
-                Delete
-              </button>
-              <button 
-                type="button" 
-                className="btn btn-secondary" 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setActiveMoveCard(null);
-                }}
-                style={{ fontSize: '0.65rem', padding: '2px 6px', minHeight: '20px', height: '20px' }}
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {isAdding && (
-        <div style={{
-          position: 'fixed',
-          top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.85)',
-          backdropFilter: 'blur(5px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 99999,
-          padding: '1rem'
-        }}>
-          <div className="glass-panel" style={{ width: '100%', maxWidth: '400px', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', border: '1px solid var(--accent-red)', boxShadow: '0 20px 40px rgba(0,0,0,0.8)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.4rem', marginBottom: '0.25rem' }}>
-              <span style={{ fontSize: '0.8rem', fontWeight: 850, color: '#fff', letterSpacing: '0.05em' }}>CREATE STORAGE CONTAINER</span>
-              <button 
-                type="button" 
-                onClick={() => setIsAdding(false)} 
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              >
-                <X size={16} />
-              </button>
-            </div>
-            
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Container Name</label>
-              <input 
-                type="text" 
-                className="input-control" 
-                placeholder="e.g. Vintage Binder, Deck Box A" 
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-              />
-            </div>
-
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Container Type</label>
-              <select 
-                className="select-control" 
-                value={type} 
-                onChange={(e) => setType(e.target.value)}
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-              >
-                <option value="Binder">Binder</option>
-                <option value="Box">Storage Box</option>
-                <option value="Toploader Box">Toploader Box</option>
-                <option value="Deck Box">Deck Box</option>
-                <option value="Tin / Case">Tin / Case</option>
-                <option value="Graded Slab Box">Graded Slab Box</option>
-                <option value="Toploader Binder">Toploader Binder</option>
-                <option value="Display Shelf / Stand">Display Shelf / Stand</option>
-                <option value="Other">Other</option>
+                <option value="">File to...</option>
+                {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
+              <button type="button" onClick={() => handleDeleteCard(card.entry_id)} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
+                <X size={12} />
+              </button>
             </div>
-
-            {/* Binder-specific fields */}
-            {(type === 'Binder' || type === 'Toploader Binder') && (
-              <>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Binder Pages</label>
-                  <input 
-                    type="number" 
-                    className="input-control" 
-                    value={maxPages} 
-                    onChange={(e) => setMaxPages(parseInt(e.target.value, 10) || 30)} 
-                    min="1" max="100"
-                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-                  />
-                </div>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Pockets Style</label>
-                  <select 
-                    className="select-control" 
-                    value={pageStyle} 
-                    onChange={(e) => setPageStyle(e.target.value)}
-                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-                  >
-                    <option value="2x2">2x2 Layout (4 pocket)</option>
-                    <option value="3x3">3x3 Layout (9 pocket)</option>
-                    <option value="3x4">3x4 Layout (12 pocket)</option>
-                  </select>
-                </div>
-              </>
-            )}
-
-            {/* Box-specific fields */}
-            {(type === 'Box' || type === 'Toploader Box' || type === 'Graded Slab Box' || type === 'Display Shelf / Stand') && (
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Rows / Shelves Count</label>
-                <input 
-                  type="number" 
-                  className="input-control" 
-                  value={maxRows} 
-                  onChange={(e) => setMaxRows(parseInt(e.target.value, 10) || 3)} 
-                  min="1" max="20"
-                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-                />
-              </div>
-            )}
-
-            {/* Capacity-specific fields */}
-            {type !== 'Binder' && type !== 'Toploader Binder' && type !== 'Box' && type !== 'Toploader Box' && type !== 'Graded Slab Box' && type !== 'Display Shelf / Stand' && (
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Max Capacity (Cards)</label>
-                <input 
-                  type="number" 
-                  className="input-control" 
-                  value={maxCapacity} 
-                  onChange={(e) => setMaxCapacity(parseInt(e.target.value, 10) || 1000)} 
-                  min="10"
-                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-                />
-              </div>
-            )}
-
-            {/* Persistent Preferred Sorting Method */}
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Sorting Style</label>
-              <select 
-                className="select-control" 
-                value={sortOrder} 
-                onChange={(e) => setSortOrder(e.target.value)}
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-              >
-                <option value="custom">Custom Sort</option>
-                <option value="name-asc">Alphabetical A-Z</option>
-                <option value="price-desc">Value (High-Low)</option>
-                <option value="set-number">Set & Number</option>
-                <option value="set-number-printing">Set, Number & Printing</option>
-                <option value="type-name">Energy Type</option>
-              </select>
-            </div>
-
-
-            {/* Advanced configurations accordion during creation */}
-            {renderAdvancedConfigAccordion(true, createAdvancedConfig, setCreateAdvancedConfig)}
-
-            <button 
-              type="button" 
-              className="btn btn-primary" 
-              onClick={handleCreateLocation} 
-              style={{ width: '100%', fontSize: '0.75rem', padding: '0.45rem', marginTop: '0.25rem' }}
-            >
-              Create
-            </button>
-          </div>
+          ))}
+          {unsortedCards.length === 0 && <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Nothing unsorted.</p>}
         </div>
-      )}
-
-      {/* Edit Location Modal Overlay */}
-      {isEditing && selectedLoc && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0,0,0,0.85)',
-          backdropFilter: 'blur(8px)',
-          zIndex: 1000,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '1rem'
-        }}>
-          <div className="glass-panel" style={{
-            width: '100%',
-            maxWidth: '350px',
-            padding: '1.25rem',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.8rem',
-            border: '1.5px solid var(--border-glass-hover)'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
-              <h3 style={{ fontSize: '0.95rem', fontWeight: 800, color: '#fff', margin: 0 }}>Edit Container</h3>
-              <button 
-                type="button" 
-                onClick={() => setIsEditing(false)} 
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Name</label>
-              <input 
-                type="text" 
-                className="input-control" 
-                value={editName} 
-                onChange={(e) => setEditName(e.target.value)} 
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-                placeholder="Container Name..."
-              />
-            </div>
-
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Container Type</label>
-              <select 
-                className="select-control" 
-                value={editType} 
-                onChange={(e) => setEditType(e.target.value)}
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-              >
-                <option value="Binder">Binder</option>
-                <option value="Box">Storage Box</option>
-                <option value="Toploader Box">Toploader Box</option>
-                <option value="Deck Box">Deck Box</option>
-                <option value="Tin / Case">Tin / Case</option>
-                <option value="Graded Slab Box">Graded Slab Box</option>
-                <option value="Toploader Binder">Toploader Binder</option>
-                <option value="Display Shelf / Stand">Display Shelf / Stand</option>
-                <option value="Other">Other</option>
-              </select>
-            </div>
-
-            {/* Binder-specific fields */}
-            {(editType === 'Binder' || editType === 'Toploader Binder') && (
-              <>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Binder Pages</label>
-                  <input 
-                    type="number" 
-                    className="input-control" 
-                    value={editMaxPages} 
-                    onChange={(e) => setEditMaxPages(parseInt(e.target.value, 10) || 30)} 
-                    min="1" max="100"
-                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-                  />
-                </div>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Pockets Style</label>
-                  <select 
-                    className="select-control" 
-                    value={editPageStyle} 
-                    onChange={(e) => setEditPageStyle(e.target.value)}
-                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-                  >
-                    <option value="2x2">2x2 Layout (4 pocket)</option>
-                    <option value="3x3">3x3 Layout (9 pocket)</option>
-                    <option value="3x4">3x4 Layout (12 pocket)</option>
-                  </select>
-                </div>
-              </>
-            )}
-
-            {/* Box-specific fields */}
-            {(editType === 'Box' || editType === 'Toploader Box' || editType === 'Graded Slab Box' || editType === 'Display Shelf / Stand') && (
-              <>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Rows / Shelves Count</label>
-                  <input 
-                    type="text"
-                    inputMode="numeric"
-                    className="input-control" 
-                    value={editMaxRowsStr}
-                    onChange={(e) => {
-                      const raw = e.target.value.replace(/[^0-9]/g, '');
-                      setEditMaxRowsStr(raw);
-                      const parsed = parseInt(raw, 10);
-                      if (!isNaN(parsed) && parsed >= 1 && parsed <= 20) setEditMaxRows(parsed);
-                    }}
-                    onBlur={() => {
-                      const parsed = parseInt(editMaxRowsStr, 10);
-                      if (isNaN(parsed) || parsed < 1) { setEditMaxRows(3); setEditMaxRowsStr('3'); }
-                      else if (parsed > 20) { setEditMaxRows(20); setEditMaxRowsStr('20'); }
-                    }}
-                    placeholder="e.g. 3"
-                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-                  />
-                </div>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Cards Per Row (Capacity)</label>
-                  <input 
-                    type="text"
-                    inputMode="numeric"
-                    className="input-control" 
-                    value={editRowCapacityStr}
-                    onChange={(e) => {
-                      const raw = e.target.value.replace(/[^0-9]/g, '');
-                      setEditRowCapacityStr(raw);
-                      const parsed = parseInt(raw, 10);
-                      if (!isNaN(parsed) && parsed >= 1) setEditRowCapacity(parsed);
-                    }}
-                    onBlur={() => {
-                      const parsed = parseInt(editRowCapacityStr, 10);
-                      if (isNaN(parsed) || parsed < 1) { setEditRowCapacity(40); setEditRowCapacityStr('40'); }
-                    }}
-                    placeholder="e.g. 40"
-                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-                  />
-                  <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginTop: '2px', display: 'block' }}>How many cards physically fit in each row</span>
-                </div>
-              </>
-            )}
-
-            {/* Assigned Sets: works for both Binders and Boxes — a binder
-                dedicated to one set is just as common as a box for one. */}
-            {(editType === 'Binder' || editType === 'Toploader Binder' || editType === 'Box' || editType === 'Toploader Box' || editType === 'Graded Slab Box' || editType === 'Display Shelf / Stand') && (
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Assigned Sets (one per line)</label>
-                <textarea
-                  className="input-control"
-                  value={editAssignedSets}
-                  onChange={(e) => setEditAssignedSets(e.target.value)}
-                  placeholder={"e.g.\nBase Set\nJungle\nFossil"}
-                  rows={4}
-                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.7rem', resize: 'vertical', minHeight: '70px', fontFamily: 'inherit', lineHeight: 1.4 }}
-                />
-                <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginTop: '2px', display: 'block' }}>
-                  When Assistant Mode looks for the best container for an unsorted card, a container listing that card's set here scores highest — shown as "💡 Best fit" with the reason "assigned to [set]". Leave blank to let it recommend based on what's already in each container instead.
-                </span>
-              </div>
-            )}
-
-            {/* Capacity-specific fields */}
-            {editType !== 'Binder' && editType !== 'Toploader Binder' && editType !== 'Box' && editType !== 'Toploader Box' && editType !== 'Graded Slab Box' && editType !== 'Display Shelf / Stand' && (
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Max Capacity (Cards)</label>
-                <input 
-                  type="number" 
-                  className="input-control" 
-                  value={editMaxCapacity} 
-                  onChange={(e) => setEditMaxCapacity(parseInt(e.target.value, 10) || 1000)} 
-                  min="10"
-                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-                />
-              </div>
-            )}
-
-            {/* Sorting style settings */}
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>Sorting Style (Preferred)</label>
-              <select 
-                className="select-control" 
-                value={editSortOrder} 
-                onChange={(e) => setEditSortOrder(e.target.value)}
-                style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}
-              >
-                <option value="custom">Custom Sort</option>
-                <option value="name-asc">Alphabetical A-Z</option>
-                <option value="price-desc">Value (High-Low)</option>
-                <option value="set-number">Set & Number</option>
-                <option value="set-number-printing">Set, Number & Printing</option>
-                <option value="type-name">Energy Type</option>
-              </select>
-            </div>
-
-
-            {/* Advanced configurations accordion during editing */}
-            {renderAdvancedConfigAccordion(false)}
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem' }}>
-              <button 
-                type="button" 
-                className="btn btn-primary" 
-                onClick={handleUpdateLocation} 
-                style={{ width: '100%', fontSize: '0.75rem', padding: '0.45rem' }}
-              >
-                Save Settings
-              </button>
-              <button 
-                type="button" 
-                className="btn btn-danger" 
-                onClick={() => handleDeleteLocation(selectedLoc.id, selectedLoc.name)} 
-                style={{ width: '100%', fontSize: '0.75rem', padding: '0.45rem' }}
-              >
-                Delete Container
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Stack Expansion Inspector Drawer */}
-      {inspectorStackSlot && (
-        <div className="stack-inspector-backdrop" onClick={() => setInspectorStackSlot(null)}>
-          <div className="stack-inspector-drawer" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
-              <div>
-                <h3 style={{ fontSize: '0.95rem', fontWeight: 850, color: '#fff', margin: 0 }}>
-                  Duplicate Stack Inspector (Slot #{inspectorStackSlot.slotNum})
-                </h3>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                  Page {inspectorStackSlot.pageNum} • {inspectorStackSlot.cards.length} copies of {inspectorStackSlot.cards[0]?.name}
-                </span>
-              </div>
-              <button 
-                type="button" 
-                className="btn btn-secondary btn-icon-only" 
-                onClick={() => setInspectorStackSlot(null)}
-                style={{ width: '28px', height: '28px', borderRadius: '50%', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="stack-inspector-list">
-              {inspectorStackSlot.cards.map((c, i) => {
-                const rarityStyle = getCardRarityBorder(c.rarity);
-                return (
-                  <div key={c.entry_id} className="stack-inspector-item">
-                    {/* Card Thumbnail */}
-                    <div style={{ position: 'relative', width: '50px', aspectRatio: 0.718, flexShrink: 0 }}>
-                      <img src={c.image_url} alt={c.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px', border: rarityStyle.border }} />
-                      {c.printing === 'Holofoil' && <div className="holo-shine-overlay" style={{ borderRadius: '4px' }} />}
-                      {c.printing === 'Reverse Holofoil' && <div className="reverse-holo-shine-overlay" style={{ borderRadius: '4px' }} />}
-                    </div>
-
-                    {/* Card details */}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                        <span style={{ fontWeight: 800, fontSize: '0.8rem', color: '#fff' }}>
-                          Copy #{i + 1} • {c.condition}
-                        </span>
-                        <span style={{
-                          fontSize: '0.55rem',
-                          ...getPrintingBadgeStyle(c.printing),
-                          padding: '1px 5px',
-                          borderRadius: '3px',
-                          fontWeight: 700,
-                          textTransform: 'uppercase'
-                        }}>
-                          {c.printing}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                        Value: <strong style={{ color: 'var(--accent-yellow)' }}>${(c.price_trend || 0).toFixed(2)}</strong> • Added: {c.added_at ? new Date(c.added_at).toLocaleDateString() : 'N/A'}
-                      </div>
-                    </div>
-
-                    {/* Actions */}
-                    <div style={{ display: 'flex', gap: '0.35rem' }}>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => {
-                          setActiveMoveCard(c);
-                          setInspectorStackSlot(null);
-                          showToast(`Selected copy for relocation.`);
-                        }}
-                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.65rem' }}
-                      >
-                        Move
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-danger btn-sm"
-                        onClick={async () => {
-                          if (window.confirm(`Delete this copy of ${c.name} from collection?`)) {
-                            const res = await fetch(`/api/collection/${c.entry_id}`, { method: 'DELETE' });
-                            if (res.ok) {
-                              showToast(`Removed copy`);
-                              const updatedCards = inspectorStackSlot.cards.filter(card => card.entry_id !== c.entry_id);
-                              if (updatedCards.length === 0) {
-                                setInspectorStackSlot(null);
-                              } else {
-                                setInspectorStackSlot({ ...inspectorStackSlot, cards: updatedCards });
-                              }
-                              onUpdate();
-                            }
-                          }
-                        }}
-                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.65rem' }}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
