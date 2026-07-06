@@ -337,6 +337,49 @@ async function initDb() {
     console.log(`Repaired ${brokenSeedImages.changes} card_cache row(s) with broken seed image URLs.`);
   }
 
+  // 8. The locations.type CHECK constraint was never updated when 'Toploader
+  // Binder', 'Graded Slab Box', and 'Display Shelf / Stand' were added as
+  // selectable container types in the UI — every attempt to create one of
+  // those three types has been failing with a raw SQLITE_CONSTRAINT error.
+  // SQLite can't ALTER a CHECK constraint in place, so rebuild the table.
+  const locationsTableDef = await get(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'locations'`);
+  if (locationsTableDef && !locationsTableDef.sql.includes('Toploader Binder')) {
+    console.log('Rebuilding locations table to allow all container types (Toploader Binder, Graded Slab Box, Display Shelf / Stand)...');
+    // collection.location_id references locations with ON DELETE SET NULL.
+    // With foreign_keys ON, SQLite treats DROP TABLE on the referenced table
+    // as deleting every row first, which fires that cascade and would null
+    // out location_id on every card ever placed in a container — confirmed
+    // by reproducing it in isolation before writing this. Must disable FK
+    // enforcement for the duration of the rebuild.
+    await run(`PRAGMA foreign_keys = OFF`);
+    try {
+      await run(`
+        CREATE TABLE locations_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          type TEXT CHECK(type IN ('Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other')) NOT NULL,
+          description TEXT,
+          sort_order TEXT DEFAULT 'name-asc',
+          max_pages INTEGER DEFAULT 30,
+          page_style TEXT DEFAULT '3x3',
+          max_rows INTEGER DEFAULT 3,
+          max_capacity INTEGER DEFAULT 1000,
+          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+          foil_sorting TEXT DEFAULT 'normals_first'
+        )
+      `);
+      await run(`
+        INSERT INTO locations_new (id, name, type, description, sort_order, max_pages, page_style, max_rows, max_capacity, user_id, foil_sorting)
+        SELECT id, name, type, description, sort_order, max_pages, page_style, max_rows, max_capacity, user_id, foil_sorting FROM locations
+      `);
+      await run(`DROP TABLE locations`);
+      await run(`ALTER TABLE locations_new RENAME TO locations`);
+    } finally {
+      await run(`PRAGMA foreign_keys = ON`);
+    }
+    console.log('locations table rebuilt successfully.');
+  }
+
   // --- SEED DATA & MIGRATION TO DEFAULT ADMIN ---
   const userCount = await get(`SELECT COUNT(*) as count FROM users`);
   let adminId = null;
