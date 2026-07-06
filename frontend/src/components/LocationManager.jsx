@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { MapPin, Plus, Trash2, Library, BookOpen, Layers, Archive, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { MapPin, Plus, Trash2, Library, BookOpen, Layers, Archive, ChevronLeft, ChevronRight, X, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
 import { sortCardsByOrder } from '../utils/cardSort';
@@ -2039,10 +2039,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     type="button"
                     className="btn btn-secondary btn-icon-only" 
                     onClick={() => setIsAdding(true)}
-                    style={{ width: '26px', height: '26px', padding: 0, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    style={{ width: '36px', height: '36px', padding: 0, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                     title="Create New Container"
                   >
-                    <Plus size={14} />
+                    <Plus size={18} />
                   </button>
 
                   <button 
@@ -2067,8 +2067,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       setEditAssignedSets((cfg.assignedSets || []).join('\n'));
                       setIsEditing(true);
                     }}
-                    style={{ width: '26px', height: '26px', padding: 0, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem' }}
-                    title="Edit Container Settings"
+                    style={{ width: '36px', height: '36px', padding: 0, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem' }}
+                    title="Edit Container Settings (rename, resize, or delete this container)"
                   >
                     ⚙️
                   </button>
@@ -2079,6 +2079,15 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   </span>
                 </div>
               </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-icon-only"
+                onClick={() => setIsRightSidebarOpen(prev => !prev)}
+                style={{ width: '32px', height: '32px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                title={isRightSidebarOpen ? 'Hide Unsorted Cards panel (more room for cards)' : 'Show Unsorted Cards panel'}
+              >
+                {isRightSidebarOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+              </button>
             </div>
 
             {selectedLoc.type === 'Binder' && viewMode === 'grid' && (
@@ -2201,10 +2210,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                     }
                                   }}
                                   disabled={isFirstPageSolo ? (leftPageNum === null) : (leftPageNum === 1)}
-                                  style={{ width: '20px', height: '20px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
+                                  style={{ width: '32px', height: '32px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
                                   title="Previous Page"
                                 >
-                                  <ChevronLeft size={12} />
+                                  <ChevronLeft size={16} />
                                 </button>
                               ) : (
                                 <button
@@ -2222,10 +2231,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                     (leftPageNum === null ? 2 > (selectedLoc.max_pages || 30) : (leftPageNum + 2 > (selectedLoc.max_pages || 30))) : 
                                     (leftPageNum + 1 >= (selectedLoc.max_pages || 30))
                                   }
-                                  style={{ width: '20px', height: '20px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
+                                  style={{ width: '32px', height: '32px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.04)' }}
                                   title="Next Page"
                                 >
-                                  <ChevronRight size={12} />
+                                  <ChevronRight size={16} />
                                 </button>
                               )}
                               <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
