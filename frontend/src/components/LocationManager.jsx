@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Trash2, X, Sparkles } from 'lucide-react';
+import { Plus, Trash2, X, Sparkles, MoreVertical, Settings, LayoutList, RefreshCw } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder } from '../utils/cardRarity';
+import CardInspectorModal from './CardInspectorModal';
 
 const CONTAINER_TYPES = ['Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other'];
 
@@ -73,18 +74,19 @@ function CompartmentCard({ compartment, cards, sortOrder, availableSets, onRenam
             {compartment.display_label}
           </strong>
         )}
-        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{compartment.count} / {compartment.capacity}</span>
         <button type="button" className="btn btn-secondary" onClick={() => setShowSets(s => !s)} style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem' }}>
           {compartment.assignedSets.length === 0 ? 'Any set' : compartment.assignedSets.length === 1 ? compartment.assignedSets[0] : `${compartment.assignedSets.length} sets`}
         </button>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-          Capacity
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.1rem', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+          <span>{compartment.count} /</span>
           <input
             type="number" min="1" className="input-control" defaultValue={compartment.capacity}
             onBlur={(e) => { const v = parseInt(e.target.value, 10); if (v > 0 && v !== compartment.capacity) onSetCapacity(v); }}
-            style={{ width: '60px', padding: '0.15rem 0.3rem', fontSize: '0.7rem' }}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+            title="Change capacity"
+            style={{ width: '40px', padding: '0 0.1rem', fontSize: '0.7rem', background: 'transparent', border: '1px solid transparent', color: 'inherit', textAlign: 'left' }}
           />
-        </label>
+        </div>
         {canRemove && (
           <button type="button" className="btn btn-danger btn-icon-only" onClick={onRemove} title="Remove this compartment (must be empty)" style={{ width: '26px', height: '26px', padding: 0, marginLeft: 'auto' }}>
             <Trash2 size={12} />
@@ -134,7 +136,7 @@ function CompartmentCard({ compartment, cards, sortOrder, availableSets, onRenam
                 <PrintingBadge printing={card.printing} />
               </div>
               <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {card.name} {card.quantity > 1 ? `x${card.quantity}` : ''}
+                {card.name}
               </span>
               {isCustom && moveTargets.length > 1 && (
                 <select
@@ -162,18 +164,57 @@ function CompartmentCard({ compartment, cards, sortOrder, availableSets, onRenam
 
 // One binder page: a fixed pocket grid (capacity slots, empty ones shown as
 // dashed placeholders) instead of CompartmentCard's variable-length row list.
-function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRename, onSetCapacity, onToggleSet, onRemove, onDeleteCard, onMoveCard, moveTargets, canRemove, recommendedSpot }) {
+function getSortCategory(card, sortOrder) {
+  if (!card) return null;
+  if (sortOrder.startsWith('name')) return card.name ? card.name.charAt(0).toUpperCase() : '?';
+  if (sortOrder.startsWith('set')) return card.set_name || 'Unknown Set';
+  if (sortOrder.startsWith('type')) {
+    let typeStr = 'Colorless';
+    if (card.types) {
+      try {
+        const t = typeof card.types === 'string' ? JSON.parse(card.types) : card.types;
+        if (t && t.length > 0) typeStr = t[0];
+      } catch (e) {}
+    }
+    return typeStr;
+  }
+  if (sortOrder.startsWith('price')) {
+    const p = card.price_trend || 0;
+    if (p >= 100) return '$100+';
+    if (p >= 50) return '$50+';
+    if (p >= 20) return '$20+';
+    if (p >= 10) return '$10+';
+    if (p >= 5) return '$5+';
+    if (p >= 1) return '$1+';
+    return '< $1';
+  }
+  return null;
+}
+
+function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRename, onSetCapacity, onToggleSet, onRemove, onDeleteCard, onMoveCard, moveTargets, canRemove, recommendedSpot, focusEntryId }) {
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState(compartment.display_label);
   const [showSets, setShowSets] = useState(false);
   const isCustom = sortOrder === 'custom';
   const cols = pocketColumns(compartment.capacity);
-  const slotCount = Math.max(compartment.capacity, cards.length);
-  const pockets = Array.from({ length: slotCount }, (_, i) => cards[i] || null);
+  const recIdx = recommendedSpot ? recommendedSpot.index : -1;
+  // Insert a translucent ghost of the card being filed at its recommended slot,
+  // so the page mirrors where the card physically goes and shifts the rest down.
+  const rendered = [...cards];
+  if (recIdx >= 0) {
+    rendered.splice(Math.min(recIdx, rendered.length), 0, {
+      __ghost: true,
+      image_url: recommendedSpot.image_url,
+      name: recommendedSpot.name,
+      set_name: recommendedSpot.set_name
+    });
+  }
+  const slotCount = Math.max(compartment.capacity, rendered.length);
+  const pockets = Array.from({ length: slotCount }, (_, i) => rendered[i] || null);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', height: '100%' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+      <div key={compartment.id} className="row-flash" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
         {editingLabel ? (
           <input
             autoFocus
@@ -189,16 +230,20 @@ function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRen
             {compartment.display_label}
           </strong>
         )}
-        <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{compartment.count}/{compartment.capacity}</span>
         <button type="button" className="btn btn-secondary" onClick={() => setShowSets(s => !s)} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem' }}>
           {compartment.assignedSets.length === 0 ? 'Any set' : compartment.assignedSets.length === 1 ? compartment.assignedSets[0] : `${compartment.assignedSets.length} sets`}
         </button>
-        <input
-          type="number" min="1" className="input-control" defaultValue={compartment.capacity}
-          onBlur={(e) => { const v = parseInt(e.target.value, 10); if (v > 0 && v !== compartment.capacity) onSetCapacity(v); }}
-          title="Pockets on this page"
-          style={{ width: '46px', padding: '0.1rem 0.25rem', fontSize: '0.65rem' }}
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.1rem', fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+          <span>{compartment.count} /</span>
+          <input
+            key={`cap-${compartment.capacity}`}
+            type="number" min="1" className="input-control" defaultValue={compartment.capacity}
+            onBlur={(e) => { const v = parseInt(e.target.value, 10); if (v > 0 && v !== compartment.capacity) onSetCapacity(v); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+            title="Change capacity"
+            style={{ width: '40px', padding: '0 0.1rem', fontSize: '0.65rem', background: 'transparent', border: '1px solid transparent', color: 'inherit', textAlign: 'left' }}
+          />
+        </div>
         {canRemove && (
           <button type="button" className="btn btn-danger btn-icon-only" onClick={onRemove} title="Remove this page (must be empty)" style={{ width: '22px', height: '22px', padding: 0, marginLeft: 'auto' }}>
             <Trash2 size={11} />
@@ -236,24 +281,34 @@ function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRen
 
       <div className="binder-pocket-grid" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
         {pockets.map((card, i) => {
-          const isRecSpot = recommendedSpot && recommendedSpot.index === i;
+          const prev = i > 0 ? pockets[i - 1] : null;
+          
+          const cat = getSortCategory(card, sortOrder);
+          const prevCat = getSortCategory(prev, sortOrder);
+          const categoryStart = cat && (!prev || prevCat !== cat);
+
+          if (card && card.__ghost) {
+            return (
+              <div key="rec-ghost" className={`binder-pocket recommended-ghost ${categoryStart ? 'set-start' : ''}`}>
+                {card.image_url && <img src={card.image_url} alt={card.name} style={{ opacity: 0.45 }} />}
+                <div className="rec-ghost-label">PLACE HERE</div>
+                {categoryStart && <div className="set-divider-label" title={cat}>{cat}</div>}
+              </div>
+            );
+          }
           return card ? (
-            <div
-              key={card.entry_id}
-              className={`binder-pocket ${isRecSpot ? 'recommended-highlight' : ''}`}
-              style={{
-                ...getCardRarityBorder(card.rarity),
-                ...(isRecSpot ? { outline: '3px solid #ffc107', outlineOffset: '2px', boxShadow: '0 0 10px #ffc107' } : {})
-              }}
-            >
-              <img src={card.image_url} alt={card.name} title={`${card.name}${card.quantity > 1 ? ` x${card.quantity}` : ''}`} />
+            <div key={card.entry_id} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <div
+                className={`binder-pocket ${categoryStart ? 'set-start' : ''} ${card.entry_id === focusEntryId ? 'focus-flash' : ''}`}
+                style={{ ...getCardRarityBorder(card.rarity) }}
+              >
+                <img src={card.image_url} alt={card.name} title={card.name} />
+
               {getFoilOverlayClass(card.printing) && (
                 <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />
               )}
               <PrintingBadge printing={card.printing} />
-              {isRecSpot && (
-                <div style={{ position: 'absolute', top: '-12px', left: '50%', transform: 'translateX(-50%)', background: '#ffc107', color: '#000', fontSize: '0.5rem', fontWeight: 'bold', padding: '1px 4px', borderRadius: '3px', zIndex: 10 }}>REC SPOT</div>
-              )}
+              {categoryStart && <div className="set-divider-label" title={cat}>{cat}</div>}
               <div className="binder-pocket-actions">
                 {isCustom && moveTargets.length > 1 && (
                   <select
@@ -271,14 +326,12 @@ function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRen
                 </button>
               </div>
             </div>
-          ) : (
-            <div
-              key={`empty-${i}`}
-              className={`binder-pocket-empty ${isRecSpot ? 'recommended-highlight' : ''}`}
-              style={isRecSpot ? { border: '2px dashed #ffc107', background: 'rgba(255, 193, 7, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ffc107', fontSize: '0.6rem', fontWeight: 'bold' } : {}}
-            >
-              {isRecSpot ? 'REC SPOT' : ''}
+            <div style={{ fontSize: '0.65rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+              #{i + 1} | {card.set_name} {card.number}
             </div>
+          </div>
+          ) : (
+            <div key={`empty-${i}`} className="binder-pocket-empty" />
           );
         })}
       </div>
@@ -286,15 +339,13 @@ function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRen
   );
 }
 
-function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, setSelectedCardFilter, setActiveTab }) {
+function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId, setFocusEntryId }) {
   const [locations, setLocations] = useState([]);
   const [activeLocationId, setActiveLocationId] = useState(null);
   const [compartments, setCompartments] = useState([]);
   const [allCards, setAllCards] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const [showNewestRecommendation, setShowNewestRecommendation] = useState(false);
-  const [newestRecommendation, setNewestRecommendation] = useState(null);
 
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
@@ -303,16 +354,26 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [showAutoAssignInfo, setShowAutoAssignInfo] = useState(false);
+  const [capacityUpdatePending, setCapacityUpdatePending] = useState(null);
+  const [showKebabMenu, setShowKebabMenu] = useState(false);
+  const [showRulesModal, setShowRulesModal] = useState(false);
+  const [ruleTypeDraft, setRuleTypeDraft] = useState('any');
+  const [ruleConfigDraft, setRuleConfigDraft] = useState('');
+
+  const [inspectorCard, setInspectorCard] = useState(null);
 
   const [unsortedSearch, setUnsortedSearch] = useState('');
   const [unsortedSort, setUnsortedSort] = useState('scanned-desc');
-  const [applyAllTarget, setApplyAllTarget] = useState('');
+
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
 
   const [filingMode, setFilingMode] = useState(false);
   const [filingQueue, setFilingQueue] = useState([]);
   const [filingIndex, setFilingIndex] = useState(0);
+  // Re-sort review reuses the filing UI, but the cards are already placed in the
+  // DB by /resort — so "Placed" just advances instead of issuing a move.
+  const [filingReadOnly, setFilingReadOnly] = useState(false);
 
   const newestScannedCard = useMemo(() => {
     const unsorted = allCards.filter(c => !c.location_id);
@@ -325,30 +386,21 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     })[0];
   }, [allCards]);
 
-  useEffect(() => {
-    let active = true;
-    if (!showNewestRecommendation || !activeLocationId || !newestScannedCard) {
-      setNewestRecommendation(null);
-      return;
-    }
-    const fetchRec = async () => {
-      try {
-        const res = await fetch(`/api/locations/${activeLocationId}/recommend?card_id=${newestScannedCard.card_id}&printing=${newestScannedCard.printing}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (active) setNewestRecommendation(data);
-        }
-      } catch (err) {
-        console.error('Failed to fetch recommendation', err);
-      }
-    };
-    fetchRec();
-    return () => { active = false; };
-  }, [showNewestRecommendation, activeLocationId, newestScannedCard]);
-
   const currentRecSpot = filingMode && filingQueue[filingIndex]?.recommended
     ? filingQueue[filingIndex].recommended
-    : (newestRecommendation && newestScannedCard ? newestRecommendation : null);
+    : null;
+
+  // The card currentRecSpot is about to place — used to render a ghost preview
+  // in the recommended pocket so the user sees where it physically goes.
+  const recCard = filingMode && filingQueue[filingIndex]?.recommended
+    ? filingQueue[filingIndex].entry
+    : null;
+
+  // Declared here (not lower) because the filing-mode effect below reads
+  // isBinderType in its dependency array, which is evaluated during render —
+  // a lower `const` would be in the temporal dead zone at that point.
+  const selectedLoc = locations.find(l => l.id === activeLocationId);
+  const isBinderType = selectedLoc?.type === 'Binder' || selectedLoc?.type === 'Toploader Binder';
 
   useEffect(() => {
     if (filingMode && filingQueue[filingIndex]?.recommended) {
@@ -488,8 +540,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLocationId]);
 
-  const selectedLoc = locations.find(l => l.id === activeLocationId);
-  const isBinderType = selectedLoc?.type === 'Binder' || selectedLoc?.type === 'Toploader Binder';
   const unsortedCards = useMemo(() => {
     let cards = allCards.filter(c => !c.location_id && (
       c.name.toLowerCase().includes(unsortedSearch.toLowerCase()) ||
@@ -509,8 +559,18 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       if (!map.has(c.compartment_id)) map.set(c.compartment_id, []);
       map.get(c.compartment_id).push(c);
     });
+    // Display order must match the container's scheme so the digital layout
+    // mirrors the physical binder/box (and the REC SPOT highlight, derived from
+    // slot index, points at the right pocket). Custom = manual order, honored
+    // via stored position. Structured schemes sort by the scheme directly, which
+    // is robust even if stored positions drifted before a re-sort.
+    const isCustom = !selectedLoc || selectedLoc.sort_order === 'custom';
+    map.forEach(cards => {
+      if (isCustom) cards.sort((a, b) => (a.position || 0) - (b.position || 0));
+      else sortCardsByOrder(cards, selectedLoc.sort_order, selectedLoc.foil_sorting);
+    });
     return map;
-  }, [allCards]);
+  }, [allCards, selectedLoc]);
 
   const handleCreateLocation = async (e) => {
     e.preventDefault();
@@ -602,9 +662,14 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     } catch (err) { console.error(err); showToast('Error renaming compartment.'); }
   };
 
-  const handleSetCapacity = async (compartmentId, capacity) => {
+  const handleSetCapacity = async (compartmentId, capacity, forceUpdateAll = false) => {
+    if (compartments.length > 1 && !forceUpdateAll && !capacityUpdatePending) {
+      setCapacityUpdatePending({ id: compartmentId, capacity });
+      return;
+    }
+    const updateAll = forceUpdateAll || false;
     try {
-      await fetch(`/api/compartments/${compartmentId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ capacity }) });
+      await fetch(`/api/compartments/${compartmentId}${updateAll ? '?updateAll=true' : ''}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ capacity }) });
       await fetchCompartments(activeLocationId);
     } catch (err) { console.error(err); showToast('Error resizing compartment.'); }
   };
@@ -659,7 +724,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ location_id: locationId })
       });
-      if (res.ok) { showToast('Card filed.'); await refreshAll(); onUpdate(); }
+      if (res.ok) {
+        const data = await res.json();
+        if (data.placement?.label) showToast(`Filed → ${data.placement.label}`);
+        else if (data.container_full) showToast('Container full — card left Unsorted.');
+        else showToast('Card filed.');
+        await refreshAll(); onUpdate();
+      }
       else showToast('Failed to file card.');
     } catch (err) { console.error(err); showToast('Error filing card.'); }
   };
@@ -680,31 +751,42 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   };
 
   const startFilingMode = async () => {
-    if (!applyAllTarget || unsortedCards.length === 0) return;
-    const targetLoc = locations.find(l => l.id === parseInt(applyAllTarget, 10));
-    if (!targetLoc) return;
-    
-    const sortedForFiling = sortCardsByOrder([...unsortedCards], targetLoc.sort_order, targetLoc.foil_sorting);
-
+    if (unsortedCards.length === 0 || !activeLocationId) return;
     try {
-      const res = await fetch(`/api/locations/${applyAllTarget}/recommend-batch`, {
+      const res = await fetch(`/api/locations/${activeLocationId}/recommend-batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entry_ids: sortedForFiling.map(c => c.entry_id) })
+        body: JSON.stringify({ entry_ids: unsortedCards.map(c => c.entry_id) })
       });
       if (res.ok) {
         const data = await res.json();
         setFilingQueue(data);
         setFilingIndex(0);
         setFilingMode(true);
-        setActiveLocationId(parseInt(applyAllTarget, 10));
+        if (data[0] && data[0].recommended && data[0].recommended.location_id) {
+          setActiveLocationId(data[0].recommended.location_id);
+        }
       } else {
         showToast('Failed to start filing mode.');
       }
     } catch (err) { console.error(err); showToast('Error starting filing mode.'); }
   };
 
+  // Advance the walkthrough one card; end it when past the last card.
+  const advanceFiling = () => {
+    if (filingIndex < filingQueue.length - 1) {
+      setFilingIndex(filingIndex + 1);
+    } else {
+      showToast(filingReadOnly ? 'Re-sort review complete!' : 'Filing complete!');
+      setFilingMode(false);
+      setFilingReadOnly(false);
+      onUpdate();
+    }
+  };
+
   const handleFilingPlaced = async (entryId, locationId, compartmentId, position) => {
+    // Re-sort review: the DB already reflects this placement, just advance.
+    if (filingReadOnly) { advanceFiling(); return; }
     try {
       const res = await fetch(`/api/collection/${entryId}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -712,68 +794,195 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       });
       if (res.ok) {
         await refreshAll();
-        if (filingIndex < filingQueue.length - 1) {
-          setFilingIndex(filingIndex + 1);
-        } else {
-          showToast('Filing complete!');
-          setFilingMode(false);
-          onUpdate();
-        }
+        advanceFiling();
       } else {
         showToast('Failed to file card.');
       }
     } catch (err) { console.error(err); showToast('Error filing card.'); }
   };
 
+  const startResort = async () => {
+    if (!selectedLoc) return;
+    if (!window.confirm(`Re-sort "${selectedLoc.name}" by its current order? This recomputes where every card goes and gives you a card-by-card guide to re-file them physically.`)) return;
+    try {
+      const res = await fetch(`/api/locations/${selectedLoc.id}/resort`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        await refreshAll();
+        if (!Array.isArray(data) || data.length === 0) { showToast('Nothing to re-sort.'); return; }
+        setFilingQueue(data);
+        setFilingIndex(0);
+        setFilingReadOnly(true);
+        setFilingMode(true);
+        setActiveLocationId(selectedLoc.id);
+        showToast('Container re-sorted. Follow the guide to re-file.');
+      } else {
+        showToast('Failed to re-sort container.');
+      }
+    } catch (err) { console.error(err); showToast('Error re-sorting container.'); }
+  };
+
   if (loading) return <div className="spinner" />;
 
   return (
     <div className="storage-workspace-grid">
-      {/* Locations sidebar */}
-      <div className="glass-panel location-sidebar-col" style={{ padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <strong style={{ fontSize: '0.85rem' }}>Storage</strong>
-          <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setShowCreate(s => !s)} style={{ width: '28px', height: '28px', padding: 0 }}>
-            <Plus size={14} />
-          </button>
+      {capacityUpdatePending && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <h3 style={{ margin: 0 }}>Sync Capacity</h3>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0 }}>
+              Do you want to apply the capacity <strong>{capacityUpdatePending.capacity}</strong> to ALL compartments in this container, or just this specific one?
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+              <button className="btn btn-secondary" onClick={() => { handleSetCapacity(capacityUpdatePending.id, capacityUpdatePending.capacity, false); setCapacityUpdatePending(null); }}>Just This One</button>
+              <button className="btn btn-primary" onClick={() => { handleSetCapacity(capacityUpdatePending.id, capacityUpdatePending.capacity, true); setCapacityUpdatePending(null); }}>Apply To All</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRulesModal && selectedLoc && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <h3 style={{ margin: 0 }}>Container Settings</h3>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Sort Method</label>
+              <select
+                className="select-control"
+                value={splitSortOrder(selectedLoc.sort_order).base}
+                onChange={(e) => {
+                  const foilAware = splitSortOrder(selectedLoc.sort_order).foilAware;
+                  handleUpdateLocationField('sort_order', e.target.value === 'set-number' && foilAware ? 'set-number-printing' : e.target.value);
+                }}
+              >
+                {SORT_BASES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            
+            {splitSortOrder(selectedLoc.sort_order).base === 'set-number' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem' }}>
+                  <input type="checkbox" checked={splitSortOrder(selectedLoc.sort_order).foilAware} onChange={(e) => handleUpdateLocationField('sort_order', e.target.checked ? 'set-number-printing' : 'set-number')} />
+                  Split by printing (foil-aware)
+                </label>
+                {splitSortOrder(selectedLoc.sort_order).foilAware && (
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    {[{ v: 'normals_first', label: 'Normals First' }, { v: 'foils_first', label: 'Foils First' }].map(opt => (
+                      <button
+                        key={opt.v}
+                        type="button"
+                        onClick={() => handleUpdateLocationField('foil_sorting', opt.v)}
+                        className={`btn ${(selectedLoc.foil_sorting || 'normals_first') === opt.v ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ fontSize: '0.6rem', padding: '0.2rem 0.4rem' }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', borderTop: '1px solid var(--border-glass)', paddingTop: '1rem' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Filing Rule</label>
+              <select className="select-control" value={ruleTypeDraft} onChange={(e) => setRuleTypeDraft(e.target.value)}>
+                <option value="any">Accept Any Card</option>
+                <option value="alphabetical_range">Alphabetical Range (e.g. A-M)</option>
+                <option value="specific_sets">Specific Sets</option>
+              </select>
+              
+              {ruleTypeDraft !== 'any' && (
+                <textarea 
+                  className="input-control" 
+                  style={{ height: '80px', fontSize: '0.75rem' }} 
+                  placeholder={ruleTypeDraft === 'alphabetical_range' ? '{"start": "a", "end": "m"}' : '{"sets": ["Base Set", "Jungle"]}'} 
+                  value={ruleConfigDraft} 
+                  onChange={(e) => setRuleConfigDraft(e.target.value)}
+                />
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+              <button className="btn btn-secondary" onClick={() => setShowRulesModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={() => {
+                let conf = ruleConfigDraft;
+                if (!conf && ruleTypeDraft === 'alphabetical_range') conf = '{"start":"a","end":"z"}';
+                if (!conf && ruleTypeDraft === 'specific_sets') conf = '{"sets":[]}';
+                handleUpdateLocationField('rule_type', ruleTypeDraft);
+                handleUpdateLocationField('rule_config', conf);
+                setShowRulesModal(false);
+              }}>Save Settings</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Selected location detail */}
+      <div className="glass-panel" style={{ padding: '0.9rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <select
+              className="select-control"
+              value={activeLocationId || ''}
+              onChange={(e) => setActiveLocationId(parseInt(e.target.value, 10))}
+              style={{ fontSize: '1rem', fontWeight: 'bold', padding: '0.3rem', width: 'auto', minWidth: '150px' }}
+            >
+              <option value="" disabled>Select Container...</option>
+              {locations.map(loc => <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>)}
+            </select>
+            <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setShowCreate(s => !s)} style={{ width: '28px', height: '28px', padding: 0 }} title="Create Container">
+              <Plus size={14} />
+            </button>
+            {selectedLoc && (
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{selectedLoc.total_cards || 0} cards • {compartments.length} compartments</span>
+            )}
+          </div>
+          
+          {selectedLoc && (
+            <div className="kebab-menu">
+              <button className="kebab-menu-button" onClick={() => setShowKebabMenu(s => !s)}>
+                <MoreVertical size={16} color="var(--text-secondary)" />
+              </button>
+              {showKebabMenu && (
+                <div className="kebab-dropdown">
+                  <button className="kebab-item" onClick={() => { setShowKebabMenu(false); handleAddCompartment(); }}>
+                    <Plus size={14} /> {isBinderType ? 'Add Page' : 'Add Compartment'}
+                  </button>
+                  <button className="kebab-item" onClick={() => { setShowKebabMenu(false); handleAutoAssignSets(); }}>
+                    <LayoutList size={14} /> Auto-Assign Sets
+                  </button>
+                  <button className="kebab-item" onClick={() => { setShowKebabMenu(false); startResort(); }} disabled={(selectedLoc.total_cards || 0) === 0}>
+                    <RefreshCw size={14} /> Re-sort Container
+                  </button>
+                  <button className="kebab-item" onClick={() => { 
+                    setShowKebabMenu(false); 
+                    setRuleTypeDraft(selectedLoc.rule_type || 'any'); 
+                    setRuleConfigDraft(selectedLoc.rule_config || '');
+                    setShowRulesModal(true); 
+                  }}>
+                    <Settings size={14} /> Container Settings
+                  </button>
+                  <button className="kebab-item" onClick={() => { setShowKebabMenu(false); handleDeleteLocation(selectedLoc.id, selectedLoc.name); }} style={{ color: 'var(--accent-red)' }}>
+                    <Trash2 size={14} /> Delete Container
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {showCreate && (
-          <form onSubmit={handleCreateLocation} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
+          <form onSubmit={handleCreateLocation} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
             <input className="input-control" placeholder="Name" value={newName} onChange={(e) => setNewName(e.target.value)} style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }} />
             <select className="select-control" value={newType} onChange={(e) => setNewType(e.target.value)} style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}>
               {CONTAINER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
             <button type="submit" className="btn btn-primary" style={{ fontSize: '0.75rem', padding: '0.35rem' }}>Create</button>
+            <button type="button" className="btn btn-secondary" onClick={() => setShowCreate(false)} style={{ fontSize: '0.75rem', padding: '0.35rem' }}>Cancel</button>
           </form>
         )}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-          {locations.map(loc => (
-            <div
-              key={loc.id}
-              onClick={() => setActiveLocationId(loc.id)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-                background: activeLocationId === loc.id ? 'rgba(255,71,71,0.1)' : 'transparent',
-                border: activeLocationId === loc.id ? '1px solid var(--accent-red)' : '1px solid transparent'
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{loc.name}</div>
-                <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{loc.type} • {loc.total_cards || 0} cards</div>
-              </div>
-              <button type="button" onClick={(e) => { e.stopPropagation(); handleDeleteLocation(loc.id, loc.name); }} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
-                <Trash2 size={12} />
-              </button>
-            </div>
-          ))}
-          {locations.length === 0 && <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>No storage containers yet.</p>}
-        </div>
-      </div>
-
-      {/* Selected location detail */}
-      <div className="glass-panel" style={{ padding: '0.9rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', overflowY: 'auto' }}>
         {!selectedLoc ? (
           <p style={{ color: 'var(--text-secondary)' }}>Select a container to view its compartments.</p>
         ) : (
@@ -823,101 +1032,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 )}
               </div>
             )}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
-              <div>
-                {editingName ? (
-                  <input
-                    autoFocus
-                    className="input-control"
-                    value={nameDraft}
-                    onChange={(e) => setNameDraft(e.target.value)}
-                    onBlur={() => { setEditingName(false); if (nameDraft.trim() && nameDraft.trim() !== selectedLoc.name) handleUpdateLocationField('name', nameDraft.trim()); }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') e.target.blur();
-                      if (e.key === 'Escape') setEditingName(false);
-                    }}
-                    style={{ fontSize: '1rem', padding: '0.25rem 0.5rem', fontWeight: 700 }}
-                  />
-                ) : (
-                  <h3
-                    onDoubleClick={() => { setNameDraft(selectedLoc.name); setEditingName(true); }}
-                    title="Double-click to rename"
-                    style={{ margin: 0, cursor: 'pointer' }}
-                  >
-                    {selectedLoc.name}
-                  </h3>
-                )}
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{selectedLoc.type} • {compartments.length} compartments</span>
-              </div>
 
-              {(() => {
-                const { base, foilAware } = splitSortOrder(selectedLoc.sort_order);
-                const setBase = (newBase) => handleUpdateLocationField('sort_order', newBase === 'set-number' && foilAware ? 'set-number-printing' : newBase);
-                const setFoilAware = (checked) => handleUpdateLocationField('sort_order', checked ? 'set-number-printing' : 'set-number');
-                return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', alignItems: 'flex-end' }}>
-                    <select
-                      className="select-control"
-                      value={base}
-                      onChange={(e) => setBase(e.target.value)}
-                      style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
-                    >
-                      {SORT_BASES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                    </select>
-                    {base === 'set-number' && (
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
-                        <input type="checkbox" checked={foilAware} onChange={(e) => setFoilAware(e.target.checked)} />
-                        Split by printing (foil-aware)
-                      </label>
-                    )}
-                    {base === 'set-number' && foilAware && (
-                      <div style={{ display: 'flex', gap: '4px' }}>
-                        {[{ v: 'normals_first', label: 'Normals First' }, { v: 'foils_first', label: 'Foils First' }].map(opt => (
-                          <button
-                            key={opt.v}
-                            type="button"
-                            onClick={() => handleUpdateLocationField('foil_sorting', opt.v)}
-                            className={`btn ${(selectedLoc.foil_sorting || 'normals_first') === opt.v ? 'btn-primary' : 'btn-secondary'}`}
-                            style={{ fontSize: '0.6rem', padding: '0.2rem 0.4rem' }}
-                          >
-                            {opt.label}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
-
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              <button type="button" className="btn btn-secondary" onClick={handleAddCompartment} style={{ fontSize: '0.7rem', padding: '0.35rem 0.6rem' }}>
-                {isBinderType ? '+ Add Page' : '+ Add Compartment'}
-              </button>
-              <button type="button" className="btn btn-secondary" onClick={handleAutoAssignSets} style={{ fontSize: '0.7rem', padding: '0.35rem 0.6rem' }}>
-                Auto-Assign Sets by Size
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowAutoAssignInfo(s => !s)}
-                title="What does this do?"
-                style={{ background: 'transparent', border: '1px solid var(--border-glass)', borderRadius: '50%', width: '20px', height: '20px', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.7rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              >
-                ?
-              </button>
-            </div>
-
-            {showAutoAssignInfo && (
-              <p style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', margin: 0, background: 'rgba(0,0,0,0.2)', padding: '0.5rem', borderRadius: 'var(--radius-sm)' }}>
-                Dedicates each compartment to a specific set instead of letting any card land anywhere. It counts how many cards you own in each set, figures out how many compartments each one needs to fit (based on compartment capacity), and assigns that many consecutive compartments to it — biggest sets first. Use it once to lay out a box/binder by set instead of doing it compartment-by-compartment; it overwrites current set assignments.
-              </p>
-            )}
-
-            {selectedLoc.sort_order !== 'custom' && (
-              <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', margin: 0 }}>
-                Sort order isn't Custom — cards file automatically by this scheme; manual per-card moves are disabled until you switch to Custom.
-              </p>
-            )}
 
             {isBinderType && compartments.length > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem', margin: '0.2rem 0', background: 'rgba(0,0,0,0.1)', padding: '0.4rem', borderRadius: 'var(--radius-sm)' }}>
@@ -969,8 +1084,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   onDeleteCard: handleDeleteCard,
                   onMoveCard: handleMoveCard,
                   recommendedSpot: currentRecSpot && currentRecSpot.compartment_id === c.id ? {
-                    index: Math.floor(currentRecSpot.position / 1000) - 1
-                  } : null
+                    index: Math.floor(currentRecSpot.position / 1000) - 1,
+                    image_url: recCard?.image_url,
+                    name: recCard?.name,
+                    set_name: recCard?.set_name
+                  } : null,
+                  focusEntryId
                 });
 
                 if (isMobile) {
@@ -1022,78 +1141,59 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
                 const isCustom = selectedLoc.sort_order === 'custom';
                 const canRemoveActive = compartments.length > 1 && activeCompCards.length === 0;
+                const activeCompIdx = compartments.findIndex(c => c.id === activeComp.id);
 
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    {/* Row Selection Header */}
-                    <div className="row-selection-grid">
-                      {compartments.map((c) => (
-                        <button
-                          key={c.id}
-                          type="button"
-                          className={`row-tab-btn ${activeCompartmentId === c.id ? 'active' : ''}`}
-                          onClick={() => {
-                            setActiveCompartmentId(c.id);
-                            setRowLabelDraft(c.display_label);
-                          }}
-                        >
-                          <span>{c.display_label}</span>
-                          <span style={{ fontSize: '0.65rem', opacity: 0.7 }}>({c.count}/{c.capacity})</span>
-                        </button>
-                      ))}
-                    </div>
 
-                    {/* Active Compartment Settings & Inspector */}
-                    <div className="glass-panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', border: '1px solid var(--border-glass)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        {editingRowLabel ? (
-                          <input
-                            autoFocus
-                            className="input-control"
-                            value={rowLabelDraft}
-                            onChange={(e) => setRowLabelDraft(e.target.value)}
-                            onBlur={() => { setEditingRowLabel(false); handleRenameCompartment(activeComp.id, rowLabelDraft); }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') { setEditingRowLabel(false); handleRenameCompartment(activeComp.id, rowLabelDraft); }
-                              if (e.key === 'Escape') setEditingRowLabel(false);
-                            }}
-                            style={{ padding: '0.15rem 0.4rem', fontSize: '0.75rem', width: '130px' }}
-                          />
-                        ) : (
-                          <strong
-                            onDoubleClick={() => { setRowLabelDraft(activeComp.display_label); setEditingRowLabel(true); }}
-                            title="Double-click to rename"
-                            style={{ cursor: 'pointer', fontSize: '0.8rem' }}
-                          >
-                            {activeComp.display_label}
-                          </strong>
-                        )}
-                        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{activeComp.count} / {activeComp.capacity} cards</span>
+                    <div key={activeComp.id} className="row-flash" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', background: 'rgba(0,0,0,0.1)', padding: '0.4rem 0.6rem', borderRadius: 'var(--radius-sm)', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <button className="btn btn-secondary btn-icon-only" disabled={activeCompIdx <= 0} onClick={() => setActiveCompartmentId(compartments[activeCompIdx - 1]?.id)} style={{ width: '24px', height: '24px', padding: 0 }}>
+                          &larr;
+                        </button>
+                        <select
+                          className="select-control"
+                          value={activeComp.id}
+                          onChange={(e) => setActiveCompartmentId(parseInt(e.target.value, 10))}
+                          style={{ fontSize: '0.8rem', padding: '0.2rem 0.5rem', width: 'auto', minWidth: '120px' }}
+                        >
+                          {compartments.map(c => <option key={c.id} value={c.id}>{c.display_label}</option>)}
+                        </select>
+                        <button className="btn btn-secondary btn-icon-only" disabled={activeCompIdx >= compartments.length - 1} onClick={() => setActiveCompartmentId(compartments[activeCompIdx + 1]?.id)} style={{ width: '24px', height: '24px', padding: 0 }}>
+                          &rarr;
+                        </button>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <button type="button" className="btn btn-secondary" onClick={() => setShowRowSets(s => !s)} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem' }}>
                           {activeComp.assignedSets.length === 0 ? 'Any set' : activeComp.assignedSets.length === 1 ? activeComp.assignedSets[0] : `${activeComp.assignedSets.length} sets`}
                         </button>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                          Capacity
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.1rem', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                          <span>{activeComp.count} /</span>
                           <input
+                            key={`cap-${activeComp.capacity}`}
                             type="number" min="1" className="input-control" defaultValue={activeComp.capacity}
                             onBlur={(e) => { const v = parseInt(e.target.value, 10); if (v > 0 && v !== activeComp.capacity) handleSetCapacity(activeComp.id, v); }}
-                            style={{ width: '50px', padding: '0.1rem 0.25rem', fontSize: '0.65rem' }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                            title="Change capacity"
+                            style={{ width: '40px', padding: '0 0.1rem', fontSize: '0.7rem', background: 'transparent', border: '1px solid transparent', color: 'inherit', textAlign: 'left' }}
                           />
-                        </label>
+                        </div>
                         {canRemoveActive && (
                           <button
                             type="button"
                             className="btn btn-danger btn-icon-only"
                             onClick={() => handleRemoveCompartment(activeComp.id)}
                             title="Remove this compartment (must be empty)"
-                            style={{ width: '22px', height: '22px', padding: 0, marginLeft: 'auto' }}
+                            style={{ width: '22px', height: '22px', padding: 0 }}
                           >
                             <Trash2 size={11} />
                           </button>
                         )}
                       </div>
+                    </div>
 
-                      {showRowSets && (
+                    {showRowSets && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.4rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
                           <select
                             className="select-control"
@@ -1120,8 +1220,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           )}
                         </div>
                       )}
-                    </div>
-
                     {/* iPod Album Art Cover Flow Layout */}
                     {activeCompCards.length === 0 ? (
                       <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.8rem' }}>
@@ -1144,44 +1242,66 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           </button>
 
                           <div className="box-coverflow-track">
-                            {activeCompCards.map((card, i) => {
-                              const offset = i - activeCardIndex;
-                              const absOffset = Math.abs(offset);
-
-                              const isRecSpot = currentRecSpot &&
-                                currentRecSpot.compartment_id === activeComp.id &&
-                                Math.floor(currentRecSpot.position / 1000) - 1 === i;
-
-                              let transform = '';
-                              let zIndex = 10 - absOffset;
-                              let opacity = 1;
-                              let filter = 'none';
-
-                              if (offset === 0) {
-                                transform = `translateX(0px) scale(1.22) translateZ(0px)`;
-                                opacity = 1;
-                              } else {
-                                const dir = offset > 0 ? 1 : -1;
-                                const translateX = dir * (85 + absOffset * 35);
-                                const rotateY = dir * -48;
-                                transform = `translateX(${translateX}px) scale(0.8) rotateY(${rotateY}deg)`;
-                                opacity = Math.max(0.12, 1 - absOffset * 0.22);
-                                filter = `brightness(${Math.max(0.35, 1 - absOffset * 0.18)})`;
+                            {(() => {
+                              const renderedCards = [...activeCompCards];
+                              let recSpotIndex = -1;
+                              if (currentRecSpot && currentRecSpot.compartment_id === activeComp.id) {
+                                recSpotIndex = Math.floor(currentRecSpot.position / 1000) - 1;
+                                renderedCards.splice(Math.min(recSpotIndex, renderedCards.length), 0, {
+                                  __ghost: true,
+                                  entry_id: 'rec-ghost',
+                                  image_url: recCard?.image_url,
+                                  name: recCard?.name,
+                                  set_name: recCard?.set_name,
+                                  printing: recCard?.printing || 'Normal'
+                                });
                               }
 
-                              return (
-                                <div
-                                  key={card.entry_id}
-                                  className={`box-coverflow-card ${offset === 0 ? 'active' : ''}`}
-                                  style={{
-                                    transform,
-                                    zIndex,
-                                    opacity,
-                                    filter,
-                                    ...(isRecSpot ? { outline: '3px solid #ffc107', outlineOffset: '2px', boxShadow: '0 0 10px #ffc107' } : {})
-                                  }}
-                                  onClick={() => setCoverflowActiveIndex(i)}
-                                >
+                              return renderedCards.map((card, i) => {
+                                const prev = i > 0 ? renderedCards[i - 1] : null;
+                                const cat = getSortCategory(card, selectedLoc.sort_order);
+                                const prevCat = getSortCategory(prev, selectedLoc.sort_order);
+                                const categoryStart = cat && (!prev || prevCat !== cat);
+
+                                const offset = i - activeCardIndex;
+                                const absOffset = Math.abs(offset);
+
+                                const isRecSpot = card.__ghost;
+
+                                let transform = '';
+                                let zIndex = 10 - absOffset;
+                                let opacity = 1;
+                                let filter = 'none';
+
+                                if (offset === 0) {
+                                  transform = `translateX(0px) scale(1.22) translateZ(0px)`;
+                                  opacity = 1;
+                                } else {
+                                  const dir = offset > 0 ? 1 : -1;
+                                  const translateX = dir * (85 + absOffset * 35);
+                                  const rotateY = dir * -48;
+                                  transform = `translateX(${translateX}px) scale(0.8) rotateY(${rotateY}deg)`;
+                                  opacity = Math.max(0.12, 1 - absOffset * 0.22);
+                                  filter = `brightness(${Math.max(0.35, 1 - absOffset * 0.18)})`;
+                                }
+
+                                return (
+                                  <div
+                                    key={card.entry_id}
+                                    className={`box-coverflow-card ${offset === 0 ? 'active' : ''} ${card.entry_id === focusEntryId ? 'focus-flash' : ''} ${isRecSpot ? 'recommended-ghost' : ''}`}
+                                    style={{
+                                      transform,
+                                      zIndex,
+                                      opacity: isRecSpot ? opacity * 0.8 : opacity,
+                                      filter
+                                    }}
+                                    onClick={() => setCoverflowActiveIndex(i)}
+                                  >
+                                  {categoryStart && (
+                                    <div style={{ position: 'absolute', top: '-24px', left: '50%', transform: 'translateX(-50%)', background: 'var(--bg-card)', border: '1px solid var(--border-glass)', borderBottom: 'none', padding: '2px 10px', borderRadius: '6px 6px 0 0', fontSize: '0.65rem', fontWeight: 'bold', whiteSpace: 'nowrap', zIndex: -1 }}>
+                                      {cat}
+                                    </div>
+                                  )}
                                   <img src={card.image_url} alt={card.name} />
                                   <PrintingBadge printing={card.printing} />
                                   {isRecSpot && (
@@ -1189,7 +1309,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                   )}
                                 </div>
                               );
-                            })}
+                            })})()}
                           </div>
 
                           <button
@@ -1203,14 +1323,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         </div>
 
                         {/* Focused Card Actions */}
-                        {activeCard && (
+                        {activeCard && !activeCard.__ghost && (
                           <div className="focused-card-info-panel">
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
                               <div>
-                                <strong style={{ fontSize: '0.85rem' }}>{activeCard.name}</strong>
-                                {activeCard.quantity > 1 && <span style={{ marginLeft: '0.4rem', fontSize: '0.7rem', background: 'rgba(255,255,255,0.1)', padding: '1px 5px', borderRadius: '3px' }}>x{activeCard.quantity}</span>}
+                                <strong style={{ fontSize: '0.85rem' }}>#{activeCardIndex + 1} | {activeCard.name}</strong>
                                 <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
-                                  {activeCard.set_name} • #{activeCard.set_number}
+                                  {activeCard.set_name} • #{activeCard.number} • {activeCard.printing}
                                 </div>
                               </div>
 
@@ -1256,11 +1375,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         {filingMode ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', height: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <strong style={{ fontSize: '0.85rem' }}>Filing Mode</strong>
-              <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setFilingMode(false); refreshAll(); }} style={{ padding: '0.2rem 0.5rem', width: 'auto', fontSize: '0.7rem' }}>
-                Cancel
+              <strong style={{ fontSize: '0.85rem' }}>{filingReadOnly ? 'Re-sort: Re-file Guide' : 'Filing Mode'}</strong>
+              <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setFilingMode(false); setFilingReadOnly(false); refreshAll(); }} style={{ padding: '0.2rem 0.5rem', width: 'auto', fontSize: '0.7rem' }}>
+                {filingReadOnly ? 'Done' : 'Cancel'}
               </button>
             </div>
+            {filingReadOnly && (
+              <div style={{ textAlign: 'center', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
+                Cards already re-sorted in the app. Move each physical card to the spot shown, then tap Next.
+              </div>
+            )}
             
             <div style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
               Card {filingIndex + 1} of {filingQueue.length}
@@ -1275,32 +1399,40 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{filingQueue[filingIndex].entry.set_name} • {filingQueue[filingIndex].entry.printing}</span>
                 </div>
                 
-                {filingQueue[filingIndex].recommended ? (
-                  <div style={{ background: 'rgba(255, 193, 7, 0.15)', border: '1px solid #ffc107', borderRadius: 'var(--radius-sm)', padding: '0.75rem', width: '100%', textAlign: 'center' }}>
-                    <div style={{ fontSize: '0.7rem', color: '#ffc107', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 'bold', marginBottom: '0.25rem' }}>Place Here</div>
-                    <strong style={{ fontSize: '0.9rem', color: '#fff' }}>{filingQueue[filingIndex].recommended.label}</strong>
-                  </div>
-                ) : (
-                  <div style={{ background: 'rgba(255, 71, 71, 0.15)', border: '1px solid #ff4747', borderRadius: 'var(--radius-sm)', padding: '0.75rem', width: '100%', textAlign: 'center' }}>
-                    <strong style={{ fontSize: '0.9rem', color: '#fff' }}>Container Full!</strong>
-                  </div>
-                )}
+                {(() => {
+                  const rec = filingQueue[filingIndex].recommended;
+                  if (!rec) {
+                    return (
+                      <div style={{ background: 'rgba(255, 71, 71, 0.15)', border: '1px solid #ff4747', borderRadius: 'var(--radius-sm)', padding: '0.75rem', width: '100%', textAlign: 'center' }}>
+                        <strong style={{ fontSize: '0.9rem', color: '#fff' }}>Container Full!</strong>
+                      </div>
+                    );
+                  }
+                  const targetLocName = locations.find(l => l.id === rec.location_id)?.name || 'Unknown Container';
+                  const targetCompName = compartments.find(c => c.id === rec.compartment_id)?.display_label || 'Unknown Spot';
+                  return (
+                    <div style={{ background: 'rgba(255, 193, 7, 0.15)', border: '1px solid #ffc107', borderRadius: 'var(--radius-sm)', padding: '0.75rem', width: '100%', textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.7rem', color: '#ffc107', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 'bold', marginBottom: '0.25rem' }}>Place Here</div>
+                      <strong style={{ fontSize: '0.9rem', color: '#fff' }}>{targetLocName} &rarr; {targetCompName}</strong>
+                    </div>
+                  );
+                })()}
                 
                 <div style={{ display: 'flex', gap: '0.5rem', width: '100%', marginTop: '0.5rem' }}>
-                  <button type="button" className="btn btn-secondary" onClick={() => { if (filingIndex + 1 < filingQueue.length) { setFilingIndex(prev => prev + 1); } else { showToast('Filing complete!'); setFilingMode(false); onUpdate(); } }} style={{ flex: 1, padding: '0.6rem' }}>
+                  <button type="button" className="btn btn-secondary" onClick={advanceFiling} style={{ flex: 1, padding: '0.6rem' }}>
                     Skip
                   </button>
-                  <button 
-                    type="button" 
-                    className="btn btn-primary" 
+                  <button
+                    type="button"
+                    className="btn btn-primary"
                     disabled={!filingQueue[filingIndex].recommended}
                     onClick={() => {
                       const rec = filingQueue[filingIndex].recommended;
                       handleFilingPlaced(filingQueue[filingIndex].entry.entry_id, rec.location_id, rec.compartment_id, rec.position);
-                    }} 
+                    }}
                     style={{ flex: 2, padding: '0.6rem', fontSize: '0.9rem', fontWeight: 'bold' }}
                   >
-                    Placed
+                    {filingReadOnly ? 'Next' : 'Placed'}
                   </button>
                 </div>
               </div>
@@ -1309,16 +1441,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         ) : (
           <>
             <strong style={{ fontSize: '0.85rem' }}>Unsorted ({unsortedCards.length})</strong>
-            {newestScannedCard && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.65rem', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-                <input
-                  type="checkbox"
-                  checked={showNewestRecommendation}
-                  onChange={(e) => setShowNewestRecommendation(e.target.checked)}
-                />
-                <span>Show recommended spot for newest scanned</span>
-              </label>
-            )}
+
             <input
               className="input-control" placeholder="Search..." value={unsortedSearch}
               onChange={(e) => setUnsortedSearch(e.target.value)} style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
@@ -1332,32 +1455,28 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             </select>
 
             {unsortedCards.length > 0 && (
-              <div style={{ display: 'flex', gap: '0.35rem' }}>
-                <select className="select-control" value={applyAllTarget} onChange={(e) => setApplyAllTarget(e.target.value)} style={{ fontSize: '0.65rem', padding: '0.25rem 0.4rem', flex: 1 }}>
-                  <option value="">Sort/Apply to...</option>
-                  {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select>
-                <button type="button" className="btn btn-secondary" disabled={!applyAllTarget} onClick={startFilingMode} style={{ fontSize: '0.65rem', padding: '0.25rem 0.5rem' }} title="Sort cards and file one by one">
-                  File Cards
-                </button>
-                <button type="button" className="btn btn-primary" disabled={!applyAllTarget} onClick={handleApplyAll} style={{ fontSize: '0.65rem', padding: '0.25rem 0.5rem' }}>
-                  Apply All
-                </button>
-              </div>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={startFilingMode}
+                style={{ fontSize: '0.8rem', padding: '0.5rem', width: '100%' }}
+              >
+                Sort & File Cards
+              </button>
             )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
               {unsortedCards.map(card => (
                 <div key={card.entry_id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.7rem', padding: '0.3rem 0', borderBottom: '1px solid var(--border-glass)' }}>
-                  <div style={{ position: 'relative', width: '28px', flexShrink: 0, overflow: 'hidden', borderRadius: '3px', ...getCardRarityBorder(card.rarity) }}>
+                  <div onClick={() => setInspectorCard(card)} title="View details" style={{ position: 'relative', width: '48px', flexShrink: 0, overflow: 'hidden', borderRadius: '3px', cursor: 'pointer', ...getCardRarityBorder(card.rarity) }}>
                     <img src={card.image_url} alt={card.name} style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', display: 'block' }} />
                     {getFoilOverlayClass(card.printing) && (
                       <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '3px' }} />
                     )}
                   </div>
                   <span
-                    onClick={() => { setSelectedCardFilter(card.name); setActiveTab('collection'); }}
-                    title="Find in Collection"
+                    onClick={() => setInspectorCard(card)}
+                    title="View details"
                     style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
                   >
                     {card.name}
@@ -1380,6 +1499,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           </>
         )}
       </div>
+
+      <CardInspectorModal
+        card={inspectorCard}
+        onClose={() => setInspectorCard(null)}
+        onUpdate={onUpdate}
+        showToast={showToast}
+      />
     </div>
   );
 }

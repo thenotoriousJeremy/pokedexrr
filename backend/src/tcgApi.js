@@ -311,11 +311,13 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
       cards = await fetchCardsFromAPI(queryStr);
     }
 
-    // 2. Number-only query: fallback if name was completely garbled or not provided
+    // 2. Number+set fallback: only when name was garbled but we have a set.
+    // Pure number-only search returns every set's card with that number (~50 junk
+    // results), so skip it — a number without a set almost never finds the right card.
     const isNumNoise = !cleanNumber || cleanNumber === '0' || cleanNumber === '00' || cleanNumber === '000';
-    if (cards.length === 0 && cleanNumber && !isNumNoise) {
-      const queryStr = `number:"${cleanNumber}"`;
-      console.log(`No name results. Querying TCG API (Number-only): q='${queryStr}'`);
+    if (cards.length === 0 && cleanNumber && !isNumNoise && setQuery) {
+      const queryStr = `number:"${cleanNumber}" AND (set.name:"${setQuery}" OR set.id:"${setQuery}")`;
+      console.log(`No name results. Querying TCG API (Number+set): q='${queryStr}'`);
       cards = await fetchCardsFromAPI(queryStr);
     }
     
@@ -452,6 +454,50 @@ async function getCardById(id, apiKey = '') {
   return null;
 }
 
+// Fetch every card in a set (dev seed helper). Caches them like any other
+// lookup and returns them formatted the same way getCardById does, so callers
+// get a large, varied pool (all types/rarities/trainers/energies in the set)
+// from one API request instead of N per-ID fetches.
+async function getCardsBySet(setId, apiKey = '') {
+  try {
+    console.log(`Querying Pokémon TCG API for full set: ${setId}`);
+    const response = await tcgClient.get('/cards', {
+      params: { q: `set.id:${setId}`, pageSize: 250, orderBy: 'number' },
+      headers: apiKey ? { 'X-Api-Key': apiKey } : {},
+      timeout: 30000 // full-set payloads are large; the 6s default isn't enough
+    });
+    const cards = response.data.data || [];
+    if (cards.length > 0) await cacheCards(cards);
+    return cards.map(card => {
+      const detailed = extractDetailedPrices(card);
+      return {
+        id: card.id,
+        name: card.name,
+        supertype: card.supertype,
+        subtypes: card.subtypes || [],
+        types: card.types || [],
+        rarity: card.rarity,
+        set_id: card.set ? card.set.id : '',
+        set_name: card.set ? card.set.name : '',
+        number: card.number,
+        image_url: card.images ? (card.images.small || card.images.large) : '',
+        price_trend: extractPrice(card),
+        price_normal: detailed.normal,
+        price_holofoil: detailed.holofoil,
+        price_reverse_holofoil: detailed.reverseHolofoil,
+        price_avg1: detailed.avg1,
+        price_avg7: detailed.avg7,
+        price_avg30: detailed.avg30
+      };
+    });
+  } catch (error) {
+    if (error.response && error.response.status === 429) throw new Error('RATE_LIMIT_EXCEEDED');
+    if (error.response && (error.response.status === 401 || error.response.status === 403)) throw new Error('INVALID_API_KEY');
+    console.error(`Error fetching set ${setId} from API:`, error.message);
+    return [];
+  }
+}
+
 // Periodic function to update pricing for all cards in the collection
 async function updateCollectionPrices() {
   if (!process.env.POKEMON_TCG_API_KEY) {
@@ -491,5 +537,6 @@ async function updateCollectionPrices() {
 module.exports = {
   searchCards,
   getCardById,
+  getCardsBySet,
   updateCollectionPrices
 };

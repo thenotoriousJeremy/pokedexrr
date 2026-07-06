@@ -118,6 +118,8 @@ async function initDb() {
       type TEXT CHECK(type IN ('Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other')) NOT NULL,
       sort_order TEXT DEFAULT 'name-asc',
       foil_sorting TEXT DEFAULT 'normals_first',
+      rule_type TEXT DEFAULT 'any',
+      rule_config TEXT,
       user_id INTEGER REFERENCES users(id) ON DELETE CASCADE
     )
   `);
@@ -252,6 +254,14 @@ async function initDb() {
   if (!locationsCols.some(c => c.name === 'foil_sorting')) {
     console.log('Adding foil_sorting column to locations table...');
     await run(`ALTER TABLE locations ADD COLUMN foil_sorting TEXT DEFAULT 'normals_first'`);
+  }
+  if (!locationsCols.some(c => c.name === 'rule_type')) {
+    console.log('Adding rule_type column to locations table...');
+    await run(`ALTER TABLE locations ADD COLUMN rule_type TEXT DEFAULT 'any'`);
+  }
+  if (!locationsCols.some(c => c.name === 'rule_config')) {
+    console.log('Adding rule_config column to locations table...');
+    await run(`ALTER TABLE locations ADD COLUMN rule_config TEXT`);
   }
 
   // Add position column to collection table if missing (ordering within a

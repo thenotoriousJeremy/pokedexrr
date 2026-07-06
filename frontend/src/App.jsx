@@ -167,7 +167,7 @@ function App() {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={setActiveTab} setSelectedCardFilter={setSelectedCardFilter} setSelectedLocationId={setSelectedLocationId} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={setActiveTab} setSelectedLocationId={setSelectedLocationId} onUpdate={triggerRefresh} showToast={showToast} />;
       case 'scanner':
         return <AddCards onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={setActiveTab} initialMode="scan" />;
       case 'search':
@@ -187,14 +187,12 @@ function App() {
         );
       case 'storage':
         return (
-          <LocationManager 
-            statsTrigger={statsTrigger} 
-            onUpdate={triggerRefresh} 
-            showToast={showToast} 
+          <LocationManager
+            statsTrigger={statsTrigger}
+            onUpdate={triggerRefresh}
+            showToast={showToast}
             selectedLocationId={selectedLocationId}
             setSelectedLocationId={setSelectedLocationId}
-            setSelectedCardFilter={setSelectedCardFilter}
-            setActiveTab={setActiveTab}
           />
         );
       case 'settings':
@@ -202,7 +200,7 @@ function App() {
       case 'admin':
         return <AdminPanel showToast={showToast} />;
       default:
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={setActiveTab} setSelectedCardFilter={setSelectedCardFilter} setSelectedLocationId={setSelectedLocationId} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={setActiveTab} setSelectedLocationId={setSelectedLocationId} onUpdate={triggerRefresh} showToast={showToast} />;
     }
   };
 

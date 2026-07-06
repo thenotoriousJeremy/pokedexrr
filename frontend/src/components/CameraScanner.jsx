@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, RefreshCw, AlertTriangle, Plus, X, Search, Settings, Library } from 'lucide-react';
+import { Camera, RefreshCw, AlertTriangle, Plus, X, Search, Settings, Library, MapPin } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
@@ -167,7 +167,13 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [printing, setPrinting] = useState('Normal');
   const [language, setLanguage] = useState('English');
   const [purchasePrice, setPurchasePrice] = useState(0);
-  const [locationId, setLocationId] = useState('');
+  // Target container for scanned cards — persisted so a bulk scanning session
+  // keeps filing into the same box/binder across visits.
+  const [locationId, setLocationIdState] = useState(() => localStorage.getItem('scanner_target_location') || '');
+  const setLocationId = (value) => {
+    setLocationIdState(value);
+    localStorage.setItem('scanner_target_location', value);
+  };
 
   // Keep a ref mirroring the latest stream so the unmount cleanup below (whose
   // closure is fixed from the first render) can always stop the live tracks.
@@ -189,7 +195,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       if (response.ok) {
         const data = await response.json();
         setLocations(data);
-        if (data.length > 0) {
+        // Drop a persisted target that no longer exists (container was deleted).
+        const stored = localStorage.getItem('scanner_target_location');
+        if (stored && !data.some(l => String(l.id) === stored)) {
           setLocationId('');
         }
       }
@@ -354,10 +362,18 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       });
 
       if (response.ok) {
-        showToast(`Auto-Added: ${card.name} (${card.set_name})`);
-        
+        const data = await response.json();
+        const placementLabel = data.placement?.label || null;
+        if (placementLabel) {
+          showToast(`Added: ${card.name} → ${placementLabel}`);
+        } else if (data.container_full) {
+          showToast(`Added: ${card.name} — container full, left Unsorted`);
+        } else {
+          showToast(`Auto-Added: ${card.name} (${card.set_name})`);
+        }
+
         // Append to recent scans history log
-        setRecentScans(prev => [card, ...prev].slice(0, 10));
+        setRecentScans(prev => [{ ...card, placementLabel }, ...prev].slice(0, 10));
         setScanFlash('success');
         setTimeout(() => setScanFlash(null), 1500);
 
@@ -754,10 +770,18 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       });
 
       if (response.ok) {
-        showToast(`${selectedCard.name} added to collection!`);
-        
+        const data = await response.json();
+        const placementLabel = data.placement?.label || null;
+        if (placementLabel) {
+          showToast(`Added: ${selectedCard.name} → ${placementLabel}`);
+        } else if (data.container_full) {
+          showToast(`Added: ${selectedCard.name} — container full, left Unsorted`);
+        } else {
+          showToast(`${selectedCard.name} added to collection!`);
+        }
+
         // Append to recent scans history
-        setRecentScans(prev => [selectedCard, ...prev].slice(0, 10));
+        setRecentScans(prev => [{ ...selectedCard, placementLabel }, ...prev].slice(0, 10));
 
         const rarity = (selectedCard.rarity || '').toLowerCase();
         const price = selectedCard.price_trend || 0;
@@ -782,6 +806,23 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
   return (
     <div className="scanner-container">
+
+      {/* Target container: where scanned cards get filed. The backend picks the
+          exact page/row slot and the add toast tells the user where to put the
+          physical card. */}
+      <div className="glass-panel" style={{ width: '100%', padding: '0.6rem 1rem', display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
+        <MapPin size={15} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
+        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Store scans in</span>
+        <select
+          className="select-control"
+          value={locationId}
+          onChange={(e) => setLocationId(e.target.value)}
+          style={{ flex: 1, fontSize: '0.8rem', padding: '0.3rem 0.5rem' }}
+        >
+          <option value="">Unsorted (file later)</option>
+          {locations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.type})</option>)}
+        </select>
+      </div>
 
       {/* Camera Window */}
       {!cameraActive ? (
@@ -1221,7 +1262,11 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                   <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent-yellow)' }}>${formatPrice(item.price_trend)}</div>
-                  <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--type-grass)', background: 'rgba(74, 222, 128, 0.1)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>Added</span>
+                  {item.placementLabel ? (
+                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#ffc107', background: 'rgba(255, 193, 7, 0.1)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>{item.placementLabel}</span>
+                  ) : (
+                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--type-grass)', background: 'rgba(74, 222, 128, 0.1)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>Unsorted</span>
+                  )}
                 </div>
               </div>
             ))}
@@ -1325,6 +1370,14 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                       <label>Language</label>
                       <select className="select-control" value={language} onChange={(e) => setLanguage(e.target.value)}>
                         {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="form-group quick-add-full-width" style={{ marginBottom: 0 }}>
+                      <label>Store In</label>
+                      <select className="select-control" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+                        <option value="">Unsorted (file later)</option>
+                        {locations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.type})</option>)}
                       </select>
                     </div>
                   </div>

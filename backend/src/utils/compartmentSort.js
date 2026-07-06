@@ -4,7 +4,7 @@
 // strings). Every container type (binder page, box row, deck box slot) is
 // just a compartment with a capacity, so one implementation covers all of
 // them instead of branching on location.type everywhere.
-const { resolveCardPrice } = require('./priceHelpers');
+const { resolveCardPrice, rebalanceCompartmentPositions } = require('./priceHelpers');
 
 const POKEMON_TYPE_ORDER = {
   'Grass': 1, 'Fire': 2, 'Water': 3, 'Lightning': 4, 'Psychic': 5,
@@ -61,6 +61,33 @@ function compartmentLabel(compartment, locationType) {
   if (compartment.label) return compartment.label;
   const isBinder = locationType === 'Binder' || locationType === 'Toploader Binder';
   return isBinder ? `Page ${compartment.idx}` : `Row ${compartment.idx}`;
+}
+
+function getSortCategory(card, sortOrder) {
+  if (!card || !sortOrder || sortOrder === 'custom') return null;
+  if (sortOrder.startsWith('name')) return card.name ? card.name.charAt(0).toUpperCase() : '?';
+  if (sortOrder.startsWith('set')) return card.set_name || 'Unknown Set';
+  if (sortOrder.startsWith('type')) {
+    let typeStr = 'Colorless';
+    if (card.types) {
+      try {
+        const t = typeof card.types === 'string' ? JSON.parse(card.types) : card.types;
+        if (t && t.length > 0) typeStr = t[0];
+      } catch (e) {}
+    }
+    return typeStr;
+  }
+  if (sortOrder.startsWith('price')) {
+    const p = card.price_trend || 0;
+    if (p >= 100) return '$100+';
+    if (p >= 50) return '$50+';
+    if (p >= 20) return '$20+';
+    if (p >= 10) return '$10+';
+    if (p >= 5) return '$5+';
+    if (p >= 1) return '$1+';
+    return '< $1';
+  }
+  return null;
 }
 
 // Loads every compartment for a location with its current card count and
@@ -167,25 +194,28 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
     return null;
   }
 
-  // Determine dynamic sets for each compartment
-  const dynamicSetsByCompId = new Map();
+  const cardCat = getSortCategory(cardMetadata, location.sort_order);
+
+  // Determine dynamic categories for each compartment based on sort_order
+  const dynamicCatsByCompId = new Map();
   compartments.forEach(c => {
     const compCards = cardsByCompId.get(c.id) || [];
-    const cardSets = compCards.map(card => card.set_name).filter(Boolean);
-    const combinedSets = new Set([...(c.assignedSets || []), ...cardSets]);
-    dynamicSetsByCompId.set(c.id, Array.from(combinedSets));
+    const cardCats = compCards.map(card => getSortCategory(card, location.sort_order)).filter(Boolean);
+    // Explicit assignedSets act as category overrides
+    const combinedCats = new Set([...(c.assignedSets || []), ...cardCats]);
+    dynamicCatsByCompId.set(c.id, Array.from(combinedCats));
   });
 
-  // Find compartments assigned to the card's set (explicitly or dynamically)
+  // Find compartments assigned to the card's category (explicitly or dynamically)
   const assignedComps = compartments.filter(c => {
-    const sets = dynamicSetsByCompId.get(c.id) || [];
-    return cardSet && sets.includes(cardSet);
+    const cats = dynamicCatsByCompId.get(c.id) || [];
+    return cardCat && cats.includes(cardCat);
   });
 
-  // Find unassigned/empty compartments (no explicit assignments and no cards from other sets)
+  // Find unassigned/empty compartments (no explicit assignments and no categorized cards)
   const unassignedComps = compartments.filter(c => {
-    const sets = dynamicSetsByCompId.get(c.id) || [];
-    return sets.length === 0;
+    const cats = dynamicCatsByCompId.get(c.id) || [];
+    return cats.length === 0;
   });
 
   // Build the eligible pool (assigned first, then unassigned as overflow)
@@ -213,11 +243,11 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
       return count < c.capacity;
     });
     const best = usableCandidates.find(c => {
-      const sets = dynamicSetsByCompId.get(c.id) || [];
-      return cardSet && sets.includes(cardSet);
+      const cats = dynamicCatsByCompId.get(c.id) || [];
+      return cardCat && cats.includes(cardCat);
     }) || usableCandidates.find(c => {
-      const sets = dynamicSetsByCompId.get(c.id) || [];
-      return sets.length === 0;
+      const cats = dynamicCatsByCompId.get(c.id) || [];
+      return cats.length === 0;
     }) || usableCandidates[0];
 
     if (!best) return null;
@@ -267,4 +297,31 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
   return null;
 }
 
-module.exports = { sortCards, compartmentLabel, loadCompartments, recommendSlot };
+// Renumbers a compartment's cards so stored `position` matches the container's
+// sort scheme (1000, 2000, ...). Incremental inserts assign a colliding
+// (seq+1)*1000 and the old position-only rebalance couldn't tell #10 from #50
+// on a tie; re-deriving from the scheme here keeps display order, the "place
+// here" label, and REC SPOT all in agreement. Custom order = manual, so it
+// falls back to honoring the existing position order.
+async function rebalanceCompartmentByScheme(db, compartmentId, userId, location) {
+  if (!compartmentId) return;
+  if (!location || location.sort_order === 'custom') {
+    return rebalanceCompartmentPositions(db, compartmentId, userId);
+  }
+  const cards = await db.all(`
+    SELECT c.id, c.printing, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
+           cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
+    FROM collection c JOIN card_cache cc ON c.card_id = cc.id
+    WHERE c.compartment_id = ? AND c.user_id = ?
+  `, [compartmentId, userId]);
+  cards.forEach(c => {
+    try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; }
+    c.price_trend = resolveCardPrice(c);
+  });
+  const sorted = sortCards(cards, location.sort_order, location.foil_sorting);
+  for (let i = 0; i < sorted.length; i++) {
+    await db.run(`UPDATE collection SET position = ? WHERE id = ?`, [(i + 1) * 1000, sorted[i].id]);
+  }
+}
+
+module.exports = { sortCards, compartmentLabel, loadCompartments, recommendSlot, rebalanceCompartmentByScheme };

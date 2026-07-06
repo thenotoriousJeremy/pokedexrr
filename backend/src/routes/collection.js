@@ -4,18 +4,22 @@ const tcgApi = require('../tcgApi');
 const { authenticateToken } = require('../middleware/auth');
 const {
   resolveCardPrice,
-  rebalanceCompartmentPositions,
   isVintageSet,
   parseSqliteUtc
 } = require('../utils/priceHelpers');
-const { recommendSlot, compartmentLabel, loadCompartments } = require('../utils/compartmentSort');
+const { recommendSlot, compartmentLabel, loadCompartments, rebalanceCompartmentByScheme, sortCards } = require('../utils/compartmentSort');
 
 // Default compartment plan by container type — used when a caller doesn't
 // specify one at creation time (see POST /locations).
 function defaultCompartmentPlan(type) {
-  if (type === 'Binder' || type === 'Toploader Binder') return { count: 30, capacity: 9 };
-  if (type === 'Box' || type === 'Toploader Box' || type === 'Graded Slab Box' || type === 'Display Shelf / Stand') return { count: 3, capacity: 40 };
+  if (type === 'Binder') return { count: 30, capacity: 9 };
+  if (type === 'Toploader Binder') return { count: 14, capacity: 4 };
+  if (type === 'Box') return { count: 3, capacity: 1000 };
+  if (type === 'Toploader Box') return { count: 1, capacity: 100 };
+  if (type === 'Graded Slab Box') return { count: 1, capacity: 40 };
+  if (type === 'Display Shelf / Stand') return { count: 1, capacity: 10 };
   if (type === 'Deck Box') return { count: 1, capacity: 60 };
+  if (type === 'Tin / Case') return { count: 1, capacity: 200 };
   return { count: 1, capacity: 1000 };
 }
 
@@ -30,19 +34,20 @@ async function resolveCompartmentAndPosition({ locationId, compartmentId, positi
     // deleted after the client picked it) — verify it still exists rather than
     // trusting it into an INSERT and blowing up the compartment_id FK.
     const compartment = await db.get(`
-      SELECT c.id FROM compartments c JOIN locations l ON c.location_id = l.id
+      SELECT c.id, c.idx, c.label, l.type as loc_type, l.name as loc_name FROM compartments c JOIN locations l ON c.location_id = l.id
       WHERE c.id = ? AND l.user_id = ?
     `, [compartmentId, userId]);
     if (!compartment) return { compartment_id: null, position: position !== undefined ? position : 0 };
-    if (position !== undefined) return { compartment_id: compartmentId, position };
+    const label = `${compartmentLabel(compartment, compartment.loc_type)} (in ${compartment.loc_name})`;
+    if (position !== undefined) return { compartment_id: compartmentId, position, label };
     const countRow = await db.get(`SELECT COUNT(*) as cnt FROM collection WHERE compartment_id = ? AND user_id = ?`, [compartmentId, userId]);
-    return { compartment_id: compartmentId, position: ((countRow?.cnt || 0) + 1) * 1000 };
+    return { compartment_id: compartmentId, position: ((countRow?.cnt || 0) + 1) * 1000, label };
   }
   if (!locationId) {
     return { compartment_id: null, position: position !== undefined ? position : 0 };
   }
 
-  const location = await db.get(`SELECT id, type, sort_order, foil_sorting, user_id FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
+  const location = await db.get(`SELECT id, name, type, sort_order, foil_sorting, user_id FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
   if (!location) return { compartment_id: null, position: 0 };
 
   const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity FROM card_cache WHERE id = ?`, [cardId]);
@@ -51,8 +56,27 @@ async function resolveCompartmentAndPosition({ locationId, compartmentId, positi
   try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
 
   const recommended = await recommendSlot(db, location, cardMetadata);
-  if (!recommended) return { compartment_id: null, position: 0 }; // container full — leave unsorted rather than error
-  return { compartment_id: recommended.compartment_id, position: recommended.position, location_id: recommended.location_id };
+  if (!recommended) return { compartment_id: null, position: 0, full: true }; // container full — leave unsorted rather than error
+  return { compartment_id: recommended.compartment_id, position: recommended.position, location_id: recommended.location_id, label: recommended.label };
+}
+
+// Builds the authoritative "where the card physically sits now" descriptor for
+// an entry, read AFTER any scheme rebalance so the label's Pos matches the real
+// slot (rebalance can shift a card from the seq recommendSlot first guessed).
+// Returns null when the card isn't in a compartment (Unsorted).
+async function describePlacement(db, entryId, userId) {
+  const row = await db.get(`
+    SELECT c.compartment_id, c.position, c.location_id,
+           cp.idx, cp.label, l.type as loc_type, l.name as loc_name
+    FROM collection c
+    JOIN compartments cp ON c.compartment_id = cp.id
+    JOIN locations l ON cp.location_id = l.id
+    WHERE c.id = ? AND c.user_id = ?
+  `, [entryId, userId]);
+  if (!row) return null;
+  const seq = Math.max(1, Math.round((row.position || 0) / 1000));
+  const label = `${compartmentLabel(row, row.loc_type)}, Pos ${seq} (in ${row.loc_name})`;
+  return { location_id: row.location_id, compartment_id: row.compartment_id, position: row.position, label };
 }
 
 const router = express.Router();
@@ -206,54 +230,20 @@ router.post('/collection', async (req, res) => {
     });
     const finalLocationId = resolved.location_id !== undefined && resolved.location_id !== null ? resolved.location_id : location_id;
 
-    // Check if an identical card entry already exists in this compartment to stack them
-    let existing = null;
-    let shouldStack = false;
-    if (resolved.compartment_id) {
-      const loc = await db.get(`
-        SELECT l.type FROM locations l
-        JOIN compartments c ON l.id = c.location_id
-        WHERE c.id = ?
-      `, [resolved.compartment_id]);
-      if (loc && (loc.type === 'Binder' || loc.type === 'Toploader Binder')) {
-        shouldStack = true;
-      }
-    }
-
-    if (shouldStack) {
-      existing = await db.get(`
-        SELECT id, quantity FROM collection
-        WHERE card_id = ? AND condition = ? AND printing = ? AND language = ?
-          AND location_id IS ? AND compartment_id IS ?
-          AND user_id = ? AND list_type = ? AND is_trade = ?
-      `, [
-        card_id,
-        condition,
-        printing,
-        language,
-        finalLocationId,
-        resolved.compartment_id,
-        req.user.id,
-        list_type,
-        is_trade ? 1 : 0
-      ]);
-    }
-
+    // No stacking logic here anymore
+    
+    // If the frontend passed quantity > 1, we insert them as separate unstacked rows
+    const numToInsert = quantity ? parseInt(quantity, 10) : 1;
     let lastInsertedId;
-    if (existing) {
-      const newQuantity = existing.quantity + parseInt(quantity, 10);
-      await db.run(`
-        UPDATE collection SET quantity = ? WHERE id = ?
-      `, [newQuantity, existing.id]);
-      lastInsertedId = existing.id;
-    } else {
+
+    for (let i = 0; i < numToInsert; i++) {
       const result = await db.run(`
         INSERT INTO collection
         (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, user_id, list_type, is_trade, position)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         card_id,
-        quantity,
+        1, // ALWAYS 1, never stacked
         condition,
         printing,
         language,
@@ -268,21 +258,10 @@ router.post('/collection', async (req, res) => {
       lastInsertedId = result.lastID;
 
       if (resolved.compartment_id) {
-        const neighbors = await db.all(`
-          SELECT position FROM collection
-          WHERE compartment_id = ? AND user_id = ? AND id != ?
-          ORDER BY ABS(position - ?) ASC LIMIT 2
-        `, [resolved.compartment_id, req.user.id, lastInsertedId, resolved.position]);
-        let needsRebalance = false;
-        for (const n of neighbors) {
-          if (Math.abs(n.position - resolved.position) < 0.001) {
-            needsRebalance = true;
-            break;
-          }
-        }
-        if (needsRebalance) {
-          await rebalanceCompartmentPositions(db, resolved.compartment_id, req.user.id);
-        }
+        // Re-derive positions from the container's scheme so the new card sorts
+        // into its true slot instead of colliding with whatever was there.
+        const rbLoc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [finalLocationId, req.user.id]);
+        await rebalanceCompartmentByScheme(db, resolved.compartment_id, req.user.id, rbLoc);
       }
     }
 
@@ -292,7 +271,16 @@ router.post('/collection', async (req, res) => {
       await db.run(`INSERT OR IGNORE INTO price_history (card_id, price) VALUES (?, ?)`, [card_id, cacheCard.price_trend]);
     }
 
-    res.status(201).json({ message: 'Card added to collection', id: lastInsertedId });
+    res.status(201).json({
+      message: 'Card added to collection',
+      id: lastInsertedId,
+      // Where the card physically landed, so the scanner can tell the user
+      // which page/row to put the real card in. null = left Unsorted.
+      placement: resolved.compartment_id
+        ? await describePlacement(db, lastInsertedId, req.user.id)
+        : null,
+      container_full: !!resolved.full
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to add card' });
@@ -336,6 +324,7 @@ router.put('/collection/:id', async (req, res) => {
     let finalLocId = entry.location_id;
     let finalCompartmentId = entry.compartment_id;
     let finalPosition = position;
+    let resolvedFull = false;
     const isMoving = compartment_id !== undefined || (location_id !== undefined && location_id !== entry.location_id);
     if (isMoving) {
       const resolved = await resolveCompartmentAndPosition({
@@ -349,6 +338,7 @@ router.put('/collection/:id', async (req, res) => {
       finalLocId = resolved.location_id !== undefined && resolved.location_id !== null ? resolved.location_id : (location_id !== undefined ? location_id : entry.location_id);
       finalCompartmentId = resolved.compartment_id;
       finalPosition = resolved.position;
+      resolvedFull = !!resolved.full;
     }
 
     // Compute what the final values would be after this update
@@ -359,46 +349,7 @@ router.put('/collection/:id', async (req, res) => {
     const finalListType = list_type !== undefined ? list_type : entry.list_type;
     const finalIsTrade = is_trade !== undefined ? (is_trade ? 1 : 0) : entry.is_trade;
 
-    // Check if there is an identical card entry already in that new compartment (except this row itself)
-    let existing = null;
-    let shouldStack = false;
-    if (finalCompartmentId) {
-      const loc = await db.get(`
-        SELECT l.type FROM locations l
-        JOIN compartments c ON l.id = c.location_id
-        WHERE c.id = ?
-      `, [finalCompartmentId]);
-      if (loc && (loc.type === 'Binder' || loc.type === 'Toploader Binder')) {
-        shouldStack = true;
-      }
-    }
-
-    if (shouldStack) {
-      existing = await db.get(`
-        SELECT id, quantity FROM collection
-        WHERE card_id = ? AND condition = ? AND printing = ? AND language = ?
-          AND location_id IS ? AND compartment_id IS ?
-          AND user_id = ? AND list_type = ? AND is_trade = ? AND id != ?
-      `, [
-        entry.card_id,
-        finalCondition,
-        finalPrinting,
-        finalLanguage,
-        finalLocId,
-        finalCompartmentId,
-        req.user.id,
-        finalListType,
-        finalIsTrade,
-        entry.id
-      ]);
-    }
-
-    if (existing) {
-      const newQuantity = existing.quantity + finalQuantity;
-      await db.run(`UPDATE collection SET quantity = ? WHERE id = ?`, [newQuantity, existing.id]);
-      await db.run(`DELETE FROM collection WHERE id = ? AND user_id = ?`, [entry.id, req.user.id]);
-      return res.json({ message: 'Collection entry merged/stacked successfully', id: existing.id });
-    }
+    // No stacking logic here anymore
 
     // Build dynamic UPDATE query based on passed values
     const fields = [];
@@ -424,24 +375,15 @@ router.put('/collection/:id', async (req, res) => {
     await db.run(`UPDATE collection SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, params);
 
     if (finalCompartmentId && finalPosition !== undefined) {
-      const neighbors = await db.all(`
-        SELECT position FROM collection
-        WHERE compartment_id = ? AND user_id = ? AND id != ?
-        ORDER BY ABS(position - ?) ASC LIMIT 2
-      `, [finalCompartmentId, req.user.id, id, finalPosition]);
-      let needsRebalance = false;
-      for (const n of neighbors) {
-        if (Math.abs(n.position - finalPosition) < 0.001) {
-          needsRebalance = true;
-          break;
-        }
-      }
-      if (needsRebalance) {
-        await rebalanceCompartmentPositions(db, finalCompartmentId, req.user.id);
-      }
+      // Re-derive the whole compartment from its scheme so the moved card sorts
+      // into its true slot instead of colliding with an existing position.
+      const rbLoc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [finalLocId, req.user.id]);
+      await rebalanceCompartmentByScheme(db, finalCompartmentId, req.user.id, rbLoc);
     }
 
-    res.json({ message: 'Collection entry updated successfully' });
+    // Read the real post-rebalance slot so the label's Pos is accurate.
+    const finalPlacement = isMoving && finalCompartmentId ? await describePlacement(db, id, req.user.id) : null;
+    res.json({ message: 'Collection entry updated successfully', placement: finalPlacement, container_full: resolvedFull });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to update entry' });
@@ -482,7 +424,7 @@ router.get('/locations', async (req, res) => {
 });
 
 router.post('/locations', async (req, res) => {
-  const { name, type, sort_order = 'name-asc', foil_sorting = 'normals_first', compartmentPlan } = req.body;
+  const { name, type, sort_order = 'name-asc', foil_sorting = 'normals_first', rule_type = 'any', rule_config, compartmentPlan } = req.body;
 
   if (!name || !type) {
     return res.status(400).json({ error: 'name and type are required' });
@@ -494,9 +436,9 @@ router.post('/locations', async (req, res) => {
     }
 
     const result = await db.run(`
-      INSERT INTO locations (name, type, sort_order, foil_sorting, user_id)
-      VALUES (?, ?, ?, ?, ?)
-    `, [name, type, sort_order, foil_sorting || 'normals_first', req.user.id]);
+      INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, rule_config, user_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [name, type, sort_order, foil_sorting || 'normals_first', rule_type, rule_config ? JSON.stringify(rule_config) : null, req.user.id]);
 
     const plan = compartmentPlan || defaultCompartmentPlan(type);
     await db.createCompartments(result.lastID, Math.max(1, parseInt(plan.count, 10) || 1), Math.max(1, parseInt(plan.capacity, 10) || 40));
@@ -510,7 +452,7 @@ router.post('/locations', async (req, res) => {
 
 router.put('/locations/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, type, sort_order, foil_sorting } = req.body;
+  const { name, type, sort_order, foil_sorting, rule_type, rule_config } = req.body;
   try {
     const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) {
@@ -530,9 +472,11 @@ router.put('/locations/:id', async (req, res) => {
         name = COALESCE(?, name),
         type = COALESCE(?, type),
         sort_order = COALESCE(?, sort_order),
-        foil_sorting = COALESCE(?, foil_sorting)
+        foil_sorting = COALESCE(?, foil_sorting),
+        rule_type = COALESCE(?, rule_type),
+        rule_config = COALESCE(?, rule_config)
       WHERE id = ? AND user_id = ?
-    `, [name, type, sort_order, foil_sorting, id, req.user.id]);
+    `, [name, type, sort_order, foil_sorting, rule_type, rule_config !== undefined ? JSON.stringify(rule_config) : undefined, id, req.user.id]);
     res.json({ message: 'Location updated' });
   } catch (error) {
     console.error(error);
@@ -598,17 +542,28 @@ router.patch('/compartments/:id', async (req, res) => {
   const { label, capacity } = req.body;
   try {
     const compartment = await db.get(`
-      SELECT cp.id FROM compartments cp
+      SELECT cp.id, cp.idx, cp.location_id FROM compartments cp
       JOIN locations l ON cp.location_id = l.id
       WHERE cp.id = ? AND l.user_id = ?
     `, [id, req.user.id]);
     if (!compartment) return res.status(404).json({ error: 'Compartment not found' });
 
-    await db.run(`UPDATE compartments SET label = COALESCE(?, label), capacity = COALESCE(?, capacity) WHERE id = ?`, [
-      label !== undefined ? label : null,
-      capacity !== undefined ? parseInt(capacity, 10) : null,
-      id
-    ]);
+    if (req.query.updateAll === 'true' && capacity !== undefined) {
+      await db.run(`UPDATE compartments SET capacity = COALESCE(?, capacity) WHERE location_id = ?`, [
+        parseInt(capacity, 10),
+        compartment.location_id
+      ]);
+      // Also update label if provided (only for this specific compartment)
+      if (label !== undefined) {
+        await db.run(`UPDATE compartments SET label = ? WHERE id = ?`, [label, id]);
+      }
+    } else {
+      await db.run(`UPDATE compartments SET label = COALESCE(?, label), capacity = COALESCE(?, capacity) WHERE id = ?`, [
+        label !== undefined ? label : null,
+        capacity !== undefined ? parseInt(capacity, 10) : null,
+        id
+      ]);
+    }
     res.json({ message: 'Compartment updated' });
   } catch (error) {
     console.error(error);
@@ -758,6 +713,98 @@ router.get('/locations/:id/recommend', async (req, res) => {
   }
 });
 
+function locationAcceptsCard(location, cardMetadata) {
+  if (!location.rule_type || location.rule_type === 'any') return true;
+  
+  try {
+    const config = location.rule_config ? JSON.parse(location.rule_config) : {};
+    if (location.rule_type === 'alphabetical_range') {
+      const start = (config.start || 'a').toLowerCase();
+      const end = (config.end || 'z').toLowerCase();
+      const firstLetter = (cardMetadata.name || '').charAt(0).toLowerCase();
+      if (!firstLetter) return false;
+      return firstLetter >= start && firstLetter <= end;
+    }
+    if (location.rule_type === 'specific_sets') {
+      const sets = config.sets || [];
+      return sets.includes(cardMetadata.set_name);
+    }
+  } catch (e) {
+    console.error('Failed to parse location rule_config', e);
+  }
+  return true;
+}
+
+router.post('/smart-recommend-batch', async (req, res) => {
+  const { entry_ids = [] } = req.body;
+  try {
+    if (!Array.isArray(entry_ids) || entry_ids.length === 0) return res.status(400).json({ error: 'entry_ids is required' });
+
+    const locations = await db.all(`SELECT * FROM locations WHERE user_id = ?`, [req.user.id]);
+    const stateByLocation = {};
+    for (const loc of locations) {
+      stateByLocation[loc.id] = {
+        workingCompartments: await loadCompartments(db, loc.id, req.user.id),
+        mockCards: []
+      };
+    }
+
+    const recommendations = [];
+
+    for (const entryId of entry_ids) {
+      const entry = await db.get(`
+        SELECT c.id as entry_id, c.card_id, c.printing, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url
+        FROM collection c
+        JOIN card_cache cc ON c.card_id = cc.id
+        WHERE c.id = ? AND c.user_id = ?
+      `, [entryId, req.user.id]);
+      if (!entry) continue;
+      try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
+
+      const targetLoc = locations.find(l => locationAcceptsCard(l, entry));
+      if (!targetLoc) {
+        recommendations.push({ entry, recommended: null, reason: 'No matching location rules' });
+        continue;
+      }
+
+      const state = stateByLocation[targetLoc.id];
+      const recommended = await recommendSlot(db, targetLoc, entry, state.workingCompartments, state.mockCards);
+      
+      if (!recommended) {
+        recommendations.push({ entry, recommended: null, reason: 'Container full' });
+        continue;
+      }
+      
+      recommendations.push({ entry, recommended });
+
+      state.workingCompartments = state.workingCompartments.map(c =>
+        c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
+      );
+      
+      state.mockCards.push({
+        entry_id: entry.entry_id,
+        compartment_id: recommended.compartment_id,
+        printing: entry.printing,
+        name: entry.name,
+        supertype: entry.supertype,
+        types: JSON.stringify(entry.types),
+        rarity: entry.rarity,
+        set_name: entry.set_name,
+        number: entry.number,
+        price_trend: entry.price_trend,
+        price_normal: entry.price_normal,
+        price_holofoil: entry.price_holofoil,
+        price_reverse_holofoil: entry.price_reverse_holofoil
+      });
+    }
+
+    res.json(recommendations);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to compute smart batch recommendations' });
+  }
+});
+
 // Computes placement for a batch of unsorted cards, passing each placed card
 // into the next iteration's mock state so they order correctly relative to each other.
 router.post('/locations/:id/recommend-batch', async (req, res) => {
@@ -863,6 +910,70 @@ router.post('/locations/:id/apply-all', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to apply batch' });
+  }
+});
+
+// Re-sort an entire container: recompute every card's compartment+position from
+// the container's scheme, fixing cross-compartment drift accumulated by
+// incremental adds. Physical repair — returns the full card-by-card order so
+// the client can walk the user through re-filing. Cards are cleared first, then
+// re-placed in scheme order so each lands at its true slot.
+router.post('/locations/:id/resort', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+
+    const cards = await db.all(`
+      SELECT c.id as entry_id, c.card_id, c.printing, c.quantity,
+             cc.name, cc.set_name, cc.number, cc.types, cc.rarity, cc.supertype, cc.image_url,
+             cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
+      FROM collection c
+      JOIN card_cache cc ON c.card_id = cc.id
+      WHERE c.location_id = ? AND c.user_id = ?
+    `, [id, req.user.id]);
+    cards.forEach(c => { try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; } });
+
+    if (cards.length === 0) return res.json([]);
+
+    // Clear placements so recommendSlot plans against an empty container.
+    await db.run(`UPDATE collection SET compartment_id = NULL, position = 0 WHERE location_id = ? AND user_id = ?`, [id, req.user.id]);
+
+    const ordered = sortCards(cards, location.sort_order, location.foil_sorting);
+
+    let workingCompartments = await loadCompartments(db, id, req.user.id);
+    const mockCards = [];
+    const results = [];
+
+    for (const entry of ordered) {
+      const recommended = await recommendSlot(db, location, entry, workingCompartments, mockCards);
+      if (!recommended) { results.push({ entry, recommended: null }); continue; }
+
+      const finalLoc = recommended.location_id || Number(id);
+      await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [
+        finalLoc, recommended.compartment_id, recommended.position, entry.entry_id, req.user.id
+      ]);
+      results.push({ entry, recommended });
+
+      // Only track capacity in-memory for slots inside THIS container; overflow
+      // into another location is placed straight to the DB and not re-counted.
+      if (finalLoc === Number(id)) {
+        workingCompartments = workingCompartments.map(c =>
+          c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
+        );
+        mockCards.push({
+          entry_id: entry.entry_id, compartment_id: recommended.compartment_id, printing: entry.printing,
+          name: entry.name, supertype: entry.supertype, types: JSON.stringify(entry.types), rarity: entry.rarity,
+          set_name: entry.set_name, number: entry.number, price_trend: entry.price_trend,
+          price_normal: entry.price_normal, price_holofoil: entry.price_holofoil, price_reverse_holofoil: entry.price_reverse_holofoil
+        });
+      }
+    }
+
+    res.json(results);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to re-sort container' });
   }
 });
 

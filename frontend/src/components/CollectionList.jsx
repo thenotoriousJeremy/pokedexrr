@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Search, Download, Trash2, Edit2, X, MapPin, LayoutGrid, List, Database, Upload, ChevronDown } from 'lucide-react';
+import { Search, Download, Trash2, Edit2, LayoutGrid, List, Database, Upload, ChevronDown } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
-import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
+import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
 import { translateJapaneseName } from '../utils/pokemonTranslation';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
-import PriceHistoryChart from './PriceHistoryChart';
 import DeckBuilder from './DeckBuilder';
+import CardInspectorModal from './CardInspectorModal';
 
 function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCardFilter, setSelectedCardFilter }) {
   const [collection, setCollection] = useState([]);
@@ -25,6 +25,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
   // UX view state
   const [viewMode, setViewMode] = useState('gallery'); // 'gallery' or 'list'
   const [inspectorCard, setInspectorCard] = useState(null);
+  const [inspectorStartEdit, setInspectorStartEdit] = useState(false);
   const [subTab, setSubTab] = useState('collection'); // 'collection', 'wishlist', 'trade'
 
   // Search & Filter state
@@ -42,17 +43,6 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
   const [stackByCondition, setStackByCondition] = useState(false);
   const [stackByPrinting, setStackByPrinting] = useState(false);
   
-  // Edit Modal State
-  const [editingItem, setEditingItem] = useState(null);
-  const [isEditOpen, setIsEditOpen] = useState(false);
-  const [editQuantity, setEditQuantity] = useState(1);
-  const [editCondition, setEditCondition] = useState('Near Mint');
-  const [editPrinting, setEditPrinting] = useState('Normal');
-  const [editLanguage, setEditLanguage] = useState('English');
-  const [editPurchasePrice, setEditPurchasePrice] = useState(0);
-  const [editLocationId, setEditLocationId] = useState('');
-  const [editIsTrade, setEditIsTrade] = useState(0);
-  const [editListType, setEditListType] = useState('collection');
   const [showDataMenu, setShowDataMenu] = useState(false);
 
   const handleImportFile = async (e) => {
@@ -160,54 +150,8 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
   };
 
   const openEdit = (item) => {
-    setEditingItem(item);
-    setEditQuantity(item.quantity);
-    setEditCondition(item.condition);
-    setEditPrinting(item.printing);
-    setEditLanguage(item.language);
-    setEditPurchasePrice(item.purchase_price || 0);
-    setEditLocationId(item.location_id || '');
-    setEditIsTrade(item.is_trade || 0);
-    setEditListType(item.list_type || 'collection');
-    setIsEditOpen(true);
-  };
-
-  const closeEdit = () => {
-    setIsEditOpen(false);
-    setEditingItem(null);
-  };
-
-  const handleEditSubmit = async (e) => {
-    e.preventDefault();
-    if (!editingItem) return;
-
-    try {
-      const response = await fetch(`/api/collection/${editingItem.entry_id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          quantity: parseInt(editQuantity, 10),
-          condition: editCondition,
-          printing: editPrinting,
-          language: editLanguage,
-          purchase_price: parseFloat(editPurchasePrice) || 0,
-          location_id: editLocationId ? parseInt(editLocationId, 10) : null,
-          list_type: editListType,
-          is_trade: editIsTrade
-        })
-      });
-
-      if (response.ok) {
-        showToast('Card entry updated.');
-        onUpdate();
-        closeEdit();
-      } else {
-        showToast('Failed to update card.');
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Error editing card.');
-    }
+    setInspectorCard(item);
+    setInspectorStartEdit(true);
   };
 
   // Extract unique rarities from collection for filters
@@ -495,7 +439,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
             const rarityStyle = getCardRarityBorder(item.rarity);
 
             return (
-              <div key={item.entry_id} className="tcg-card tilt-card-wrapper" onClick={() => setInspectorCard(item)}>
+              <div key={item.entry_id} className="tcg-card tilt-card-wrapper" onClick={() => { setInspectorCard(item); setInspectorStartEdit(false); }}>
                 <div className="tcg-card-inner" style={rarityStyle}>
                   <img src={item.image_url} alt={item.name} className="tcg-card-image" loading="lazy" />
                   {getFoilOverlayClass(item.printing) && (
@@ -632,293 +576,14 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
         </div>
       )}
 
-      {/* Drawer Overlay for Editing Collection Item */}
-      <div className={`drawer-backdrop ${isEditOpen ? 'open' : ''}`} onClick={closeEdit}></div>
-      <div className={`quick-add-drawer ${isEditOpen ? 'open' : ''}`}>
-        {editingItem && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <h3 style={{ color: '#fff', fontSize: '1.25rem' }}>Edit Collection Card</h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{editingItem.name} ({editingItem.set_name} • #{editingItem.number})</p>
-              </div>
-              <button className="btn btn-secondary btn-icon-only" onClick={closeEdit} style={{ borderRadius: '50%' }}>
-                <X size={18} />
-              </button>
-            </div>
-
-            <form onSubmit={handleEditSubmit}>
-              {editListType === 'wishlist' ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(74,222,128,0.1)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(74,222,128,0.2)', marginBottom: '1.25rem' }}>
-                  <input 
-                    type="checkbox" 
-                    checked={editListType === 'collection'} 
-                    onChange={(e) => setEditListType(e.target.checked ? 'collection' : 'wishlist')} 
-                    id="markOwnedCheckbox"
-                    style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="markOwnedCheckbox" style={{ cursor: 'pointer', margin: 0, fontWeight: 700, color: 'var(--type-grass)', fontSize: '0.85rem' }}>
-                    Mark as Obtained (Move to Collection)
-                  </label>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.02)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginBottom: '1.25rem' }}>
-                  <input 
-                    type="checkbox" 
-                    checked={editIsTrade === 1} 
-                    onChange={(e) => setEditIsTrade(e.target.checked ? 1 : 0)} 
-                    id="isTradeCheckbox"
-                    style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="isTradeCheckbox" style={{ cursor: 'pointer', margin: 0, fontWeight: 700, color: '#fff', fontSize: '0.85rem' }}>
-                    Listed in Trade Binder
-                  </label>
-                </div>
-              )}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                <div className="form-group">
-                  <label>Quantity</label>
-                  <input 
-                    type="number" 
-                    className="input-control" 
-                    min="1" 
-                    value={editQuantity}
-                    onChange={(e) => setEditQuantity(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Purchase Price ($)</label>
-                  <input 
-                    type="number" 
-                    step="0.01" 
-                    className="input-control" 
-                    value={editPurchasePrice}
-                    onChange={(e) => setEditPurchasePrice(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
-                <div className="form-group">
-                  <label>Condition</label>
-                  <select className="select-control" value={editCondition} onChange={(e) => setEditCondition(e.target.value)}>
-                    {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Printing</label>
-                  <select className="select-control" value={editPrinting} onChange={(e) => setEditPrinting(e.target.value)}>
-                    {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Language</label>
-                  <select className="select-control" value={editLanguage} onChange={(e) => setEditLanguage(e.target.value)}>
-                    {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              <div className="glass-panel" style={{ padding: '1rem', marginTop: '0.5rem', marginBottom: '1.25rem', background: 'rgba(0,0,0,0.2)' }}>
-                <h4 style={{ fontSize: '0.8rem', color: 'var(--text-primary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Real-World Location Assignment</h4>
-                
-                <div className="form-group">
-                  <label>Storage Container</label>
-                  <select className="select-control" value={editLocationId} onChange={(e) => setEditLocationId(e.target.value)}>
-                    <option value="">Unassigned Pile</option>
-                    {locations.map((loc) => (
-                      <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
-                    ))}
-                  </select>
-                  {editLocationId && editLocationId !== String(editingItem?.location_id || '') && (
-                    <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-                      The sort assistant will pick the exact page/row automatically.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
-                <button type="button" className="btn btn-secondary" onClick={closeEdit} style={{ flex: 1 }}>Cancel</button>
-                <button type="submit" className="btn btn-primary" style={{ flex: 2 }}>Save Changes</button>
-              </div>
-            </form>
-          </div>
-        )}
-      </div>
       {/* Card Detail Inspector Modal (Private Authorized View) */}
-      {inspectorCard && (
-        <div style={{
-          position: 'fixed',
-          top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.75)',
-          backdropFilter: 'blur(8px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 999,
-          padding: '1.5rem'
-        }} onClick={() => setInspectorCard(null)}>
-          <div className="glass-panel" style={{
-            maxWidth: '720px',
-            width: '100%',
-            padding: '2.5rem',
-            display: 'flex',
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            gap: '2.5rem',
-            position: 'relative',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-            boxShadow: '0 20px 50px rgba(0,0,0,0.6)'
-          }} onClick={(e) => e.stopPropagation()}>
-            <button className="btn btn-secondary btn-icon-only" onClick={() => setInspectorCard(null)} style={{
-              position: 'absolute',
-              top: '1rem',
-              right: '1rem',
-              borderRadius: '50%'
-            }}>
-              <X size={16} />
-            </button>
-
-            {/* Left side: Card Image & Badge overlays */}
-            <div style={{ flex: '1 1 250px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
-              <div style={{ position: 'relative', width: '100%', maxWidth: '280px' }}>
-                <img 
-                  src={inspectorCard.image_url} 
-                  alt={inspectorCard.name} 
-                  style={{
-                    width: '100%',
-                    aspectRatio: 0.718,
-                    objectFit: 'cover',
-                    borderRadius: 'var(--radius-md)',
-                    boxShadow: '0 12px 36px rgba(0,0,0,0.6), 0 0 20px rgba(255,255,255,0.05)'
-                  }}
-                />
-              </div>
-              
-              {/* Quantities indicator badge */}
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-                <span className="badge" style={{ padding: '0.4rem 0.8rem', background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: '#fff', fontSize: '0.75rem', fontWeight: 700 }}>
-                  Owned: x{inspectorCard.quantity}
-                </span>
-                <span className="badge" style={{ padding: '0.4rem 0.8rem', background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.2)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-yellow)', fontSize: '0.75rem', fontWeight: 700 }}>
-                  {inspectorCard.rarity || 'Common'}
-                </span>
-              </div>
-            </div>
-
-            {/* Right side: Information */}
-            <div style={{ flex: '1 1 320px', display: 'flex', flexDirection: 'column', gap: '1.25rem', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-                  {inspectorCard.list_type === 'wishlist' && (
-                    <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.2rem 0.5rem', borderRadius: '4px', backgroundColor: 'rgba(6, 182, 212, 0.15)', color: '#06b6d4', border: '1px solid rgba(6, 182, 212, 0.3)' }}>
-                      Wishlist Item
-                    </span>
-                  )}
-                  {inspectorCard.is_trade === 1 && (
-                    <span style={{ fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.2rem 0.5rem', borderRadius: '4px', backgroundColor: 'rgba(74, 222, 128, 0.15)', color: 'var(--type-grass)', border: '1px solid rgba(74, 222, 128, 0.3)' }}>
-                      For Trade
-                    </span>
-                  )}
-                </div>
-
-                <h3 style={{ fontSize: '1.65rem', color: '#fff', fontWeight: 800, lineHeight: 1.15, marginBottom: '0.25rem' }}>
-                  {getCardDisplayName(inspectorCard.name, inspectorCard.language)}
-                </h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 500 }}>{inspectorCard.set_name} • Card #{inspectorCard.number}</p>
-              </div>
-
-              {/* Price Panel */}
-              <div style={{ borderTop: '1px solid var(--border-glass)', borderBottom: '1px solid var(--border-glass)', padding: '0.75rem 0', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>TCG MARKET PRICE</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--accent-yellow)', marginTop: '0.15rem' }}>
-                    ${formatPrice(inspectorCard.price_trend)}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>EST. PURCHASE VALUE</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#fff', marginTop: '0.15rem' }}>
-                    ${formatPrice(inspectorCard.purchase_price)}
-                  </div>
-                </div>
-              </div>
-
-              {/* Price History Area Chart */}
-              <PriceHistoryChart cardId={inspectorCard.card_id} defaultRange="1y" />
-
-              {/* Specifications Details Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem 1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-glass)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>
-                <div><span style={{ color: 'var(--text-muted)' }}>Condition:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{inspectorCard.condition}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Printing:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{inspectorCard.printing}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Language:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{inspectorCard.language}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Supertype:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{inspectorCard.supertype}</span></div>
-              </div>
-
-              {/* Storage Container details */}
-              {inspectorCard.list_type !== 'wishlist' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255, 71, 71, 0.02)', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', fontSize: '0.75rem' }}>
-                  <MapPin size={14} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
-                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Location: </span>
-                    <strong style={{ color: '#fff' }}>
-                      {inspectorCard.location_name ? `${inspectorCard.location_name} (${inspectorCard.location_type})` : 'Unassigned Pile'}
-                    </strong>
-                    {inspectorCard.location_name && inspectorCard.compartment_display_label && (
-                      <span style={{ color: 'var(--text-secondary)' }}>
-                        {` • ${inspectorCard.compartment_display_label}`}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Actions row inside modal */}
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
-                {inspectorCard.list_type === 'wishlist' && (
-                  <button 
-                    className="btn btn-primary" 
-                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
-                    onClick={() => {
-                      openEdit(inspectorCard);
-                      setEditListType('collection');
-                      setInspectorCard(null);
-                    }}
-                  >
-                    Move to Collection
-                  </button>
-                )}
-                <button 
-                  className="btn btn-secondary" 
-                  style={{ flex: 1 }}
-                  onClick={() => {
-                    openEdit(inspectorCard);
-                    setInspectorCard(null);
-                  }}
-                >
-                  Edit Card
-                </button>
-                <button 
-                  className="btn btn-danger" 
-                  style={{ flex: 1 }}
-                  onClick={() => {
-                    handleDelete(inspectorCard.entry_id, inspectorCard.name);
-                    setInspectorCard(null);
-                  }}
-                >
-                  Delete
-                </button>
-              </div>
-
-            </div>
-          </div>
-        </div>
-      )}
+      <CardInspectorModal
+        card={inspectorCard}
+        startInEdit={inspectorStartEdit}
+        onClose={() => { setInspectorCard(null); setInspectorStartEdit(false); }}
+        onUpdate={onUpdate}
+        showToast={showToast}
+      />
     </>
   )}
 </div>

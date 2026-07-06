@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area } from 'recharts';
-import { TrendingUp, Coins, Library, Trophy, Plus, ArrowUpRight, X } from 'lucide-react';
+import { TrendingUp, Coins, Library, Trophy, Plus, ArrowUpRight } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
-import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
-import { getCardRarityBorder } from '../utils/cardRarity';
-import PriceHistoryChart from './PriceHistoryChart';
+import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
+import CardInspectorModal from './CardInspectorModal';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
@@ -26,7 +25,7 @@ const TYPE_COLORS = {
   'Colorless': '#cbd5e1'
 };
 
-function Dashboard({ statsTrigger, onNavigate, setSelectedCardFilter, setSelectedLocationId }) {
+function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, showToast }) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -468,149 +467,17 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedCardFilter, setSelecte
       </div>
 
       {/* Card Inspector Modal Overlay */}
-      {inspectorCard && (
-        <div style={{
-          position: 'fixed',
-          top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.7)',
-          backdropFilter: 'blur(5px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 999,
-          padding: '1.5rem'
-        }} onClick={() => setInspectorCard(null)}>
-          <div className="glass-panel" style={{
-            maxWidth: '680px',
-            width: '100%',
-            maxHeight: '90vh',
-            overflowY: 'auto',
-            padding: '2rem',
-            display: 'flex',
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            gap: '2rem',
-            position: 'relative'
-          }} onClick={(e) => e.stopPropagation()}>
-            <button className="btn btn-secondary btn-icon-only" onClick={() => setInspectorCard(null)} style={{
-              position: 'absolute',
-              top: '1rem',
-              right: '1rem',
-              borderRadius: '50%',
-              zIndex: 10
-            }}>
-              <X size={16} />
-            </button>
-
-            {/* Left side: Card Image */}
-            <div style={{ flex: '1 1 240px', display: 'flex', justifyContent: 'center', alignItems: 'flex-start' }}>
-              <div style={{
-                position: 'relative',
-                width: '100%',
-                maxWidth: '260px',
-                borderRadius: 'var(--radius-md)',
-                overflow: 'hidden',
-                ...getCardRarityBorder(inspectorCard.rarity)
-              }}>
-                <img 
-                  src={inspectorCard.image_url} 
-                  alt={inspectorCard.name} 
-                  style={{
-                    width: '100%',
-                    aspectRatio: 0.718,
-                    objectFit: 'cover',
-                    display: 'block'
-                  }}
-                />
-                {getFoilOverlayClass(inspectorCard.printing) && (
-                  <div className={getFoilOverlayClass(inspectorCard.printing)} style={{ borderRadius: 'var(--radius-md)' }} />
-                )}
-              </div>
-            </div>
-
-            {/* Right side: Information */}
-            <div style={{ flex: '1 1 300px', display: 'flex', flexDirection: 'column', gap: '1rem', justifyContent: 'center' }}>
-              <div>
-                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
-                  <span style={{
-                    fontSize: '0.7rem',
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    padding: '0.15rem 0.4rem',
-                    borderRadius: '4px',
-                    backgroundColor: 'rgba(234, 179, 8, 0.1)',
-                    color: 'var(--accent-yellow)',
-                    border: '1px solid rgba(234, 179, 8, 0.2)'
-                  }}>
-                    {inspectorCard.rarity || 'Common'}
-                  </span>
-                </div>
-
-                <h3 style={{ fontSize: '1.5rem', color: '#fff', lineHeight: 1.2 }}>
-                  {getCardDisplayName(inspectorCard.name, inspectorCard.language)}
-                </h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{inspectorCard.set_name} • Card #{inspectorCard.number}</p>
-              </div>
-
-              <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
-                <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>TCG MARKET</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>
-                    ${formatPrice(inspectorCard.price_trend)}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>PURCHASE PRICE</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>
-                    ${formatPrice(inspectorCard.purchase_price)}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>QUANTITY</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#fff' }}>
-                    x{inspectorCard.quantity}
-                  </div>
-                </div>
-              </div>
-
-              {/* Price History Area Chart */}
-              <PriceHistoryChart cardId={inspectorCard.card_id} titlePrefix="Price Trend History" defaultRange="1y" height={120} />
-
-              <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <div><span style={{ color: 'var(--text-muted)' }}>Condition:</span> <span style={{ color: '#fff' }}>{inspectorCard.condition}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Printing:</span> <span style={{ color: '#fff' }}>{inspectorCard.printing}</span></div>
-                <div><span style={{ color: 'var(--text-muted)' }}>Language:</span> <span style={{ color: '#fff' }}>{inspectorCard.language}</span></div>
-              </div>
-
-              {/* Navigation Actions */}
-              <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
-                <button 
-                  className="btn btn-secondary" 
-                  style={{ flex: 1, fontSize: '0.8rem', padding: '0.5rem 0.75rem' }}
-                  onClick={() => {
-                    if (setSelectedCardFilter) setSelectedCardFilter(inspectorCard.name);
-                    onNavigate('collection');
-                    setInspectorCard(null);
-                  }}
-                >
-                  View in Collection
-                </button>
-                <button 
-                  className="btn btn-secondary" 
-                  style={{ flex: 1, fontSize: '0.8rem', padding: '0.5rem 0.75rem' }}
-                  onClick={() => {
-                    if (setSelectedLocationId) setSelectedLocationId(inspectorCard.location_id || 'unsorted');
-                    onNavigate('storage');
-                    setInspectorCard(null);
-                  }}
-                >
-                  View in Storage
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <CardInspectorModal
+        card={inspectorCard}
+        onClose={() => setInspectorCard(null)}
+        onUpdate={onUpdate}
+        showToast={showToast}
+        onViewStorage={(card) => {
+          if (setSelectedLocationId) setSelectedLocationId(card.location_id || 'unsorted');
+          onNavigate('storage');
+          setInspectorCard(null);
+        }}
+      />
     </div>
   );
 }

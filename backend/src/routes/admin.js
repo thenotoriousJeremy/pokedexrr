@@ -157,63 +157,50 @@ router.post('/seed-cards', async (req, res) => {
     return res.status(403).json({ error: 'Not available in production' });
   }
   try {
-    // 1. Get or create Binder and Box locations for admin, each with a Page 1 / Row 1
-    // compartment to seed into.
+    // 1. Get or create Binder and Box locations for admin. fillLocation below
+    // spreads cards across every compartment, so fresh containers get enough
+    // pages/rows to make a large, multi-page test collection.
     let binder = await db.get(`SELECT id FROM locations WHERE user_id = ? AND type = 'Binder' LIMIT 1`, [req.user.id]);
     if (!binder) {
       const result = await db.run(`
         INSERT INTO locations (name, type, sort_order, user_id) VALUES (?, ?, ?, ?)
       `, ['Binder Seed Box', 'Binder', 'custom', req.user.id]);
-      await db.createCompartments(result.lastID, 3, 9);
+      await db.createCompartments(result.lastID, 12, 9); // 12 pages, 9 pockets each
       binder = { id: result.lastID };
     }
-    const binderPage1 = await db.get(`SELECT id FROM compartments WHERE location_id = ? AND idx = 1`, [binder.id]);
 
     let box = await db.get(`SELECT id FROM locations WHERE user_id = ? AND type = 'Box' LIMIT 1`, [req.user.id]);
     if (!box) {
       const result = await db.run(`
         INSERT INTO locations (name, type, sort_order, user_id) VALUES (?, ?, ?, ?)
       `, ['Box Seed Box', 'Box', 'custom', req.user.id]);
-      await db.createCompartments(result.lastID, 2, 20);
+      await db.createCompartments(result.lastID, 4, 40); // 4 rows, 40 cards each
       box = { id: result.lastID };
     }
-    const boxRow1 = await db.get(`SELECT id FROM compartments WHERE location_id = ? AND idx = 1`, [box.id]);
 
-    // Real card IDs spanning vintage (Base Set/Fossil/Jungle/Neo) and modern
-    // (Scarlet & Violet) sets, so seeded data actually shows "old vs new" and
-    // mixed rarities. Fetched live via tcgApi.getCardById (same path real
-    // search/scan use) instead of hand-built image URLs, which previously had
-    // a typo and 404'd for every seeded card.
-    const MOCK_IDS = [
-      'base1-58', // Pikachu - Base Set (vintage, Common)
-      'base1-4',  // Charizard - Base Set (vintage, Rare Holo)
-      'base1-2',  // Blastoise - Base Set (vintage, Rare Holo)
-      'fossil-20', // Gengar - Fossil (vintage, Rare)
-      'jungle-51', // Eevee - Jungle (vintage, Common)
-      'neo1-9',   // Lugia - Neo Genesis (vintage, Rare Holo)
-      'sv1-13',   // Sprigatito - Scarlet & Violet (modern, Common)
-      'sv1-36',   // Fuecoco - Scarlet & Violet (modern, Common)
-      'sv1-52',   // Quaxly - Scarlet & Violet (modern, Common)
-      'sv1-227',  // Miraidon ex - Scarlet & Violet (modern, Ultra Rare)
-    ];
-
+    // Pull whole sets so the pool spans every energy type, both supertypes
+    // (Pokémon/Trainer/Energy), and Common through Ultra Rare across vintage
+    // (Base Set) and modern (Scarlet & Violet, Sword & Shield). One API request
+    // per set via getCardsBySet, cached like any real lookup.
+    const SEED_SETS = ['base1', 'sv1', 'swsh1'];
     const MOCK_POOL = [];
-    for (const id of MOCK_IDS) {
-      const card = await tcgApi.getCardById(id);
-      if (card) MOCK_POOL.push(card);
+    for (const setId of SEED_SETS) {
+      const cards = await tcgApi.getCardsBySet(setId);
+      MOCK_POOL.push(...cards);
     }
     if (MOCK_POOL.length === 0) {
       return res.status(502).json({ error: 'Could not fetch seed card data from the Pokémon TCG API. Try again shortly.' });
     }
 
-    // Clear out any previously-seeded copies of these specific cards first, so
-    // running this repeatedly re-seeds a small fixed set instead of piling up
-    // more copies every time. Scoped to MOCK_IDS so it never touches cards a
-    // real scan/search added.
-    const mockIdPlaceholders = MOCK_IDS.map(() => '?').join(',');
+    // Clear out any previously-seeded copies of these sets' cards first, so
+    // running this repeatedly re-seeds instead of piling up more copies every
+    // time. Scoped to the seeded set ids so it never touches cards a real
+    // scan/search added.
+    const seedCardIds = MOCK_POOL.map(c => c.id);
+    const seedIdPlaceholders = seedCardIds.map(() => '?').join(',');
     await db.run(
-      `DELETE FROM collection WHERE user_id = ? AND card_id IN (${mockIdPlaceholders})`,
-      [req.user.id, ...MOCK_IDS]
+      `DELETE FROM collection WHERE user_id = ? AND card_id IN (${seedIdPlaceholders})`,
+      [req.user.id, ...seedCardIds]
     );
 
     // Insert random collection entries distributed across binder & box
@@ -234,73 +221,57 @@ router.post('/seed-cards', async (req, res) => {
 
     let addedCount = 0;
 
-    // Kept deliberately small — enough to see every feature (binder + box +
-    // an unsorted pile to try Assistant Mode's bulk sort on) without having
-    // to page through a large fake collection.
+    // Pick a random card + random valid printing/condition/language/qty for one slot.
+    const randomEntry = (maxPrice) => {
+      const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
+      const prints = printsForCard(card);
+      return {
+        card,
+        print: prints[Math.floor(Math.random() * prints.length)],
+        condition: conditions[Math.floor(Math.random() * conditions.length)],
+        language: languages[Math.floor(Math.random() * languages.length)],
+        qty: Math.floor(Math.random() * 2) + 1, // 1-2 copies
+        purchasePrice: parseFloat((Math.random() * maxPrice).toFixed(2))
+      };
+    };
 
-    // Seed binder entries (page 1 only, ~half the 9 slots)
-    for (let s = 1; s <= 9; s++) {
-      if (Math.random() > 0.5) {
-        const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
-        const prints = printsForCard(card);
-        const print = prints[Math.floor(Math.random() * prints.length)];
-        const condition = conditions[Math.floor(Math.random() * conditions.length)];
-        const language = languages[Math.floor(Math.random() * languages.length)];
-        const qty = Math.floor(Math.random() * 2) + 1; // 1-2 copies
-        const purchasePrice = parseFloat((Math.random() * 10).toFixed(2));
-        const pos = (s - 1) * 1000;
-
-        await db.run(`
-          INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, user_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [card.id, qty, condition, print, language, purchasePrice, binder.id, binderPage1.id, pos, req.user.id]);
-        addedCount += qty;
+    // Fill each compartment of a location up to ~fillRatio of its capacity so
+    // the test collection spans many pages/rows, not just the first one.
+    const fillLocation = async (locationId, maxPrice, fillRatio) => {
+      const compartments = await db.all(
+        `SELECT id, capacity FROM compartments WHERE location_id = ? ORDER BY idx`,
+        [locationId]
+      );
+      for (const comp of compartments) {
+        const slots = Math.max(1, Math.round(comp.capacity * fillRatio));
+        for (let s = 0; s < slots; s++) {
+          const e = randomEntry(maxPrice);
+          await db.run(`
+            INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [e.card.id, e.qty, e.condition, e.print, e.language, e.purchasePrice, locationId, comp.id, s * 1000, req.user.id]);
+          addedCount += e.qty;
+        }
       }
-    }
+    };
 
-    // Seed box entries (row 1 only, ~40% of 10 slots)
-    for (let s = 1; s <= 10; s++) {
-      if (Math.random() > 0.6) {
-        const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
-        const prints = printsForCard(card);
-        const print = prints[Math.floor(Math.random() * prints.length)];
-        const condition = conditions[Math.floor(Math.random() * conditions.length)];
-        const language = languages[Math.floor(Math.random() * languages.length)];
-        const qty = Math.floor(Math.random() * 2) + 1; // 1-2 copies
-        const purchasePrice = parseFloat((Math.random() * 5).toFixed(2));
-        const pos = (s - 1) * 1000;
+    await fillLocation(binder.id, 10, 0.7); // binder pages ~70% full
+    await fillLocation(box.id, 5, 0.6);     // box rows ~60% full
 
-        await db.run(`
-          INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, user_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [card.id, qty, condition, print, language, purchasePrice, box.id, boxRow1.id, pos, req.user.id]);
-        addedCount += qty;
-      }
-    }
-
-    // A handful of genuinely unsorted cards (no location_id) so there's
-    // something real to try Assistant Mode / bulk sort on right away.
+    // A pile of genuinely unsorted cards (no location_id) to try Assistant
+    // Mode / bulk sort on right away.
     let unsortedAdded = 0;
-    for (let i = 0; i < 6; i++) {
-      if (Math.random() > 0.3) {
-        const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
-        const prints = printsForCard(card);
-        const print = prints[Math.floor(Math.random() * prints.length)];
-        const condition = conditions[Math.floor(Math.random() * conditions.length)];
-        const language = languages[Math.floor(Math.random() * languages.length)];
-        const qty = 1;
-        const purchasePrice = parseFloat((Math.random() * 5).toFixed(2));
-
-        await db.run(`
-          INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, user_id)
-          VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?)
-        `, [card.id, qty, condition, print, language, purchasePrice, req.user.id]);
-        addedCount += qty;
-        unsortedAdded++;
-      }
+    for (let i = 0; i < 40; i++) {
+      const e = randomEntry(5);
+      await db.run(`
+        INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, position, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?)
+      `, [e.card.id, e.qty, e.condition, e.print, e.language, e.purchasePrice, req.user.id]);
+      addedCount += e.qty;
+      unsortedAdded++;
     }
 
-    res.json({ message: `Successfully seeded a small test collection: ${addedCount} cards for admin user (${unsortedAdded} left unsorted to try Assistant Mode on).` });
+    res.json({ message: `Successfully seeded a large test collection: ${addedCount} cards for admin user (${unsortedAdded} left unsorted to try Assistant Mode on).` });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to seed test cards' });

@@ -290,6 +290,16 @@ button, input, select, textarea {
   transition: var(--transition-smooth);
 }
 
+/* Hide number input spinners */
+.input-control[type="number"]::-webkit-inner-spin-button,
+.input-control[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.input-control[type="number"] {
+  -moz-appearance: textfield;
+}
+
 .input-control:focus, .select-control:focus {
   border-color: var(--accent-red);
   box-shadow: 0 0 10px rgba(255, 71, 71, 0.15);
@@ -1053,7 +1063,7 @@ button, input, select, textarea {
   position: relative;
   overflow: hidden;
   width: 100%;
-  max-width: 100%; /* Spans 100% of container to maximize width */
+  max-width: 1000px; /* Cap width on desktop so binder isn't oversized */
   margin: 0 auto;
   perspective: 1500px; /* Enable 3D flip rotation */
 }
@@ -1167,6 +1177,55 @@ button, input, select, textarea {
   background: rgba(0, 0, 0, 0.15);
 }
 
+/* Ghost preview of the card being filed, sitting in its recommended pocket. */
+.binder-pocket.recommended-ghost {
+  border: 2px dashed #ffc107;
+  background: rgba(255, 193, 7, 0.12);
+  box-shadow: 0 0 12px rgba(255, 193, 7, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rec-ghost-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #ffc107;
+  color: #000;
+  font-size: 0.55rem;
+  font-weight: bold;
+  padding: 2px 5px;
+  border-radius: 3px;
+  z-index: 10;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* First pocket of each set run — marks where sets change. */
+.binder-pocket.set-start {
+  border-left: 3px solid var(--accent-red);
+}
+
+.set-divider-label {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  max-width: calc(100% - 4px);
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  font-size: 0.5rem;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  z-index: 5;
+  pointer-events: none;
+}
+
 .binder-pocket-actions {
   position: absolute;
   bottom: 0;
@@ -1205,7 +1264,7 @@ button, input, select, textarea {
 /* Storage Coordinator Workspace Layout */
 .storage-workspace-grid {
   display: grid;
-  grid-template-columns: 260px 1fr 320px;
+  grid-template-columns: 1fr 420px;
   gap: 1.25rem;
   min-height: 70vh;
 }
@@ -1215,11 +1274,90 @@ button, input, select, textarea {
     grid-template-columns: 1fr !important;
     height: auto !important;
   }
-  .location-sidebar-col, .location-unsorted-col {
+  .location-unsorted-col {
     max-height: 400px;
     border: none !important;
     padding: 0.5rem 0 !important;
   }
+}
+
+.section-divider {
+  grid-column: 1 / -1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+
+.section-divider::before,
+.section-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-glass);
+}
+
+.section-divider span {
+  padding: 0 0.75rem;
+  font-size: 0.85rem;
+  font-weight: bold;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.kebab-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.kebab-menu-button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kebab-menu-button:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+.kebab-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.25rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  min-width: 180px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+}
+
+.kebab-item {
+  background: transparent;
+  border: none;
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.kebab-item:hover {
+  background: rgba(255,255,255,0.1);
 }
 
 .draggable-box-card:hover {
@@ -1894,3 +2032,6 @@ button, input, select, textarea {
 
 
 
+@ k e y f r a m e s   r e c P u l s e   {   0 %   {   b o x - s h a d o w :   0   0   0 p x   v a r ( - - a c c e n t - y e l l o w - g l o w ) ;   b o r d e r - c o l o r :   r g b a ( 2 3 4 ,   1 7 9 ,   8 ,   0 . 4 ) ;   }   5 0 %   {   b o x - s h a d o w :   0   0   1 5 p x   v a r ( - - a c c e n t - y e l l o w - g l o w ) ;   b o r d e r - c o l o r :   r g b a ( 2 3 4 ,   1 7 9 ,   8 ,   1 ) ;   }   1 0 0 %   {   b o x - s h a d o w :   0   0   0 p x   v a r ( - - a c c e n t - y e l l o w - g l o w ) ;   b o r d e r - c o l o r :   r g b a ( 2 3 4 ,   1 7 9 ,   8 ,   0 . 4 ) ;   }   }   . r e c o m m e n d e d - g h o s t   {   b o r d e r :   2 p x   d a s h e d   v a r ( - - a c c e n t - y e l l o w )   ! i m p o r t a n t ;   a n i m a t i o n :   r e c P u l s e   1 . 5 s   i n f i n i t e   e a s e - i n - o u t ;   }   @ k e y f r a m e s   r e c P u l s e O p a c i t y   {   0 %   {   o p a c i t y :   0 . 3 ;   }   5 0 %   {   o p a c i t y :   0 . 7 ;   }   1 0 0 %   {   o p a c i t y :   0 . 3 ;   }   }   . r e c o m m e n d e d - g h o s t   i m g   {   a n i m a t i o n :   r e c P u l s e O p a c i t y   1 . 5 s   i n f i n i t e   e a s e - i n - o u t ;   }  
+ @ k e y f r a m e s   r o w - f l a s h   {   0 %   {   b a c k g r o u n d - c o l o r :   r g b a ( 2 3 4 ,   1 7 9 ,   8 ,   0 . 4 ) ;   }   1 0 0 %   {   b a c k g r o u n d - c o l o r :   r g b a ( 0 , 0 , 0 , 0 . 1 ) ;   }   }   . r o w - f l a s h   {   a n i m a t i o n :   r o w - f l a s h   1 . 5 s   e a s e - o u t ;   }  
+ 
