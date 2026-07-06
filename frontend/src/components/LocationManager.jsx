@@ -6,7 +6,7 @@ import { sortCardsByOrder } from '../utils/cardSort';
 import { getPageNum, getSlotNum } from '../utils/locationCoords';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
-import { buildLocationProfiles, suggestBestContainer } from '../utils/containerSuggest';
+import { buildLocationProfiles, suggestBestContainer, capacityOf } from '../utils/containerSuggest';
 
 // Shared corner badge for a card's finish (Holo / Rev / 1st / Promo). Colors and
 // label come from the single source of truth so Storage matches Collection.
@@ -1405,16 +1405,21 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     }
   };
 
-  const autoSortContainerCards = async (orderMode) => {
-    if (locationCards.length === 0) return;
-    
-    if (!window.confirm(`Are you sure you want to auto-sort all cards in this container by "${orderMode}"? This will overwrite their current page/row coordinates.`)) {
+  // extraCards lets this also pull cards in from the Unsorted pile (see
+  // "Sort Unsorted Into This Container" in Assistant Mode) instead of only
+  // ever re-sorting cards already placed in the container.
+  const autoSortContainerCards = async (orderMode, extraCards = []) => {
+    if (locationCards.length === 0 && extraCards.length === 0) return;
+
+    const totalCount = locationCards.length + extraCards.length;
+    const verb = extraCards.length > 0 ? `sort ${totalCount} cards (including ${extraCards.length} from Unsorted) into` : 'auto-sort all cards in';
+    if (!window.confirm(`Are you sure you want to ${verb} this container by "${orderMode}"? This will overwrite their current page/row coordinates.`)) {
       return;
     }
 
     try {
       showToast('Sorting container...');
-      const sorted = sortCardsByOrder([...locationCards], orderMode, selectedLoc?.foil_sorting);
+      const sorted = sortCardsByOrder([...locationCards, ...extraCards], orderMode, selectedLoc?.foil_sorting);
 
       const pocketsCount = selectedLoc.page_style === '2x2' ? 4 : selectedLoc.page_style === '3x4' ? 12 : 9;
       const maxPages = selectedLoc.max_pages || 30;
@@ -1486,6 +1491,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
       if (excessCount > 0) {
         showToast(`Auto-sorted! ${excessCount} excess cards moved to Unsorted Pile.`);
+      } else if (extraCards.length > 0) {
+        showToast(`Sorted ${extraCards.length} unsorted card(s) into the container!`);
       } else {
         showToast('Container auto-sorted successfully!');
       }
@@ -1498,6 +1505,30 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       showToast('Error auto-sorting container.');
     }
   };
+
+  // Lets Assistant Mode change a container's sort scheme (and foil order)
+  // without leaving the panel to open Edit Container Settings. Backend PUT
+  // uses COALESCE, so sending only one field leaves everything else untouched.
+  const handleQuickSetContainerField = async (field, value) => {
+    if (!selectedLoc) return;
+    try {
+      const response = await fetch(`/api/locations/${selectedLoc.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: value })
+      });
+      if (response.ok) {
+        fetchLocations();
+      } else {
+        showToast(`Failed to update ${field.replace('_', ' ')}.`);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(`Error updating ${field.replace('_', ' ')}.`);
+    }
+  };
+  const handleQuickSetSortOrder = (newOrder) => handleQuickSetContainerField('sort_order', newOrder);
+  const handleQuickSetFoilSorting = (newFoilOrder) => handleQuickSetContainerField('foil_sorting', newFoilOrder);
 
   const handleDrop = async (e, targetSlot, targetPageNum = selectedPage) => {
     e.preventDefault();
@@ -1761,12 +1792,14 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         showToast(`Deleted storage container "${locName}".`);
         setIsEditing(false);
         onUpdate();
+        fetchLocations();
         if (activeLocationId === locId) {
           const remaining = locations.filter(l => l.id !== locId);
           setActiveLocationId(remaining.length > 0 ? remaining[0].id : null);
         }
       } else {
-        showToast('Failed to delete container.');
+        const data = await response.json().catch(() => ({}));
+        showToast(data.error || 'Failed to delete container.');
       }
     } catch (err) {
       console.error(err);
@@ -1816,7 +1849,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           await autoSortContainerCards(editSortOrder);
         }
       } else {
-        showToast('Failed to update storage container.');
+        const data = await response.json().catch(() => ({}));
+        showToast(data.error || 'Failed to update storage container.');
       }
     } catch (err) {
       console.error(err);
@@ -2097,6 +2131,21 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
                     {selectedLoc.type} • {selectedLoc.type === 'Binder' || selectedLoc.type === 'Toploader Binder' ? `${selectedLoc.max_pages || 30} pages (${selectedLoc.page_style || '3x3'})` : `${selectedLoc.max_rows || 3} rows`} • Value: <strong style={{ color: 'var(--accent-yellow)' }}>${locationCards.reduce((acc, curr) => acc + (curr.quantity * (curr.price_trend || 0)), 0).toFixed(2)}</strong>
                   </span>
+                  {(() => {
+                    const cap = capacityOf(selectedLoc);
+                    if (!cap || cap <= 0) return null;
+                    const used = locationCards.length;
+                    const pct = Math.min(100, Math.round((used / cap) * 100));
+                    const color = pct >= 95 ? 'var(--accent-red)' : pct >= 80 ? 'var(--accent-yellow)' : 'var(--text-secondary)';
+                    return (
+                      <span
+                        title={`${used} of ${cap} slots used`}
+                        style={{ fontSize: '0.7rem', fontWeight: 700, color, padding: '2px 7px', borderRadius: '10px', border: `1px solid ${color}`, whiteSpace: 'nowrap' }}
+                      >
+                        {used}/{cap} slots ({pct}%){pct >= 95 ? ' — nearly full' : ''}
+                      </span>
+                    );
+                  })()}
                 </div>
               </div>
               <button
@@ -2633,6 +2682,60 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         <option value="batch50">Latest Batch (50)</option>
                       </select>
                     </div>
+                  </div>
+
+                  {/* Bulk sort: place the whole filtered queue into this container at once,
+                      instead of clicking "Place Card Here" one card at a time. The container's
+                      own Sort Order decides where each card lands, so it's set here too — this
+                      is the single most common reason the assistant "doesn't organize by set":
+                      a container left on Custom order just fills the next empty slot. */}
+                  <div className="glass-panel" style={{ padding: '0.6rem', display: 'flex', flexDirection: 'column', gap: '0.4rem', border: '1px solid rgba(234, 179, 8, 0.3)', background: 'rgba(234, 179, 8, 0.05)' }}>
+                    <span style={{ fontSize: '0.6rem', color: 'var(--accent-yellow)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Bulk Sort Into "{selectedLoc?.name || '...'}"
+                    </span>
+                    <select
+                      className="select-control"
+                      value={selectedLoc?.sort_order || 'custom'}
+                      onChange={(e) => handleQuickSetSortOrder(e.target.value)}
+                      disabled={!selectedLoc}
+                      style={{ padding: '0.3rem 0.5rem', fontSize: '0.7rem' }}
+                    >
+                      <option value="custom">Custom (manual placement — bulk sort disabled)</option>
+                      <option value="set-number-printing">Set, Number &amp; Printing (foil-aware)</option>
+                      <option value="set-number">Set &amp; Number</option>
+                      <option value="name-asc">A-Z Alphabetical</option>
+                      <option value="price-desc">Value (High-Low)</option>
+                      <option value="type-name">Energy Type</option>
+                    </select>
+                    {selectedLoc?.sort_order === 'set-number-printing' && (
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        {[{ v: 'normals_first', label: 'Normals First' }, { v: 'foils_first', label: 'Foils First' }].map(opt => (
+                          <button
+                            key={opt.v}
+                            type="button"
+                            onClick={() => handleQuickSetFoilSorting(opt.v)}
+                            className={`btn ${(selectedLoc.foil_sorting || 'normals_first') === opt.v ? 'btn-primary' : 'btn-secondary'}`}
+                            style={{ fontSize: '0.6rem', padding: '0.25rem 0.4rem', flex: 1, borderRadius: '3px' }}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={!selectedLoc || selectedLoc.sort_order === 'custom' || queue.length === 0}
+                      onClick={() => autoSortContainerCards(selectedLoc.sort_order, queue)}
+                      style={{ fontSize: '0.7rem', padding: '0.4rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                    >
+                      Sort All {queue.length} Unsorted Into This Container
+                    </button>
+                    {selectedLoc?.sort_order === 'custom' && (
+                      <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                        Pick a sort scheme above to enable bulk placement.
+                      </span>
+                    )}
                   </div>
 
                   <div className="glass-panel" style={{ padding: '0.6rem', display: 'flex', gap: '0.65rem', border: '1px solid var(--border-glass-hover)', background: 'rgba(255, 255, 255, 0.02)', alignItems: 'flex-start' }}>
