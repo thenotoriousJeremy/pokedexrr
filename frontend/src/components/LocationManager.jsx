@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Trash2, X } from 'lucide-react';
+import { Plus, Trash2, X, Sparkles } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder } from '../utils/cardRarity';
@@ -93,15 +93,30 @@ function CompartmentCard({ compartment, cards, sortOrder, availableSets, onRenam
       </div>
 
       {showSets && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
-          {availableSets.length === 0 ? (
-            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>No sets in your collection yet.</span>
-          ) : availableSets.map(setName => (
-            <label key={setName} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.65rem' }}>
-              <input type="checkbox" checked={compartment.assignedSets.includes(setName)} onChange={() => onToggleSet(setName)} />
-              {setName}
-            </label>
-          ))}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
+          <select
+            className="select-control"
+            value=""
+            onChange={(e) => { if (e.target.value) onToggleSet(e.target.value); }}
+            style={{ fontSize: '0.75rem', padding: '0.2rem 0.4rem' }}
+          >
+            <option value="">Choose set to toggle...</option>
+            {availableSets.map(setName => (
+              <option key={setName} value={setName}>
+                {compartment.assignedSets.includes(setName) ? `✓ ${setName}` : setName}
+              </option>
+            ))}
+          </select>
+          {compartment.assignedSets.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+              {compartment.assignedSets.map(setName => (
+                <span key={setName} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', padding: '0.15rem 0.35rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
+                  {setName}
+                  <span style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => onToggleSet(setName)}>&times;</span>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -147,7 +162,7 @@ function CompartmentCard({ compartment, cards, sortOrder, availableSets, onRenam
 
 // One binder page: a fixed pocket grid (capacity slots, empty ones shown as
 // dashed placeholders) instead of CompartmentCard's variable-length row list.
-function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRename, onSetCapacity, onToggleSet, onRemove, onDeleteCard, onMoveCard, moveTargets, canRemove }) {
+function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRename, onSetCapacity, onToggleSet, onRemove, onDeleteCard, onMoveCard, moveTargets, canRemove, recommendedSpot }) {
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState(compartment.display_label);
   const [showSets, setShowSets] = useState(false);
@@ -192,46 +207,80 @@ function BinderPageContent({ compartment, cards, sortOrder, availableSets, onRen
       </div>
 
       {showSets && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', padding: '0.4rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
-          {availableSets.length === 0 ? (
-            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>No sets in your collection yet.</span>
-          ) : availableSets.map(setName => (
-            <label key={setName} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.6rem' }}>
-              <input type="checkbox" checked={compartment.assignedSets.includes(setName)} onChange={() => onToggleSet(setName)} />
-              {setName}
-            </label>
-          ))}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.4rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
+          <select
+            className="select-control"
+            value=""
+            onChange={(e) => { if (e.target.value) onToggleSet(e.target.value); }}
+            style={{ fontSize: '0.7rem', padding: '0.15rem 0.3rem' }}
+          >
+            <option value="">Choose set to toggle...</option>
+            {availableSets.map(setName => (
+              <option key={setName} value={setName}>
+                {compartment.assignedSets.includes(setName) ? `✓ ${setName}` : setName}
+              </option>
+            ))}
+          </select>
+          {compartment.assignedSets.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+              {compartment.assignedSets.map(setName => (
+                <span key={setName} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.6rem', padding: '0.1rem 0.3rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
+                  {setName}
+                  <span style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => onToggleSet(setName)}>&times;</span>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       <div className="binder-pocket-grid" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
-        {pockets.map((card, i) => card ? (
-          <div key={card.entry_id} className="binder-pocket" style={getCardRarityBorder(card.rarity)}>
-            <img src={card.image_url} alt={card.name} title={`${card.name}${card.quantity > 1 ? ` x${card.quantity}` : ''}`} />
-            {getFoilOverlayClass(card.printing) && (
-              <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />
-            )}
-            <PrintingBadge printing={card.printing} />
-            <div className="binder-pocket-actions">
-              {isCustom && moveTargets.length > 1 && (
-                <select
-                  value=""
-                  onChange={(e) => { if (e.target.value) onMoveCard(card.entry_id, parseInt(e.target.value, 10)); }}
-                >
-                  <option value="">Move...</option>
-                  {moveTargets.filter(t => t.id !== compartment.id).map(t => (
-                    <option key={t.id} value={t.id}>{t.display_label}</option>
-                  ))}
-                </select>
+        {pockets.map((card, i) => {
+          const isRecSpot = recommendedSpot && recommendedSpot.index === i;
+          return card ? (
+            <div
+              key={card.entry_id}
+              className={`binder-pocket ${isRecSpot ? 'recommended-highlight' : ''}`}
+              style={{
+                ...getCardRarityBorder(card.rarity),
+                ...(isRecSpot ? { outline: '3px solid #ffc107', outlineOffset: '2px', boxShadow: '0 0 10px #ffc107' } : {})
+              }}
+            >
+              <img src={card.image_url} alt={card.name} title={`${card.name}${card.quantity > 1 ? ` x${card.quantity}` : ''}`} />
+              {getFoilOverlayClass(card.printing) && (
+                <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />
               )}
-              <button type="button" onClick={() => onDeleteCard(card.entry_id)} title="Remove from collection">
-                <X size={12} />
-              </button>
+              <PrintingBadge printing={card.printing} />
+              {isRecSpot && (
+                <div style={{ position: 'absolute', top: '-12px', left: '50%', transform: 'translateX(-50%)', background: '#ffc107', color: '#000', fontSize: '0.5rem', fontWeight: 'bold', padding: '1px 4px', borderRadius: '3px', zIndex: 10 }}>REC SPOT</div>
+              )}
+              <div className="binder-pocket-actions">
+                {isCustom && moveTargets.length > 1 && (
+                  <select
+                    value=""
+                    onChange={(e) => { if (e.target.value) onMoveCard(card.entry_id, parseInt(e.target.value, 10)); }}
+                  >
+                    <option value="">Move...</option>
+                    {moveTargets.filter(t => t.id !== compartment.id).map(t => (
+                      <option key={t.id} value={t.id}>{t.display_label}</option>
+                    ))}
+                  </select>
+                )}
+                <button type="button" onClick={() => onDeleteCard(card.entry_id)} title="Remove from collection">
+                  <X size={12} />
+                </button>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div key={`empty-${i}`} className="binder-pocket-empty" />
-        ))}
+          ) : (
+            <div
+              key={`empty-${i}`}
+              className={`binder-pocket-empty ${isRecSpot ? 'recommended-highlight' : ''}`}
+              style={isRecSpot ? { border: '2px dashed #ffc107', background: 'rgba(255, 193, 7, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ffc107', fontSize: '0.6rem', fontWeight: 'bold' } : {}}
+            >
+              {isRecSpot ? 'REC SPOT' : ''}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -243,6 +292,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [compartments, setCompartments] = useState([]);
   const [allCards, setAllCards] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  const [showNewestRecommendation, setShowNewestRecommendation] = useState(false);
+  const [newestRecommendation, setNewestRecommendation] = useState(null);
 
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
@@ -257,6 +309,60 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [applyAllTarget, setApplyAllTarget] = useState('');
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+
+  const [filingMode, setFilingMode] = useState(false);
+  const [filingQueue, setFilingQueue] = useState([]);
+  const [filingIndex, setFilingIndex] = useState(0);
+
+  const newestScannedCard = useMemo(() => {
+    const unsorted = allCards.filter(c => !c.location_id);
+    if (unsorted.length === 0) return null;
+    return [...unsorted].sort((a, b) => {
+      const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
+      const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
+      if (timeA !== timeB) return timeB - timeA;
+      return b.entry_id - a.entry_id;
+    })[0];
+  }, [allCards]);
+
+  useEffect(() => {
+    let active = true;
+    if (!showNewestRecommendation || !activeLocationId || !newestScannedCard) {
+      setNewestRecommendation(null);
+      return;
+    }
+    const fetchRec = async () => {
+      try {
+        const res = await fetch(`/api/locations/${activeLocationId}/recommend?card_id=${newestScannedCard.card_id}&printing=${newestScannedCard.printing}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (active) setNewestRecommendation(data);
+        }
+      } catch (err) {
+        console.error('Failed to fetch recommendation', err);
+      }
+    };
+    fetchRec();
+    return () => { active = false; };
+  }, [showNewestRecommendation, activeLocationId, newestScannedCard]);
+
+  const currentRecSpot = filingMode && filingQueue[filingIndex]?.recommended
+    ? filingQueue[filingIndex].recommended
+    : (newestRecommendation && newestScannedCard ? newestRecommendation : null);
+
+  useEffect(() => {
+    if (filingMode && filingQueue[filingIndex]?.recommended) {
+      const rec = filingQueue[filingIndex].recommended;
+      if (isBinderType) {
+        const compIdx = compartments.findIndex(c => c.id === rec.compartment_id);
+        if (compIdx !== -1) setActivePageIndex(compIdx);
+      } else {
+        setActiveCompartmentId(rec.compartment_id);
+        const posIdx = Math.floor(rec.position / 1000) - 1;
+        setCoverflowActiveIndex(Math.max(0, posIdx));
+      }
+    }
+  }, [filingMode, filingIndex, filingQueue, compartments, isBinderType]);
   const touchStartRef = useRef(0);
 
   const [activeCompartmentId, setActiveCompartmentId] = useState(null);
@@ -276,6 +382,23 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       setActivePageIndex(prev => Math.min(compartments.length - 1, prev + 1));
     } else if (diffX < -50) {
       setActivePageIndex(prev => Math.max(0, prev - 1));
+    }
+  };
+
+  const coverflowTouchStartRef = useRef(0);
+
+  const handleCoverflowTouchStart = (e) => {
+    coverflowTouchStartRef.current = e.changedTouches[0].clientX;
+  };
+
+  const handleCoverflowTouchEnd = (e, totalCards) => {
+    const endX = e.changedTouches[0].clientX;
+    const diffX = coverflowTouchStartRef.current - endX;
+    const threshold = 40;
+    if (diffX > threshold) {
+      setCoverflowActiveIndex(prev => Math.min(totalCards - 1, prev + 1));
+    } else if (diffX < -threshold) {
+      setCoverflowActiveIndex(prev => Math.max(0, prev - 1));
     }
   };
 
@@ -355,7 +478,11 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   useEffect(() => {
     if (selectedLocationId) {
-      setActiveLocationId(selectedLocationId);
+      if (selectedLocationId === 'unsorted') {
+        setActiveLocationId(null);
+      } else {
+        setActiveLocationId(selectedLocationId);
+      }
       setSelectedLocationId(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -552,6 +679,52 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     } catch (err) { console.error(err); showToast('Error filing batch.'); }
   };
 
+  const startFilingMode = async () => {
+    if (!applyAllTarget || unsortedCards.length === 0) return;
+    const targetLoc = locations.find(l => l.id === parseInt(applyAllTarget, 10));
+    if (!targetLoc) return;
+    
+    const sortedForFiling = sortCardsByOrder([...unsortedCards], targetLoc.sort_order, targetLoc.foil_sorting);
+
+    try {
+      const res = await fetch(`/api/locations/${applyAllTarget}/recommend-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entry_ids: sortedForFiling.map(c => c.entry_id) })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setFilingQueue(data);
+        setFilingIndex(0);
+        setFilingMode(true);
+        setActiveLocationId(parseInt(applyAllTarget, 10));
+      } else {
+        showToast('Failed to start filing mode.');
+      }
+    } catch (err) { console.error(err); showToast('Error starting filing mode.'); }
+  };
+
+  const handleFilingPlaced = async (entryId, locationId, compartmentId, position) => {
+    try {
+      const res = await fetch(`/api/collection/${entryId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: locationId, compartment_id: compartmentId, position })
+      });
+      if (res.ok) {
+        await refreshAll();
+        if (filingIndex < filingQueue.length - 1) {
+          setFilingIndex(filingIndex + 1);
+        } else {
+          showToast('Filing complete!');
+          setFilingMode(false);
+          onUpdate();
+        }
+      } else {
+        showToast('Failed to file card.');
+      }
+    } catch (err) { console.error(err); showToast('Error filing card.'); }
+  };
+
   if (loading) return <div className="spinner" />;
 
   return (
@@ -605,6 +778,51 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           <p style={{ color: 'var(--text-secondary)' }}>Select a container to view its compartments.</p>
         ) : (
           <>
+            {currentRecSpot && newestScannedCard && !filingMode && (
+              <div className="glass-panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', border: '1px dashed var(--primary-glow)', background: 'rgba(255, 255, 255, 0.03)', marginBottom: '0.5rem' }}>
+                <div style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <Sparkles size={14} style={{ color: 'gold' }} />
+                  <span>
+                    Newest scanned: <strong>{newestScannedCard.name}</strong> ({newestScannedCard.printing}) &rarr;{' '}
+                    <span style={{ color: '#ffc107', fontWeight: 'bold' }}>
+                      {currentRecSpot.full ? 'Container Full!' : currentRecSpot.label}
+                    </span>
+                  </span>
+                </div>
+                {!currentRecSpot.full && (
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        if (isBinderType) {
+                          const compIdx = compartments.findIndex(c => c.id === currentRecSpot.compartment_id);
+                          if (compIdx !== -1) {
+                            setActivePageIndex(compIdx);
+                          }
+                        } else {
+                          setActiveCompartmentId(currentRecSpot.compartment_id);
+                          const compCards = cardsByCompartment.get(currentRecSpot.compartment_id) || [];
+                          const posIdx = Math.floor(currentRecSpot.position / 1000) - 1;
+                          setCoverflowActiveIndex(Math.min(posIdx, compCards.length));
+                        }
+                      }}
+                      style={{ fontSize: '0.65rem', padding: '0.2rem 0.5rem' }}
+                    >
+                      View Spot
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => handleFileCard(newestScannedCard.entry_id, currentRecSpot.location_id || activeLocationId)}
+                      style={{ fontSize: '0.65rem', padding: '0.2rem 0.5rem' }}
+                    >
+                      File Here
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem' }}>
               <div>
                 {editingName ? (
@@ -749,7 +967,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   onToggleSet: (setName) => handleToggleCompartmentSet(c, setName),
                   onRemove: () => handleRemoveCompartment(c.id),
                   onDeleteCard: handleDeleteCard,
-                  onMoveCard: handleMoveCard
+                  onMoveCard: handleMoveCard,
+                  recommendedSpot: currentRecSpot && currentRecSpot.compartment_id === c.id ? {
+                    index: Math.floor(currentRecSpot.position / 1000) - 1
+                  } : null
                 });
 
                 if (isMobile) {
@@ -873,15 +1094,30 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       </div>
 
                       {showRowSets && (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', padding: '0.4rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
-                          {availableSetNames.length === 0 ? (
-                            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>No sets in your collection yet.</span>
-                          ) : availableSetNames.map(setName => (
-                            <label key={setName} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.6rem' }}>
-                              <input type="checkbox" checked={activeComp.assignedSets.includes(setName)} onChange={() => handleToggleCompartmentSet(activeComp, setName)} />
-                              {setName}
-                            </label>
-                          ))}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.4rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
+                          <select
+                            className="select-control"
+                            value=""
+                            onChange={(e) => { if (e.target.value) handleToggleCompartmentSet(activeComp, e.target.value); }}
+                            style={{ fontSize: '0.7rem', padding: '0.15rem 0.3rem' }}
+                          >
+                            <option value="">Choose set to toggle...</option>
+                            {availableSetNames.map(setName => (
+                              <option key={setName} value={setName}>
+                                {activeComp.assignedSets.includes(setName) ? `✓ ${setName}` : setName}
+                              </option>
+                            ))}
+                          </select>
+                          {activeComp.assignedSets.length > 0 && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                              {activeComp.assignedSets.map(setName => (
+                                <span key={setName} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.6rem', padding: '0.1rem 0.3rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
+                                  {setName}
+                                  <span style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => handleToggleCompartmentSet(activeComp, setName)}>&times;</span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -893,7 +1129,11 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       </div>
                     ) : (
                       <>
-                        <div className="box-coverflow-container">
+                        <div
+                          className="box-coverflow-container"
+                          onTouchStart={handleCoverflowTouchStart}
+                          onTouchEnd={(e) => handleCoverflowTouchEnd(e, activeCompCards.length)}
+                        >
                           <button
                             type="button"
                             className="box-coverflow-nav left"
@@ -907,6 +1147,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                             {activeCompCards.map((card, i) => {
                               const offset = i - activeCardIndex;
                               const absOffset = Math.abs(offset);
+
+                              const isRecSpot = currentRecSpot &&
+                                currentRecSpot.compartment_id === activeComp.id &&
+                                Math.floor(currentRecSpot.position / 1000) - 1 === i;
 
                               let transform = '';
                               let zIndex = 10 - absOffset;
@@ -934,11 +1178,15 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                                     zIndex,
                                     opacity,
                                     filter,
+                                    ...(isRecSpot ? { outline: '3px solid #ffc107', outlineOffset: '2px', boxShadow: '0 0 10px #ffc107' } : {})
                                   }}
                                   onClick={() => setCoverflowActiveIndex(i)}
                                 >
                                   <img src={card.image_url} alt={card.name} />
                                   <PrintingBadge printing={card.printing} />
+                                  {isRecSpot && (
+                                    <div style={{ position: 'absolute', top: '-10px', left: '50%', transform: 'translateX(-50%)', background: '#ffc107', color: '#000', fontSize: '0.5rem', fontWeight: 'bold', padding: '1px 4px', borderRadius: '3px', zIndex: 10 }}>REC SPOT</div>
+                                  )}
                                 </div>
                               );
                             })}
@@ -1005,62 +1253,132 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
       {/* Unsorted queue */}
       <div className="glass-panel location-unsorted-col" style={{ padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto' }}>
-        <strong style={{ fontSize: '0.85rem' }}>Unsorted ({unsortedCards.length})</strong>
-        <input
-          className="input-control" placeholder="Search..." value={unsortedSearch}
-          onChange={(e) => setUnsortedSearch(e.target.value)} style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
-        />
-        <select className="select-control" value={unsortedSort} onChange={(e) => setUnsortedSort(e.target.value)} style={{ fontSize: '0.7rem', padding: '0.3rem 0.5rem' }}>
-          <option value="scanned-desc">Scanned (Newest First)</option>
-          <option value="scanned-asc">Scanned (Oldest First)</option>
-          <option value="name-asc">A-Z</option>
-          <option value="price-desc">Value (High-Low)</option>
-          <option value="set-number">Set & Number</option>
-        </select>
-
-        {unsortedCards.length > 1 && (
-          <div style={{ display: 'flex', gap: '0.35rem' }}>
-            <select className="select-control" value={applyAllTarget} onChange={(e) => setApplyAllTarget(e.target.value)} style={{ fontSize: '0.65rem', padding: '0.25rem 0.4rem', flex: 1 }}>
-              <option value="">Apply all to...</option>
-              {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
-            <button type="button" className="btn btn-primary" disabled={!applyAllTarget} onClick={handleApplyAll} style={{ fontSize: '0.65rem', padding: '0.25rem 0.5rem' }}>
-              Apply All
-            </button>
-          </div>
-        )}
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-          {unsortedCards.map(card => (
-            <div key={card.entry_id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.7rem', padding: '0.3rem 0', borderBottom: '1px solid var(--border-glass)' }}>
-              <div style={{ position: 'relative', width: '28px', flexShrink: 0, overflow: 'hidden', borderRadius: '3px', ...getCardRarityBorder(card.rarity) }}>
-                <img src={card.image_url} alt={card.name} style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', display: 'block' }} />
-                {getFoilOverlayClass(card.printing) && (
-                  <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '3px' }} />
-                )}
-              </div>
-              <span
-                onClick={() => { setSelectedCardFilter(card.name); setActiveTab('collection'); }}
-                title="Find in Collection"
-                style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
-              >
-                {card.name}
-              </span>
-              <select
-                className="select-control" value=""
-                onChange={(e) => { if (e.target.value) handleFileCard(card.entry_id, parseInt(e.target.value, 10)); }}
-                style={{ fontSize: '0.6rem', padding: '0.15rem 0.25rem', maxWidth: '90px' }}
-              >
-                <option value="">File to...</option>
-                {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select>
-              <button type="button" onClick={() => handleDeleteCard(card.entry_id)} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
-                <X size={12} />
+        {filingMode ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', height: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong style={{ fontSize: '0.85rem' }}>Filing Mode</strong>
+              <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setFilingMode(false); refreshAll(); }} style={{ padding: '0.2rem 0.5rem', width: 'auto', fontSize: '0.7rem' }}>
+                Cancel
               </button>
             </div>
-          ))}
-          {unsortedCards.length === 0 && <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Nothing unsorted.</p>}
-        </div>
+            
+            <div style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              Card {filingIndex + 1} of {filingQueue.length}
+            </div>
+            
+            {filingQueue[filingIndex] && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem', marginTop: '1rem' }}>
+                <img src={filingQueue[filingIndex].entry.image_url} alt={filingQueue[filingIndex].entry.name} style={{ width: '120px', borderRadius: '5px', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }} />
+                
+                <div style={{ textAlign: 'center' }}>
+                  <strong style={{ fontSize: '1rem', display: 'block' }}>{filingQueue[filingIndex].entry.name}</strong>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{filingQueue[filingIndex].entry.set_name} • {filingQueue[filingIndex].entry.printing}</span>
+                </div>
+                
+                {filingQueue[filingIndex].recommended ? (
+                  <div style={{ background: 'rgba(255, 193, 7, 0.15)', border: '1px solid #ffc107', borderRadius: 'var(--radius-sm)', padding: '0.75rem', width: '100%', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.7rem', color: '#ffc107', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 'bold', marginBottom: '0.25rem' }}>Place Here</div>
+                    <strong style={{ fontSize: '0.9rem', color: '#fff' }}>{filingQueue[filingIndex].recommended.label}</strong>
+                  </div>
+                ) : (
+                  <div style={{ background: 'rgba(255, 71, 71, 0.15)', border: '1px solid #ff4747', borderRadius: 'var(--radius-sm)', padding: '0.75rem', width: '100%', textAlign: 'center' }}>
+                    <strong style={{ fontSize: '0.9rem', color: '#fff' }}>Container Full!</strong>
+                  </div>
+                )}
+                
+                <div style={{ display: 'flex', gap: '0.5rem', width: '100%', marginTop: '0.5rem' }}>
+                  <button type="button" className="btn btn-secondary" onClick={() => { if (filingIndex + 1 < filingQueue.length) { setFilingIndex(prev => prev + 1); } else { showToast('Filing complete!'); setFilingMode(false); onUpdate(); } }} style={{ flex: 1, padding: '0.6rem' }}>
+                    Skip
+                  </button>
+                  <button 
+                    type="button" 
+                    className="btn btn-primary" 
+                    disabled={!filingQueue[filingIndex].recommended}
+                    onClick={() => {
+                      const rec = filingQueue[filingIndex].recommended;
+                      handleFilingPlaced(filingQueue[filingIndex].entry.entry_id, rec.location_id, rec.compartment_id, rec.position);
+                    }} 
+                    style={{ flex: 2, padding: '0.6rem', fontSize: '0.9rem', fontWeight: 'bold' }}
+                  >
+                    Placed
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            <strong style={{ fontSize: '0.85rem' }}>Unsorted ({unsortedCards.length})</strong>
+            {newestScannedCard && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.65rem', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+                <input
+                  type="checkbox"
+                  checked={showNewestRecommendation}
+                  onChange={(e) => setShowNewestRecommendation(e.target.checked)}
+                />
+                <span>Show recommended spot for newest scanned</span>
+              </label>
+            )}
+            <input
+              className="input-control" placeholder="Search..." value={unsortedSearch}
+              onChange={(e) => setUnsortedSearch(e.target.value)} style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
+            />
+            <select className="select-control" value={unsortedSort} onChange={(e) => setUnsortedSort(e.target.value)} style={{ fontSize: '0.7rem', padding: '0.3rem 0.5rem' }}>
+              <option value="scanned-desc">Scanned (Newest First)</option>
+              <option value="scanned-asc">Scanned (Oldest First)</option>
+              <option value="name-asc">A-Z</option>
+              <option value="price-desc">Value (High-Low)</option>
+              <option value="set-number">Set & Number</option>
+            </select>
+
+            {unsortedCards.length > 0 && (
+              <div style={{ display: 'flex', gap: '0.35rem' }}>
+                <select className="select-control" value={applyAllTarget} onChange={(e) => setApplyAllTarget(e.target.value)} style={{ fontSize: '0.65rem', padding: '0.25rem 0.4rem', flex: 1 }}>
+                  <option value="">Sort/Apply to...</option>
+                  {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                </select>
+                <button type="button" className="btn btn-secondary" disabled={!applyAllTarget} onClick={startFilingMode} style={{ fontSize: '0.65rem', padding: '0.25rem 0.5rem' }} title="Sort cards and file one by one">
+                  File Cards
+                </button>
+                <button type="button" className="btn btn-primary" disabled={!applyAllTarget} onClick={handleApplyAll} style={{ fontSize: '0.65rem', padding: '0.25rem 0.5rem' }}>
+                  Apply All
+                </button>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              {unsortedCards.map(card => (
+                <div key={card.entry_id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.7rem', padding: '0.3rem 0', borderBottom: '1px solid var(--border-glass)' }}>
+                  <div style={{ position: 'relative', width: '28px', flexShrink: 0, overflow: 'hidden', borderRadius: '3px', ...getCardRarityBorder(card.rarity) }}>
+                    <img src={card.image_url} alt={card.name} style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', display: 'block' }} />
+                    {getFoilOverlayClass(card.printing) && (
+                      <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '3px' }} />
+                    )}
+                  </div>
+                  <span
+                    onClick={() => { setSelectedCardFilter(card.name); setActiveTab('collection'); }}
+                    title="Find in Collection"
+                    style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                  >
+                    {card.name}
+                  </span>
+                  <select
+                    className="select-control" value=""
+                    onChange={(e) => { if (e.target.value) handleFileCard(card.entry_id, parseInt(e.target.value, 10)); }}
+                    style={{ fontSize: '0.6rem', padding: '0.15rem 0.25rem', maxWidth: '90px' }}
+                  >
+                    <option value="">File to...</option>
+                    {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
+                  <button type="button" onClick={() => handleDeleteCard(card.entry_id)} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+              {unsortedCards.length === 0 && <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Nothing unsorted.</p>}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

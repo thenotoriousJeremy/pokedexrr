@@ -1,18 +1,27 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Plus, X, Info, HelpCircle } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Search, Plus, X, Info, HelpCircle, ShieldAlert } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
+import { translateJapaneseName } from '../utils/pokemonTranslation';
 
-function CardSearch({ onAddSuccess, showToast }) {
+
+function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   const [query, setQuery] = useState('');
   const [numberQuery, setNumberQuery] = useState('');
   const [setCodeQuery, setSetCodeQuery] = useState('');
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(null);
   
+  // Filter states
+  const [filterRarity, setFilterRarity] = useState('');
+  const [filterType, setFilterType] = useState('');
+  const [filterSupertype, setFilterSupertype] = useState('');
+  const [sortBy, setSortBy] = useState('relevance');
+
   // Drawer states
   const [selectedCard, setSelectedCard] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -53,18 +62,31 @@ function CardSearch({ onAddSuccess, showToast }) {
     
     setLoading(true);
     setSearching(true);
+    setSearchError(null);
+    setFilterType('');
+    setFilterRarity('');
+    setFilterSupertype('');
+    setSortBy('relevance');
     try {
       const params = new URLSearchParams();
-      if (query) params.append('name', query);
+      const finalQuery = query ? (translateJapaneseName(query) || query) : '';
+      if (finalQuery) params.append('name', finalQuery);
       if (numberQuery) params.append('number', numberQuery);
       if (setCodeQuery) params.append('set', setCodeQuery);
+      params.append('scope', 'internet');
 
       const response = await fetch(`/api/search?${params.toString()}`);
       if (response.ok) {
         const data = await response.json();
         setCards(data);
       } else {
-        showToast('Search request failed.');
+        const errData = await response.json().catch(() => ({}));
+        if (response.status === 403 || errData.error === 'Invalid API Key') {
+          setSearchError('invalid-key');
+        } else if (response.status === 429 || errData.error === 'Rate limit exceeded') {
+          setSearchError('rate-limit');
+        }
+        showToast(errData.error || 'Search request failed.');
       }
     } catch (err) {
       console.error(err);
@@ -73,6 +95,72 @@ function CardSearch({ onAddSuccess, showToast }) {
       setLoading(false);
     }
   };
+
+  // Dynamically compute filters from search results
+  const uniqueRarities = useMemo(() => {
+    const set = new Set();
+    cards.forEach(c => { if (c.rarity) set.add(c.rarity); });
+    return Array.from(set).sort();
+  }, [cards]);
+
+  const uniqueSupertypes = useMemo(() => {
+    const set = new Set();
+    cards.forEach(c => { if (c.supertype) set.add(c.supertype); });
+    return Array.from(set).sort();
+  }, [cards]);
+
+  const uniqueTypes = useMemo(() => {
+    const set = new Set();
+    cards.forEach(c => {
+      if (c.types) {
+        c.types.forEach(t => set.add(t));
+      }
+    });
+    return Array.from(set).sort();
+  }, [cards]);
+
+  // Apply filters and sorting
+  const filteredAndSortedCards = useMemo(() => {
+    let result = [...cards];
+
+    // Apply filters
+    if (filterRarity) {
+      result = result.filter(c => c.rarity === filterRarity);
+    }
+    if (filterSupertype) {
+      result = result.filter(c => c.supertype === filterSupertype);
+    }
+    if (filterType) {
+      result = result.filter(c => c.types && c.types.includes(filterType));
+    }
+
+    // Apply sorting
+    if (sortBy === 'name-asc') {
+      result.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sortBy === 'name-desc') {
+      result.sort((a, b) => b.name.localeCompare(a.name));
+    } else if (sortBy === 'price-asc') {
+      result.sort((a, b) => (a.price_trend || 0) - (b.price_trend || 0));
+    } else if (sortBy === 'price-desc') {
+      result.sort((a, b) => (b.price_trend || 0) - (a.price_trend || 0));
+    } else if (sortBy === 'number-asc') {
+      result.sort((a, b) => {
+        const numA = parseInt(a.number, 10);
+        const numB = parseInt(b.number, 10);
+        if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+        return a.number.localeCompare(b.number);
+      });
+    } else if (sortBy === 'number-desc') {
+      result.sort((a, b) => {
+        const numA = parseInt(a.number, 10);
+        const numB = parseInt(b.number, 10);
+        if (!isNaN(numA) && !isNaN(numB)) return numB - numA;
+        return b.number.localeCompare(a.number);
+      });
+    }
+
+    return result;
+  }, [cards, filterRarity, filterSupertype, filterType, sortBy]);
 
   const openQuickAdd = (card) => {
     setSelectedCard(card);
@@ -84,10 +172,6 @@ function CardSearch({ onAddSuccess, showToast }) {
     } else {
       setPrinting('Normal');
     }
-    
-    // Set default sub-location placeholders based on container type
-    setSubLocation1('');
-    setSubLocation2('');
 
     setIsDrawerOpen(true);
   };
@@ -200,18 +284,87 @@ function CardSearch({ onAddSuccess, showToast }) {
 
           <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '0.5rem' }}>
             <Search size={18} />
-            Search Database
+            Search Internet API
           </button>
         </form>
       </div>
 
+      {searchError && (
+        <div className="glass-panel" style={{ borderLeft: '4px solid var(--accent-red)', background: 'rgba(239, 68, 68, 0.08)', padding: '1.25rem', marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--accent-red)', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+            <ShieldAlert size={18} />
+            {searchError === 'invalid-key' ? 'Invalid API Key' : 'Rate Limit Exceeded'}
+          </h3>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
+            {searchError === 'invalid-key' 
+              ? 'Your custom Pokémon TCG API key is invalid or unauthorized.' 
+              : 'You have exceeded the unauthenticated search rate limits.'}
+            {' '}Get a free API key at <a href="https://dev.pokemontcg.io/" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-yellow)', textDecoration: 'underline' }}>pokemontcg.io</a> and configure it in your Settings.
+          </p>
+          {setActiveTab && (
+            <button 
+              type="button" 
+              className="btn btn-secondary" 
+              onClick={() => setActiveTab('settings')}
+              style={{ width: 'fit-content', padding: '0.35rem 0.75rem', fontSize: '0.75rem', marginTop: '0.25rem' }}
+            >
+              Go to Settings
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Loading state */}
       {loading && <div className="spinner"></div>}
 
-      {/* Search Results Grid */}
+      {/* Filters and Sorting Panel */}
       {!loading && cards.length > 0 && (
+        <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem', alignItems: 'end' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>FILTER BY TYPE</label>
+              <select className="select-control" value={filterType} onChange={e => setFilterType(e.target.value)}>
+                <option value="">All Types</option>
+                {uniqueTypes.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>FILTER BY RARITY</label>
+              <select className="select-control" value={filterRarity} onChange={e => setFilterRarity(e.target.value)}>
+                <option value="">All Rarities</option>
+                {uniqueRarities.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>FILTER BY SUPERTYPE</label>
+              <select className="select-control" value={filterSupertype} onChange={e => setFilterSupertype(e.target.value)}>
+                <option value="">All Supertypes</option>
+                {uniqueSupertypes.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>SORT BY</label>
+              <select className="select-control" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+                <option value="relevance">Relevance</option>
+                <option value="name-asc">Name (A-Z)</option>
+                <option value="name-desc">Name (Z-A)</option>
+                <option value="price-asc">Price (Low to High)</option>
+                <option value="price-desc">Price (High to Low)</option>
+                <option value="number-asc">Number (Ascending)</option>
+                <option value="number-desc">Number (Descending)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Search Results Grid */}
+      {!loading && cards.length > 0 && filteredAndSortedCards.length > 0 && (
         <div className="card-grid">
-          {cards.map((card) => {
+          {filteredAndSortedCards.map((card) => {
             const glowClass = (card.types && card.types[0]) ? `type-glow-${card.types[0].toLowerCase()}` : 'type-glow-normal';
             return (
               <div 
@@ -236,6 +389,13 @@ function CardSearch({ onAddSuccess, showToast }) {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Filtered Empty State */}
+      {!loading && cards.length > 0 && filteredAndSortedCards.length === 0 && (
+        <div className="glass-panel" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 1.5rem', marginBottom: '2rem' }}>
+          <p>No cards matched your active filters. Try clearing your selection above.</p>
         </div>
       )}
 
@@ -322,24 +482,7 @@ function CardSearch({ onAddSuccess, showToast }) {
                 </div>
               </div>
 
-              <div className="glass-panel" style={{ padding: '1rem', marginTop: '0.5rem', marginBottom: '1.25rem', background: 'rgba(0,0,0,0.2)' }}>
-                <h4 style={{ fontSize: '0.8rem', color: 'var(--text-primary)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Real-World Location Assignment</h4>
-                
-                <div className="form-group">
-                  <label>Storage Container</label>
-                  <select className="select-control" value={locationId} onChange={handleLocationChange}>
-                    <option value="">Unassigned Pile</option>
-                    {locations.map((loc) => (
-                      <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
-                    ))}
-                  </select>
-                  {locationId && (
-                    <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-                      The sort assistant picks the exact page/row automatically based on this container's sort order.
-                    </p>
-                  )}
-                </div>
-              </div>
+
 
               <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem' }}>
                 <button type="button" className="btn btn-secondary" onClick={closeDrawer} style={{ flex: 1 }}>Cancel</button>

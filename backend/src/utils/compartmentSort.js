@@ -102,46 +102,137 @@ async function loadCompartments(db, locationId, userId) {
 
 // Recommends a {compartment_id, position, label} for placing cardMetadata
 // (name/set_name/number/types/rarity/price_trend/printing) into a location.
+// Recommends a {compartment_id, position, label} for placing cardMetadata
+// (name/set_name/number/types/rarity/price_trend/printing) into a location.
 // overrideCompartments lets a caller (e.g. a bulk "apply all" action) pass a
 // simulated in-memory snapshot instead of hitting the DB fresh each call, so
 // a batch of cards never collide on the same slot.
-async function recommendSlot(db, location, cardMetadata, overrideCompartments = null) {
+async function recommendSlot(db, location, cardMetadata, overrideCompartments = null, mockCards = []) {
   const compartments = overrideCompartments || await loadCompartments(db, location.id, location.user_id);
-  const candidates = compartments.filter(c => c.free > 0);
-  if (candidates.length === 0) return null;
+  if (compartments.length === 0) return null;
 
   const cardSet = cardMetadata.set_name;
 
-  if (location.sort_order === 'custom') {
-    const best = candidates.find(c => cardSet && c.assignedSets.includes(cardSet))
-      || candidates.find(c => c.assignedSets.length === 0)
-      || candidates[0];
-    return {
-      compartment_id: best.id,
-      position: (best.count + 1) * 1000,
-      label: compartmentLabel(best, location.type)
-    };
-  }
-
-  // Categorized sort: restrict to compartments that would accept this card
-  // (assigned to its set, or unassigned — never route into a compartment
-  // dedicated to a different set), then sort the whole pool by scheme and
-  // walk it into compartments in index order using their real capacities.
-  const pool = candidates.filter(c => c.assignedSets.length === 0 || (cardSet && c.assignedSets.includes(cardSet)));
-  const usablePool = pool.length > 0 ? pool : candidates;
-
-  const existingCards = await db.all(`
+  // 1. Get all cards in this location to check which sets are currently in which compartments
+  const allLocationCards = await db.all(`
     SELECT c.id as entry_id, c.compartment_id, c.printing, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
     FROM collection c
     JOIN card_cache cc ON c.card_id = cc.id
-    WHERE c.user_id = ? AND c.compartment_id IN (${usablePool.map(() => '?').join(',')})
-  `, [location.user_id, ...usablePool.map(c => c.id)]);
+    WHERE c.user_id = ? AND c.location_id = ?
+  `, [location.user_id, location.id]);
 
-  existingCards.forEach(c => {
+  allLocationCards.push(...mockCards);
+
+  allLocationCards.forEach(c => {
     try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; }
     c.price_trend = resolveCardPrice(c);
   });
+
+  // Group cards by compartment ID
+  const cardsByCompId = new Map();
+  allLocationCards.forEach(c => {
+    if (!c.compartment_id) return;
+    if (!cardsByCompId.has(c.compartment_id)) cardsByCompId.set(c.compartment_id, []);
+    cardsByCompId.get(c.compartment_id).push(c);
+  });
+
+  // Check if this location is full
+  const allCompartmentsFull = compartments.every(c => {
+    const count = overrideCompartments
+      ? (overrideCompartments.find(oc => oc.id === c.id)?.count || 0)
+      : (cardsByCompId.get(c.id) || []).length;
+    return count >= c.capacity;
+  });
+
+  if (allCompartmentsFull) {
+    // Look for other locations of the same user
+    const otherLocations = await db.all(
+      `SELECT id, name, type, sort_order, foil_sorting, user_id FROM locations WHERE user_id = ? AND id != ? ORDER BY id ASC`,
+      [location.user_id, location.id]
+    );
+    for (const otherLoc of otherLocations) {
+      const otherComps = await loadCompartments(db, otherLoc.id, location.user_id);
+      const hasSpace = otherComps.some(c => c.free > 0);
+      if (hasSpace) {
+        const rec = await recommendSlot(db, otherLoc, cardMetadata, otherComps);
+        if (rec) {
+          return {
+            ...rec,
+            location_id: otherLoc.id
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  // Determine dynamic sets for each compartment
+  const dynamicSetsByCompId = new Map();
+  compartments.forEach(c => {
+    const compCards = cardsByCompId.get(c.id) || [];
+    const cardSets = compCards.map(card => card.set_name).filter(Boolean);
+    const combinedSets = new Set([...(c.assignedSets || []), ...cardSets]);
+    dynamicSetsByCompId.set(c.id, Array.from(combinedSets));
+  });
+
+  // Find compartments assigned to the card's set (explicitly or dynamically)
+  const assignedComps = compartments.filter(c => {
+    const sets = dynamicSetsByCompId.get(c.id) || [];
+    return cardSet && sets.includes(cardSet);
+  });
+
+  // Find unassigned/empty compartments (no explicit assignments and no cards from other sets)
+  const unassignedComps = compartments.filter(c => {
+    const sets = dynamicSetsByCompId.get(c.id) || [];
+    return sets.length === 0;
+  });
+
+  // Build the eligible pool (assigned first, then unassigned as overflow)
+  let pool = [...assignedComps, ...unassignedComps];
+  pool.sort((a, b) => a.idx - b.idx);
+
+  // If the pool has no free space, fall back to all compartments in the location
+  const poolHasFreeSpace = pool.some(c => {
+    const count = overrideCompartments
+      ? (overrideCompartments.find(oc => oc.id === c.id)?.count || 0)
+      : (cardsByCompId.get(c.id) || []).length;
+    return count < c.capacity;
+  });
+
+  if (pool.length === 0 || !poolHasFreeSpace) {
+    pool = [...compartments];
+  }
+
+  // Handle custom sort order recommendation
+  if (location.sort_order === 'custom') {
+    const usableCandidates = pool.filter(c => {
+      const count = overrideCompartments
+        ? (overrideCompartments.find(oc => oc.id === c.id)?.count || 0)
+        : (cardsByCompId.get(c.id) || []).length;
+      return count < c.capacity;
+    });
+    const best = usableCandidates.find(c => {
+      const sets = dynamicSetsByCompId.get(c.id) || [];
+      return cardSet && sets.includes(cardSet);
+    }) || usableCandidates.find(c => {
+      const sets = dynamicSetsByCompId.get(c.id) || [];
+      return sets.length === 0;
+    }) || usableCandidates[0];
+
+    if (!best) return null;
+    const bestCards = cardsByCompId.get(best.id) || [];
+    return {
+      location_id: location.id,
+      compartment_id: best.id,
+      position: (bestCards.length + 1) * 1000,
+      label: `${compartmentLabel(best, location.type)} (in ${location.name})`
+    };
+  }
+
+  // Structured sort:
+  const poolIds = pool.map(c => c.id);
+  const existingCardsInPool = allLocationCards.filter(c => poolIds.includes(c.compartment_id));
 
   const newCard = {
     entry_id: -1,
@@ -155,25 +246,25 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
     price_trend: resolveCardPrice(cardMetadata)
   };
 
-  const sorted = sortCards([...existingCards, newCard], location.sort_order, location.foil_sorting);
+  const sorted = sortCards([...existingCardsInPool, newCard], location.sort_order, location.foil_sorting);
   const targetIndex = sorted.findIndex(c => c.entry_id === -1);
   if (targetIndex === -1) return null;
 
-  // Walk usablePool in index order, consuming capacity, until targetIndex falls inside one.
   let cursor = 0;
-  for (const compartment of usablePool) {
+  for (const compartment of pool) {
     if (targetIndex < cursor + compartment.capacity) {
-      const seq = targetIndex - cursor; // 0-based position within this compartment
+      const seq = targetIndex - cursor;
       return {
+        location_id: location.id,
         compartment_id: compartment.id,
         position: (seq + 1) * 1000,
-        label: `${compartmentLabel(compartment, location.type)}, Pos ${seq + 1}`
+        label: `${compartmentLabel(compartment, location.type)}, Pos ${seq + 1} (in ${location.name})`
       };
     }
     cursor += compartment.capacity;
   }
 
-  return null; // whole pool is full
+  return null;
 }
 
 module.exports = { sortCards, compartmentLabel, loadCompartments, recommendSlot };

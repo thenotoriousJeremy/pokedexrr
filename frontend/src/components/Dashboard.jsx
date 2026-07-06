@@ -3,7 +3,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pi
 import { TrendingUp, Coins, Library, Trophy, Plus, ArrowUpRight, X } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
-import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
+import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
+import { getCardRarityBorder } from '../utils/cardRarity';
 import PriceHistoryChart from './PriceHistoryChart';
 
 const COLORS = [
@@ -25,7 +26,7 @@ const TYPE_COLORS = {
   'Colorless': '#cbd5e1'
 };
 
-function Dashboard({ statsTrigger, onNavigate }) {
+function Dashboard({ statsTrigger, onNavigate, setSelectedCardFilter, setSelectedLocationId }) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -104,7 +105,7 @@ function Dashboard({ statsTrigger, onNavigate }) {
         <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
           <div style={{ display: 'inline-block' }}>
             <span style={{ fontSize: '0.85rem', display: 'block', marginBottom: '0.25rem' }}>Scan with Camera</span>
-            <button className="btn btn-primary" onClick={() => onNavigate && onNavigate('scanner')}>Go to Scanner</button>
+            <button className="btn btn-primary" onClick={() => onNavigate && onNavigate('add-cards')}>Go to Add Cards</button>
           </div>
         </div>
       </div>
@@ -482,6 +483,8 @@ function Dashboard({ statsTrigger, onNavigate }) {
           <div className="glass-panel" style={{
             maxWidth: '680px',
             width: '100%',
+            maxHeight: '90vh',
+            overflowY: 'auto',
             padding: '2rem',
             display: 'flex',
             flexDirection: 'row',
@@ -493,25 +496,36 @@ function Dashboard({ statsTrigger, onNavigate }) {
               position: 'absolute',
               top: '1rem',
               right: '1rem',
-              borderRadius: '50%'
+              borderRadius: '50%',
+              zIndex: 10
             }}>
               <X size={16} />
             </button>
 
             {/* Left side: Card Image */}
-            <div style={{ flex: '1 1 240px', display: 'flex', justifyContent: 'center' }}>
-              <img 
-                src={inspectorCard.image_url} 
-                alt={inspectorCard.name} 
-                style={{
-                  width: '100%',
-                  maxWidth: '260px',
-                  aspectRatio: 0.718,
-                  objectFit: 'cover',
-                  borderRadius: 'var(--radius-md)',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.5), 0 0 15px rgba(255, 255, 255, 0.05)'
-                }}
-              />
+            <div style={{ flex: '1 1 240px', display: 'flex', justifyContent: 'center', alignItems: 'flex-start' }}>
+              <div style={{
+                position: 'relative',
+                width: '100%',
+                maxWidth: '260px',
+                borderRadius: 'var(--radius-md)',
+                overflow: 'hidden',
+                ...getCardRarityBorder(inspectorCard.rarity)
+              }}>
+                <img 
+                  src={inspectorCard.image_url} 
+                  alt={inspectorCard.name} 
+                  style={{
+                    width: '100%',
+                    aspectRatio: 0.718,
+                    objectFit: 'cover',
+                    display: 'block'
+                  }}
+                />
+                {getFoilOverlayClass(inspectorCard.printing) && (
+                  <div className={getFoilOverlayClass(inspectorCard.printing)} style={{ borderRadius: 'var(--radius-md)' }} />
+                )}
+              </div>
             </div>
 
             {/* Right side: Information */}
@@ -566,6 +580,32 @@ function Dashboard({ statsTrigger, onNavigate }) {
                 <div><span style={{ color: 'var(--text-muted)' }}>Condition:</span> <span style={{ color: '#fff' }}>{inspectorCard.condition}</span></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>Printing:</span> <span style={{ color: '#fff' }}>{inspectorCard.printing}</span></div>
                 <div><span style={{ color: 'var(--text-muted)' }}>Language:</span> <span style={{ color: '#fff' }}>{inspectorCard.language}</span></div>
+              </div>
+
+              {/* Navigation Actions */}
+              <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+                <button 
+                  className="btn btn-secondary" 
+                  style={{ flex: 1, fontSize: '0.8rem', padding: '0.5rem 0.75rem' }}
+                  onClick={() => {
+                    if (setSelectedCardFilter) setSelectedCardFilter(inspectorCard.name);
+                    onNavigate('collection');
+                    setInspectorCard(null);
+                  }}
+                >
+                  View in Collection
+                </button>
+                <button 
+                  className="btn btn-secondary" 
+                  style={{ flex: 1, fontSize: '0.8rem', padding: '0.5rem 0.75rem' }}
+                  onClick={() => {
+                    if (setSelectedLocationId) setSelectedLocationId(inspectorCard.location_id || 'unsorted');
+                    onNavigate('storage');
+                    setInspectorCard(null);
+                  }}
+                >
+                  View in Storage
+                </button>
               </div>
             </div>
           </div>

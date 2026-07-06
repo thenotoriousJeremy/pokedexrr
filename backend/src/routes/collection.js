@@ -44,7 +44,7 @@ async function resolveCompartmentAndPosition({ locationId, compartmentId, positi
 
   const recommended = await recommendSlot(db, location, cardMetadata);
   if (!recommended) return { compartment_id: null, position: 0 }; // container full — leave unsorted rather than error
-  return { compartment_id: recommended.compartment_id, position: recommended.position };
+  return { compartment_id: recommended.compartment_id, position: recommended.position, location_id: recommended.location_id };
 }
 
 const router = express.Router();
@@ -53,12 +53,18 @@ router.use(authenticateToken);
 
 // 1. Search Pokémon TCG cards (proxies to Pokemon TCG API and database cache)
 router.get('/search', async (req, res) => {
-  const { name, number, set } = req.query;
+  const { name, number, set, scope = 'database' } = req.query;
   try {
-    const results = await tcgApi.searchCards(name, number, set, req.user.tcg_api_key);
+    const results = await tcgApi.searchCards(name, number, set, req.user.tcg_api_key, scope, req.user.id);
     res.json(results);
   } catch (error) {
     console.error(error);
+    if (error.message === 'INVALID_API_KEY') {
+      return res.status(403).json({ error: 'Invalid API Key' });
+    }
+    if (error.message === 'RATE_LIMIT_EXCEEDED') {
+      return res.status(429).json({ error: 'Rate limit exceeded' });
+    }
     res.status(500).json({ error: 'Search failed' });
   }
 });
@@ -179,24 +185,40 @@ router.post('/collection', async (req, res) => {
     const resolved = await resolveCompartmentAndPosition({
       locationId: location_id, compartmentId: compartment_id, position, userId: req.user.id, cardId: card_id, printing
     });
+    const finalLocationId = resolved.location_id !== undefined && resolved.location_id !== null ? resolved.location_id : location_id;
 
     // Check if an identical card entry already exists in this compartment to stack them
-    const existing = await db.get(`
-      SELECT id, quantity FROM collection
-      WHERE card_id = ? AND condition = ? AND printing = ? AND language = ?
-        AND location_id IS ? AND compartment_id IS ?
-        AND user_id = ? AND list_type = ? AND is_trade = ?
-    `, [
-      card_id,
-      condition,
-      printing,
-      language,
-      location_id,
-      resolved.compartment_id,
-      req.user.id,
-      list_type,
-      is_trade ? 1 : 0
-    ]);
+    let existing = null;
+    let shouldStack = false;
+    if (resolved.compartment_id) {
+      const loc = await db.get(`
+        SELECT l.type FROM locations l
+        JOIN compartments c ON l.id = c.location_id
+        WHERE c.id = ?
+      `, [resolved.compartment_id]);
+      if (loc && (loc.type === 'Binder' || loc.type === 'Toploader Binder')) {
+        shouldStack = true;
+      }
+    }
+
+    if (shouldStack) {
+      existing = await db.get(`
+        SELECT id, quantity FROM collection
+        WHERE card_id = ? AND condition = ? AND printing = ? AND language = ?
+          AND location_id IS ? AND compartment_id IS ?
+          AND user_id = ? AND list_type = ? AND is_trade = ?
+      `, [
+        card_id,
+        condition,
+        printing,
+        language,
+        finalLocationId,
+        resolved.compartment_id,
+        req.user.id,
+        list_type,
+        is_trade ? 1 : 0
+      ]);
+    }
 
     let lastInsertedId;
     if (existing) {
@@ -217,7 +239,7 @@ router.post('/collection', async (req, res) => {
         printing,
         language,
         purchase_price || 0,
-        location_id,
+        finalLocationId,
         resolved.compartment_id,
         req.user.id,
         list_type,
@@ -305,7 +327,7 @@ router.put('/collection/:id', async (req, res) => {
         cardId: entry.card_id,
         printing: printing !== undefined ? printing : entry.printing
       });
-      finalLocId = location_id !== undefined ? location_id : entry.location_id;
+      finalLocId = resolved.location_id !== undefined && resolved.location_id !== null ? resolved.location_id : (location_id !== undefined ? location_id : entry.location_id);
       finalCompartmentId = resolved.compartment_id;
       finalPosition = resolved.position;
     }
@@ -319,23 +341,38 @@ router.put('/collection/:id', async (req, res) => {
     const finalIsTrade = is_trade !== undefined ? (is_trade ? 1 : 0) : entry.is_trade;
 
     // Check if there is an identical card entry already in that new compartment (except this row itself)
-    const existing = await db.get(`
-      SELECT id, quantity FROM collection
-      WHERE card_id = ? AND condition = ? AND printing = ? AND language = ?
-        AND location_id IS ? AND compartment_id IS ?
-        AND user_id = ? AND list_type = ? AND is_trade = ? AND id != ?
-    `, [
-      entry.card_id,
-      finalCondition,
-      finalPrinting,
-      finalLanguage,
-      finalLocId,
-      finalCompartmentId,
-      req.user.id,
-      finalListType,
-      finalIsTrade,
-      entry.id
-    ]);
+    let existing = null;
+    let shouldStack = false;
+    if (finalCompartmentId) {
+      const loc = await db.get(`
+        SELECT l.type FROM locations l
+        JOIN compartments c ON l.id = c.location_id
+        WHERE c.id = ?
+      `, [finalCompartmentId]);
+      if (loc && (loc.type === 'Binder' || loc.type === 'Toploader Binder')) {
+        shouldStack = true;
+      }
+    }
+
+    if (shouldStack) {
+      existing = await db.get(`
+        SELECT id, quantity FROM collection
+        WHERE card_id = ? AND condition = ? AND printing = ? AND language = ?
+          AND location_id IS ? AND compartment_id IS ?
+          AND user_id = ? AND list_type = ? AND is_trade = ? AND id != ?
+      `, [
+        entry.card_id,
+        finalCondition,
+        finalPrinting,
+        finalLanguage,
+        finalLocId,
+        finalCompartmentId,
+        req.user.id,
+        finalListType,
+        finalIsTrade,
+        entry.id
+      ]);
+    }
 
     if (existing) {
       const newQuantity = existing.quantity + finalQuantity;
@@ -702,6 +739,66 @@ router.get('/locations/:id/recommend', async (req, res) => {
   }
 });
 
+// Computes placement for a batch of unsorted cards, passing each placed card
+// into the next iteration's mock state so they order correctly relative to each other.
+router.post('/locations/:id/recommend-batch', async (req, res) => {
+  const { id } = req.params;
+  const { entry_ids = [] } = req.body;
+  try {
+    const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+    if (!Array.isArray(entry_ids) || entry_ids.length === 0) return res.status(400).json({ error: 'entry_ids is required' });
+
+    let workingCompartments = await loadCompartments(db, id, req.user.id);
+    const mockCards = [];
+    const recommendations = [];
+
+    for (const entryId of entry_ids) {
+      const entry = await db.get(`
+        SELECT c.id as entry_id, c.card_id, c.printing, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url
+        FROM collection c
+        JOIN card_cache cc ON c.card_id = cc.id
+        WHERE c.id = ? AND c.user_id = ?
+      `, [entryId, req.user.id]);
+      if (!entry) continue;
+      try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
+
+      const recommended = await recommendSlot(db, location, entry, workingCompartments, mockCards);
+      if (!recommended) {
+        recommendations.push({ entry, recommended: null });
+        continue;
+      }
+      
+      recommendations.push({ entry, recommended });
+
+      workingCompartments = workingCompartments.map(c =>
+        c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
+      );
+      
+      mockCards.push({
+        entry_id: entry.entry_id,
+        compartment_id: recommended.compartment_id,
+        printing: entry.printing,
+        name: entry.name,
+        supertype: entry.supertype,
+        types: JSON.stringify(entry.types),
+        rarity: entry.rarity,
+        set_name: entry.set_name,
+        number: entry.number,
+        price_trend: entry.price_trend,
+        price_normal: entry.price_normal,
+        price_holofoil: entry.price_holofoil,
+        price_reverse_holofoil: entry.price_reverse_holofoil
+      });
+    }
+
+    res.json(recommendations);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to compute batch recommendations' });
+  }
+});
+
 // Files a whole batch of unsorted cards into a location in one request,
 // simulating slot assignment against an in-memory snapshot so two cards in
 // the same batch never collide on the same compartment/position — the
@@ -855,6 +952,7 @@ router.get('/stats', async (req, res) => {
     // Get top most valuable cards (scoped to user)
     const topValuableQuery = `
       SELECT
+        c.id AS entry_id, c.location_id, (SELECT name FROM locations WHERE id = c.location_id) AS location_name,
         c.quantity, c.condition, c.printing, c.language, c.purchase_price,
         cc.id as card_id, cc.name, cc.rarity, cc.set_name, cc.image_url, cc.price_trend,
         cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
@@ -920,7 +1018,8 @@ router.get('/stats', async (req, res) => {
 
     // Recently added cards (most useful "what did I just add" glance)
     const recentRows = await db.all(`
-      SELECT c.quantity, c.condition, c.printing, c.language, c.added_at,
+      SELECT c.id AS entry_id, c.location_id, (SELECT name FROM locations WHERE id = c.location_id) AS location_name,
+             c.quantity, c.condition, c.printing, c.language, c.added_at,
              cc.id as card_id, cc.name, cc.rarity, cc.set_name, cc.number, cc.image_url,
              cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
       FROM collection c

@@ -3,6 +3,7 @@ import { Search, Download, Trash2, Edit2, X, MapPin, LayoutGrid, List, Database,
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
+import { translateJapaneseName } from '../utils/pokemonTranslation';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import PriceHistoryChart from './PriceHistoryChart';
@@ -35,6 +36,11 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
   const [minPriceFilter, setMinPriceFilter] = useState('');
   const [maxPriceFilter, setMaxPriceFilter] = useState('');
   const [sortBy, setSortBy] = useState('added-newest');
+  
+  // Stacking state
+  const [stackCards, setStackCards] = useState(false);
+  const [stackByCondition, setStackByCondition] = useState(false);
+  const [stackByPrinting, setStackByPrinting] = useState(false);
   
   // Edit Modal State
   const [editingItem, setEditingItem] = useState(null);
@@ -211,9 +217,11 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
   );
 
   // Filter logic
-  const filteredCollection = useMemo(() => collection.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(searchFilter.toLowerCase()) ||
-                          (item.set_name || '').toLowerCase().includes(searchFilter.toLowerCase()) ||
+  const filteredCollection = useMemo(() => {
+    const translatedSearch = searchFilter ? (translateJapaneseName(searchFilter) || searchFilter).toLowerCase() : '';
+    return collection.filter(item => {
+    const matchesSearch = item.name.toLowerCase().includes(translatedSearch) ||
+                          (item.set_name || '').toLowerCase().includes(translatedSearch) ||
                           (item.number || '').includes(searchFilter);
     const matchesLocation = locationFilter === '' ? true :
                             locationFilter === 'unassigned' ? !item.location_id :
@@ -243,7 +251,27 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
     } else { // 'added-newest'
       return new Date(b.added_at || 0) - new Date(a.added_at || 0);
     }
-  }), [collection, searchFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, minPriceFilter, maxPriceFilter, sortBy]);
+  });
+  }, [collection, searchFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, minPriceFilter, maxPriceFilter, sortBy]);
+
+  // Group duplicate cards if stack option is active
+  const processedCollection = useMemo(() => {
+    if (!stackCards) return filteredCollection;
+
+    const groups = {};
+    filteredCollection.forEach(item => {
+      let key = item.card_id;
+      if (stackByCondition) key += `-${item.condition}`;
+      if (stackByPrinting) key += `-${item.printing}`;
+
+      if (!groups[key]) {
+        groups[key] = { ...item };
+      } else {
+        groups[key].quantity += item.quantity;
+      }
+    });
+    return Object.values(groups);
+  }, [filteredCollection, stackCards, stackByCondition, stackByPrinting]);
 
   return (
     <div>
@@ -404,20 +432,66 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                 </div>
               </div>
 
+              {/* Row 3: Stacking Options */}
+              <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', marginTop: '0.25rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input 
+                    type="checkbox" 
+                    id="stackCardsOpt" 
+                    checked={stackCards} 
+                    onChange={(e) => setStackCards(e.target.checked)} 
+                    style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                  />
+                  <label htmlFor="stackCardsOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.8rem', fontWeight: 700, color: '#fff' }}>
+                    Stack Duplicate Cards
+                  </label>
+                </div>
+
+                {stackCards && (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input 
+                        type="checkbox" 
+                        id="stackByConditionOpt" 
+                        checked={stackByCondition} 
+                        onChange={(e) => setStackByCondition(e.target.checked)} 
+                        style={{ width: '14px', height: '14px', cursor: 'pointer' }}
+                      />
+                      <label htmlFor="stackByConditionOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        Split by Condition
+                      </label>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input 
+                        type="checkbox" 
+                        id="stackByPrintingOpt" 
+                        checked={stackByPrinting} 
+                        onChange={(e) => setStackByPrinting(e.target.checked)} 
+                        style={{ width: '14px', height: '14px', cursor: 'pointer' }}
+                      />
+                      <label htmlFor="stackByPrintingOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        Split by Holo/Printing
+                      </label>
+                    </div>
+                  </>
+                )}
+              </div>
+
             </div>
           </div>
 
       {/* Database Listing Panel */}
       {loading ? (
         <div className="spinner"></div>
-      ) : filteredCollection.length === 0 ? (
+      ) : processedCollection.length === 0 ? (
         <div className="glass-panel" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 1.5rem' }}>
           <p>No cards matched your filters. Clear filters or add some cards!</p>
         </div>
       ) : viewMode === 'gallery' ? (
         /* Visual Cards Grid Gallery View */
         <div className="card-grid">
-          {filteredCollection.map((item) => {
+          {processedCollection.map((item) => {
             const rarityStyle = getCardRarityBorder(item.rarity);
 
             return (
@@ -427,7 +501,9 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                   {getFoilOverlayClass(item.printing) && (
                     <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
                   )}
-                  <div className="tcg-card-quantity-tag">x{item.quantity}</div>
+                  {item.quantity > 1 && (
+                    <div className="tcg-card-quantity-tag">x{item.quantity}</div>
+                  )}
 
                   {/* Rarity badge (shared tier system, matches Storage view) */}
                   <span style={{
@@ -510,7 +586,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                 </tr>
               </thead>
               <tbody>
-                {filteredCollection.map((item) => (
+                {processedCollection.map((item) => (
                   <tr key={item.entry_id}>
                     <td>
                       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -543,7 +619,9 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                       </div>
                     </td>
                     <td style={{ textAlign: 'right', verticalAlign: 'top', paddingTop: '0.6rem' }}>
-                      <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.85rem' }}>x{item.quantity}</div>
+                      {item.quantity > 1 && (
+                        <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.85rem' }}>x{item.quantity}</div>
+                      )}
                       <div style={{ fontSize: '0.7rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>${formatPrice(item.price_trend)}</div>
                     </td>
                   </tr>

@@ -1,12 +1,11 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
-import { LayoutDashboard, Camera, Search, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert } from 'lucide-react';
+import { LayoutDashboard, Camera, Search, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus } from 'lucide-react';
 import Login from './components/Login';
 
 // View components are code-split so heavy deps (tesseract.js OCR in the scanner,
 // recharts in the chart views) load on demand instead of in the initial bundle.
 const Dashboard = lazy(() => import('./components/Dashboard'));
-const CameraScanner = lazy(() => import('./components/CameraScanner'));
-const CardSearch = lazy(() => import('./components/CardSearch'));
+const AddCards = lazy(() => import('./components/AddCards'));
 const CollectionList = lazy(() => import('./components/CollectionList'));
 const LocationManager = lazy(() => import('./components/LocationManager'));
 const Settings = lazy(() => import('./components/Settings'));
@@ -168,11 +167,13 @@ function App() {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={setActiveTab} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={setActiveTab} setSelectedCardFilter={setSelectedCardFilter} setSelectedLocationId={setSelectedLocationId} />;
       case 'scanner':
-        return <CameraScanner onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={setActiveTab} />;
+        return <AddCards onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={setActiveTab} initialMode="scan" />;
       case 'search':
-        return <CardSearch onAddSuccess={triggerRefresh} showToast={showToast} />;
+        return <AddCards onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={setActiveTab} initialMode="search" />;
+      case 'add-cards':
+        return <AddCards onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={setActiveTab} />;
       case 'collection':
         return (
           <CollectionList 
@@ -201,7 +202,7 @@ function App() {
       case 'admin':
         return <AdminPanel showToast={showToast} />;
       default:
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={setActiveTab} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={setActiveTab} setSelectedCardFilter={setSelectedCardFilter} setSelectedLocationId={setSelectedLocationId} />;
     }
   };
 
@@ -224,18 +225,11 @@ function App() {
             <span>Dashboard</span>
           </button>
           <button 
-            className={`nav-tab ${activeTab === 'scanner' ? 'active' : ''}`}
-            onClick={() => setActiveTab('scanner')}
+            className={`nav-tab ${activeTab === 'add-cards' || activeTab === 'scanner' || activeTab === 'search' ? 'active' : ''}`}
+            onClick={() => setActiveTab('add-cards')}
           >
-            <Camera size={18} />
-            <span>Scan Cards</span>
-          </button>
-          <button 
-            className={`nav-tab ${activeTab === 'search' ? 'active' : ''}`}
-            onClick={() => setActiveTab('search')}
-          >
-            <Search size={18} />
-            <span>Search & Add</span>
+            <Plus size={18} />
+            <span>Add Cards</span>
           </button>
           <button 
             className={`nav-tab ${activeTab === 'collection' ? 'active' : ''}`}

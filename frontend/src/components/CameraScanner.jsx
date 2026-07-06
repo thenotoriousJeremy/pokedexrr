@@ -24,7 +24,10 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [hasCameraError, setHasCameraError] = useState(false);
   const [autoScan, setAutoScan] = useState(false);
   const [bulkMode, setBulkMode] = useState(false);
-  const guideScale = 0.70; // Fixed guide box scale to ensure overlay matches scans perfectly
+  const [guideScale, setGuideScale] = useState(0.70); // Adjustable guide box scale
+  const [guideRotation, setGuideRotation] = useState(0);
+  const [guideOffsetX, setGuideOffsetX] = useState(0);
+  const [guideOffsetY, setGuideOffsetY] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [videoRatio, setVideoRatio] = useState(null);
   const [cardLayout, setCardLayout] = useState('modern');
@@ -41,6 +44,115 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
+  const currentScanId = useRef(0);
+
+  const handleCancelScan = () => {
+    currentScanId.current += 1;
+    setLoading(false);
+    setScanStatus('Scan cancelled.');
+    setTimeout(() => {
+      setScanStatus(prev => prev === 'Scan cancelled.' ? '' : prev);
+    }, 2000);
+  };
+
+  // Touch/Mouse gesture state for overlay manipulation
+  const isDragging = useRef(false);
+  const startPan = useRef({ x: 0, y: 0 });
+  const startOffset = useRef({ x: 0, y: 0 });
+  const initialPinchDist = useRef(null);
+  const initialPinchAngle = useRef(null);
+  const initialScale = useRef(null);
+  const initialRotation = useRef(null);
+  const activePointers = useRef(new Map());
+
+  // Gesture Handlers
+  const handlePointerDown = (e) => {
+    e.target.setPointerCapture(e.pointerId);
+    activePointers.current.set(e.pointerId, e);
+    
+    if (activePointers.current.size === 1) {
+      isDragging.current = true;
+      startPan.current = { x: e.clientX, y: e.clientY };
+      startOffset.current = { x: guideOffsetX, y: guideOffsetY };
+    } else if (activePointers.current.size === 2) {
+      isDragging.current = false;
+      const pointers = Array.from(activePointers.current.values());
+      const dx = pointers[1].clientX - pointers[0].clientX;
+      const dy = pointers[1].clientY - pointers[0].clientY;
+      initialPinchDist.current = Math.hypot(dx, dy);
+      initialPinchAngle.current = Math.atan2(dy, dx) * (180 / Math.PI);
+      initialScale.current = guideScale;
+      initialRotation.current = guideRotation;
+    }
+  };
+
+  const handlePointerMove = (e) => {
+    if (!activePointers.current.has(e.pointerId)) return;
+    activePointers.current.set(e.pointerId, e);
+
+    if (activePointers.current.size === 1 && isDragging.current) {
+      const dx = e.clientX - startPan.current.x;
+      const dy = e.clientY - startPan.current.y;
+      
+      let newX = startOffset.current.x + dx;
+      let newY = startOffset.current.y + dy;
+      
+      const guide = document.querySelector('.scan-card-guide');
+      const video = videoRef.current;
+      if (guide && video) {
+        const W = video.clientWidth;
+        const H = video.clientHeight;
+        const w = guide.offsetWidth;
+        const h = guide.offsetHeight;
+        
+        const rad = guideRotation * (Math.PI / 180);
+        const boundingW = w * Math.abs(Math.cos(rad)) + h * Math.abs(Math.sin(rad));
+        const boundingH = w * Math.abs(Math.sin(rad)) + h * Math.abs(Math.cos(rad));
+        
+        const maxX = Math.max(0, (W - boundingW) / 2);
+        const maxY = Math.max(0, (H - boundingH) / 2);
+        
+        newX = Math.max(-maxX, Math.min(maxX, newX));
+        newY = Math.max(-maxY, Math.min(maxY, newY));
+      }
+      
+      setGuideOffsetX(newX);
+      setGuideOffsetY(newY);
+    } else if (activePointers.current.size === 2) {
+      const pointers = Array.from(activePointers.current.values());
+      const dx = pointers[1].clientX - pointers[0].clientX;
+      const dy = pointers[1].clientY - pointers[0].clientY;
+      
+      const dist = Math.hypot(dx, dy);
+      const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+      
+      if (initialPinchDist.current) {
+        const scaleFactor = dist / initialPinchDist.current;
+        let newScale = initialScale.current * scaleFactor;
+        newScale = Math.max(0.4, Math.min(newScale, 1.0));
+        setGuideScale(newScale);
+      }
+      
+      if (initialPinchAngle.current !== null) {
+        const angleDelta = angle - initialPinchAngle.current;
+        let newRotation = initialRotation.current + angleDelta;
+        newRotation = ((newRotation % 360) + 360) % 360;
+        setGuideRotation(Math.round(newRotation));
+      }
+    }
+  };
+
+  const handlePointerUp = (e) => {
+    e.target.releasePointerCapture(e.pointerId);
+    activePointers.current.delete(e.pointerId);
+    if (activePointers.current.size < 2) {
+      initialPinchDist.current = null;
+      initialPinchAngle.current = null;
+    }
+    if (activePointers.current.size === 0) {
+      isDragging.current = false;
+    }
+  };
 
   // Drawer states
   const [selectedCard, setSelectedCard] = useState(null);
@@ -305,22 +417,24 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
   // Preprocess cropped canvas for higher OCR accuracy (Binarization / Thresholding)
   // Bypasses browser-incompatible canvas context filters to run natively on mobile devices.
-  const getProcessedDataUrl = (sourceCanvas, sourceX, sourceY, sourceW, sourceH) => {
+  const getProcessedDataUrl = (sourceCanvas, cx, cy, w, h, rotationDeg) => {
     const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = sourceW * 4; // Upscale by 4x for high-res OCR on small text
-    tempCanvas.height = sourceH * 4;
+    tempCanvas.width = w * 4; // Upscale by 4x for high-res OCR on small text
+    tempCanvas.height = h * 4;
     const tempCtx = tempCanvas.getContext('2d');
     
     // Enable high-quality image smoothing for clean bicubic interpolation
     tempCtx.imageSmoothingEnabled = true;
     tempCtx.imageSmoothingQuality = 'high';
     
-    // Draw raw cropped frame first
-    tempCtx.drawImage(
-      sourceCanvas,
-      sourceX, sourceY, sourceW, sourceH,
-      0, 0, tempCanvas.width, tempCanvas.height
-    );
+    // Extract rotated crop by inverse rotating the canvas context
+    tempCtx.translate(tempCanvas.width / 2, tempCanvas.height / 2);
+    tempCtx.rotate(-rotationDeg * (Math.PI / 180));
+    tempCtx.scale(4, 4); // Apply the 4x upscale
+    tempCtx.drawImage(sourceCanvas, -cx, -cy);
+    
+    // Reset transform before pixel manipulation (not strictly necessary but safe)
+    tempCtx.setTransform(1, 0, 0, 1, 0, 0);
     
     // Apply pixel-level high-contrast grayscale enhancement
     // (Grayscale with linear contrast stretching is superior to harsh binarization for anti-aliased fonts)
@@ -359,6 +473,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     if (loading || !videoRef.current || !cameraActive) return;
 
     setLoading(true);
+    const scanId = ++currentScanId.current;
     setScanMatches([]);
     setScanStatus('Initializing OCR scanner...');
 
@@ -380,77 +495,38 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     const scaleX = orientedCanvas.width / videoRect.width;
     const scaleY = orientedCanvas.height / videoRect.height;
 
-    // Define crops in screen coordinates matching the selected cardLayout:
-    let nameCropScreen, numLeftCropScreen = null, numRightCropScreen = null;
+    // Extract crops directly from the visual overlay guides on screen, 
+    // ensuring perfect alignment even if the parent overlay is translated or rotated.
+    const titleGuide = document.querySelector('.scan-region-title');
+    const leftNumGuide = document.querySelector('.scan-region-number-left');
+    const rightNumGuide = document.querySelector('.scan-region-number-right');
 
-    if (cardLayout === 'trainer') {
-      // Trainer card name is lower down and wider
-      nameCropScreen = {
-        x: (guideRect.left - videoRect.left) + guideRect.width * 0.04,
-        y: (guideRect.top - videoRect.top) + guideRect.height * 0.11,
-        w: guideRect.width * 0.75,
-        h: guideRect.height * 0.07
+    const getCropParams = (guideNode) => {
+      if (!guideNode) return null;
+      const rect = guideNode.getBoundingClientRect();
+      const screenCX = rect.left + rect.width / 2;
+      const screenCY = rect.top + rect.height / 2;
+      return {
+        cx: (screenCX - videoRect.left) * scaleX,
+        cy: (screenCY - videoRect.top) * scaleY,
+        w: guideNode.offsetWidth * scaleX,
+        h: guideNode.offsetHeight * scaleY
       };
-    } else {
-      // Standard name crop (Modern, Vintage, Japanese)
-      nameCropScreen = {
-        x: (guideRect.left - videoRect.left) + guideRect.width * 0.04,
-        y: (guideRect.top - videoRect.top) + guideRect.height * 0.035,
-        w: guideRect.width * 0.55,
-        h: guideRect.height * 0.06
-      };
-    }
-
-    if (cardLayout === 'modern' || cardLayout === 'trainer' || cardLayout === 'japanese') {
-      // Left bottom number (Japanese Modern starts closer to left border at 4%)
-      numLeftCropScreen = {
-        x: (guideRect.left - videoRect.left) + guideRect.width * (cardLayout === 'japanese' ? 0.04 : 0.10),
-        y: (guideRect.top - videoRect.top) + guideRect.height * 0.90, // Starts at 90% Y instead of 93.5%
-        w: guideRect.width * 0.22, // Taller and wider box
-        h: guideRect.height * 0.065
-      };
-    }
-
-    if (cardLayout === 'vintage' || cardLayout === 'trainer' || cardLayout === 'japanese') {
-      // Right bottom number (Vintage, Japanese Vintage)
-      numRightCropScreen = {
-        x: (guideRect.left - videoRect.left) + guideRect.width * 0.66,
-        y: (guideRect.top - videoRect.top) + guideRect.height * 0.90, // Starts at 90% Y instead of 93.5%
-        w: guideRect.width * 0.22, // Taller and wider box
-        h: guideRect.height * 0.065
-      };
-    }
-
-    // Scale screen coordinates to the oriented canvas coordinates
-    const nameCrop = {
-      x: Math.round(nameCropScreen.x * scaleX),
-      y: Math.round(nameCropScreen.y * scaleY),
-      w: Math.round(nameCropScreen.w * scaleX),
-      h: Math.round(nameCropScreen.h * scaleY)
     };
 
-    const numLeftCrop = numLeftCropScreen ? {
-      x: Math.round(numLeftCropScreen.x * scaleX),
-      y: Math.round(numLeftCropScreen.y * scaleY),
-      w: Math.round(numLeftCropScreen.w * scaleX),
-      h: Math.round(numLeftCropScreen.h * scaleY)
-    } : null;
-
-    const numRightCrop = numRightCropScreen ? {
-      x: Math.round(numRightCropScreen.x * scaleX),
-      y: Math.round(numRightCropScreen.y * scaleY),
-      w: Math.round(numRightCropScreen.w * scaleX),
-      h: Math.round(numRightCropScreen.h * scaleY)
-    } : null;
+    const nameCrop = getCropParams(titleGuide);
+    const numLeftCrop = getCropParams(leftNumGuide);
+    const numRightCrop = getCropParams(rightNumGuide);
 
     try {
       // 2. Process crop images using the oriented canvas
-      const nameDataUrl = getProcessedDataUrl(orientedCanvas, nameCrop.x, nameCrop.y, nameCrop.w, nameCrop.h);
+      // We pass the center points, dimensions, and current rotation to inverse-rotate the crop perfectly!
+      const nameDataUrl = nameCrop ? getProcessedDataUrl(orientedCanvas, nameCrop.cx, nameCrop.cy, nameCrop.w, nameCrop.h, guideRotation) : '';
       setDebugNameImg(nameDataUrl);
 
       let numLeftDataUrl = '';
       if (numLeftCrop) {
-        numLeftDataUrl = getProcessedDataUrl(orientedCanvas, numLeftCrop.x, numLeftCrop.y, numLeftCrop.w, numLeftCrop.h);
+        numLeftDataUrl = getProcessedDataUrl(orientedCanvas, numLeftCrop.cx, numLeftCrop.cy, numLeftCrop.w, numLeftCrop.h, guideRotation);
         setDebugNumLeftImg(numLeftDataUrl);
       } else {
         setDebugNumLeftImg('');
@@ -458,7 +534,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
       let numRightDataUrl = '';
       if (numRightCrop) {
-        numRightDataUrl = getProcessedDataUrl(orientedCanvas, numRightCrop.x, numRightCrop.y, numRightCrop.w, numRightCrop.h);
+        numRightDataUrl = getProcessedDataUrl(orientedCanvas, numRightCrop.cx, numRightCrop.cy, numRightCrop.w, numRightCrop.h, guideRotation);
         setDebugNumRightImg(numRightDataUrl);
       } else {
         setDebugNumRightImg('');
@@ -472,12 +548,14 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           tessedit_pageseg_mode: '7'
         }
       });
+      if (scanId !== currentScanId.current) return;
       const nameRaw = nameResult.data.text.trim();
       
       let detectedName = '';
       if (cardLayout === 'japanese') {
-        detectedName = translateJapaneseName(nameRaw);
-        console.log(`Japanese OCR Read: "${nameRaw}" -> Translated: "${detectedName}"`);
+        const cleanedJpName = nameRaw.replace(/\s+/g, '').replace(/[^\p{L}\d]/gu, '').trim();
+        detectedName = translateJapaneseName(cleanedJpName) || cleanedJpName;
+        console.log(`Japanese OCR Read: "${nameRaw}" -> Cleaned: "${cleanedJpName}" -> English: "${detectedName}"`);
       } else {
         // Clean name (strip extra characters and common template tags like 'HP' or 'Stage')
         const cleanNameParts = nameRaw.replace(/[^a-zA-Z0-9\s\-]/g, ' ').replace(/\s+/g, ' ').trim().split(' ');
@@ -515,6 +593,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       }
 
       const ocrResults = await Promise.all(ocrPromises);
+      if (scanId !== currentScanId.current) return;
       let numLeftRaw = '';
       let numRightRaw = '';
       for (const res of ocrResults) {
@@ -583,6 +662,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       if (detectedNumber) params.append('number', detectedNumber);
 
       const searchResponse = await fetch(`/api/search?${params.toString()}`);
+      if (scanId !== currentScanId.current) return;
       if (searchResponse.ok) {
         const matches = await searchResponse.json();
         setScanMatches(matches);
@@ -618,9 +698,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       }
     } catch (err) {
       console.error('OCR Process failed:', err);
-      setScanStatus('OCR processing failed. Please search manually.');
+      if (scanId === currentScanId.current) setScanStatus('OCR processing failed. Please search manually.');
     } finally {
-      setLoading(false);
+      if (scanId === currentScanId.current) setLoading(false);
     }
   };
 
@@ -735,7 +815,14 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div 
             className="camera-preview-wrapper"
-            style={videoRatio ? { aspectRatio: `${videoRatio}` } : {}}
+            style={{
+              ...(videoRatio ? { aspectRatio: `${videoRatio}` } : {}),
+              touchAction: 'none'
+            }}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
           >
             <video 
               ref={videoRef} 
@@ -770,27 +857,41 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
               <div 
                 className="scan-card-guide" 
                 style={{ 
-                  width: `${guideScale * 100}%`,
+                  aspectRatio: '2.5 / 3.5',
+                  width: (videoRatio && videoRatio > 1) ? 'auto' : `${guideScale * 100}%`,
+                  height: (videoRatio && videoRatio > 1) ? `${guideScale * 100}%` : 'auto',
+                  transform: `translate(${guideOffsetX}px, ${guideOffsetY}px) rotate(${guideRotation}deg)`,
                   animation: scanFlash === 'success' ? 'border-flash-success 1.5s ease-in-out' : scanFlash === 'error' ? 'border-flash-error 1.5s ease-in-out' : 'none'
                 }}
               >
                 {/* Name Guide: shift lower and widen if trainer layout */}
                 <div 
                   className="scan-region-title" 
-                  style={cardLayout === 'trainer' ? { top: '11%', height: '7%', width: '75%' } : {}}
+                  style={
+                    cardLayout === 'trainer' ? { top: '11%', height: '7%', width: '75%' } :
+                    cardLayout === 'vintage' ? { top: '8%', height: '6.5%' } :
+                    {}
+                  }
                 />
                 
                 {/* Left Number Guide: show for Modern, Trainer, Japanese (custom left positioning for Japanese) */}
                 {(cardLayout === 'modern' || cardLayout === 'trainer' || cardLayout === 'japanese') && (
                   <div 
                     className="scan-region-number-left" 
-                    style={cardLayout === 'japanese' ? { left: '4%' } : {}}
+                    style={cardLayout === 'japanese' ? { left: '4%', bottom: '5%' } : {}}
                   />
                 )}
                 
                 {/* Right Number Guide: show for Vintage, Trainer, Japanese */}
                 {(cardLayout === 'vintage' || cardLayout === 'trainer' || cardLayout === 'japanese') && (
-                  <div className="scan-region-number-right" />
+                  <div 
+                    className="scan-region-number-right" 
+                    style={
+                      cardLayout === 'japanese' ? { right: '4%', bottom: '5%' } : 
+                      cardLayout === 'vintage' ? { right: '4%', width: '30%' } :
+                      {}
+                    }
+                  />
                 )}
                 
                 {loading && <div className="scan-line"></div>}
@@ -847,83 +948,51 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 </div>
               </div>
 
+              {/* Overlay Fine-Tuning */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Overlay Scale</span>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-primary)' }}>{Math.round(guideScale * 100)}%</span>
+                </div>
+                <input type="range" min="40" max="100" step="5" value={guideScale * 100} onChange={(e) => setGuideScale(parseFloat(e.target.value) / 100)} style={{ width: '100%', cursor: 'pointer' }} />
+                
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Rotation Offset</span>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-primary)' }}>{guideRotation}°</span>
+                </div>
+                <input type="range" min="0" max="360" step="1" value={guideRotation} onChange={(e) => setGuideRotation(parseInt(e.target.value, 10))} style={{ width: '100%', cursor: 'pointer' }} />
 
-
-              {/* Destination Container Selector */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Destination Container</div>
-                <select 
-                  className="select-control" 
-                  style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem', width: '100%', marginTop: '0.15rem' }} 
-                  value={locationId} 
-                  onChange={(e) => setLocationId(e.target.value)}
-                >
-                  <option value="">Unassigned Pile</option>
-                  {locations.map((loc) => (
-                    <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
-                  ))}
-                </select>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Location Offset (X / Y)</span>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-primary)' }}>{Math.round(guideOffsetX)}px, {Math.round(guideOffsetY)}px</span>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <input type="range" min="-300" max="300" step="1" value={guideOffsetX} onChange={(e) => setGuideOffsetX(parseInt(e.target.value, 10))} style={{ flex: 1, cursor: 'pointer' }} title="Horizontal Shift" />
+                  <input type="range" min="-300" max="300" step="1" value={guideOffsetY} onChange={(e) => setGuideOffsetY(parseInt(e.target.value, 10))} style={{ flex: 1, cursor: 'pointer' }} title="Vertical Shift" />
+                </div>
+                <button type="button" className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0.2rem', marginTop: '0.25rem' }} onClick={() => { setGuideScale(0.70); setGuideRotation(0); setGuideOffsetX(0); setGuideOffsetY(0); }}>Reset Overlay</button>
               </div>
 
               {/* Card Layout Selection */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Card Layout Mode</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.25rem', marginTop: '0.15rem' }}>
-                  {['modern', 'vintage', 'trainer', 'japanese'].map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      className={`btn ${cardLayout === mode ? 'btn-primary' : 'btn-secondary'}`}
-                      style={{ padding: '0.35rem 0', fontSize: '0.7rem', textTransform: 'capitalize' }}
-                      onClick={() => setCardLayout(mode)}
-                    >
-                      {mode}
-                    </button>
-                  ))}
-                </div>
+              <div className="sub-nav-tabs" style={{ marginBottom: 0, marginTop: '0.5rem' }}>
+                {['modern', 'vintage', 'trainer', 'japanese'].map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`sub-nav-tab ${cardLayout === mode ? 'active' : ''}`}
+                    style={{ padding: '0.5rem', fontSize: '0.75rem', textTransform: 'capitalize' }}
+                    onClick={() => setCardLayout(mode)}
+                  >
+                    {mode}
+                  </button>
+                ))}
               </div>
             </div>
           )}
 
-          {/* Manual OCR Correction / Quick Search panel - Always visible when camera is active */}
+          {/* OCR Crop Results */}
           {cameraActive && (
             <div className="glass-panel" style={{ width: '100%', padding: '0.75rem 1rem', background: 'rgba(0,0,0,0.3)', border: '1px dashed var(--border-glass-hover)', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.25rem' }}>
-              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Quick Identify (Scan or Type below)
-              </div>
-              <form onSubmit={handleManualSearch} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
-                <div style={{ flex: 2, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Card Name</span>
-                  <input 
-                    type="text" 
-                    className="input-control" 
-                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }} 
-                    value={scannedName}
-                    onChange={(e) => setScannedName(e.target.value)}
-                    placeholder="e.g. Charizard..."
-                  />
-                </div>
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Collector No.</span>
-                  <input 
-                    type="text" 
-                    className="input-control" 
-                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.85rem' }} 
-                    value={scannedNumber}
-                    onChange={(e) => setScannedNumber(e.target.value)}
-                    placeholder="e.g. 4/102..."
-                  />
-                </div>
-                <button 
-                  type="submit" 
-                  className="btn btn-secondary" 
-                  style={{ padding: '0.35rem 1rem', fontSize: '0.85rem', whiteSpace: 'nowrap' }}
-                  disabled={loading}
-                >
-                  Search
-                </button>
-              </form>
-
               {/* Show cropped OCR feeds for alignment debugging */}
               {(debugNameImg || debugNumLeftImg || debugNumRightImg) && (
                 <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>
@@ -954,9 +1023,15 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
             <button className="btn btn-secondary" onClick={stopCamera} style={{ flex: 1 }}>
               Stop Camera
             </button>
-            <button className="btn btn-primary" onClick={handleCapture} disabled={loading} style={{ flex: 2 }}>
-              {loading ? 'Scanning...' : 'Capture & Identify'}
-            </button>
+            {loading ? (
+              <button className="btn btn-primary" onClick={handleCancelScan} style={{ flex: 2, backgroundColor: 'var(--accent-red)', borderColor: 'var(--accent-red)' }}>
+                Cancel Scan
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={handleCapture} style={{ flex: 2 }}>
+                Capture & Identify
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1183,7 +1258,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
             {/* Three Column Layout (No vertical scroll) */}
             <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              <div className="quick-add-grid">
+              <div className="quick-add-grid" style={{ gridTemplateColumns: '200px 1fr' }}>
                 
                 {/* Column 1: Card Preview (Smaller card: width 150px) */}
                 <div className="quick-add-preview">
@@ -1253,26 +1328,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                       </select>
                     </div>
                   </div>
-                </div>
-
-                {/* Column 3: Location Assignment Form */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                  <div className="quick-add-section-title">Location Assignment</div>
-                  
-                  <div className="quick-add-fields-group">
-                    <div className="form-group quick-add-full-width" style={{ marginBottom: 0 }}>
-                      <label>Storage Container</label>
-                      <select className="select-control" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-                        <option value="">Unassigned Pile</option>
-                        {locations.map((loc) => (
-                          <option key={loc.id} value={loc.id}>{loc.name} ({loc.type})</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-                    The sort assistant picks the exact page/row automatically based on this container's sort order.
-                  </p>
                 </div>
               </div>
 

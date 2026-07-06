@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, X, ChevronLeft, Play, BarChart2, Search, ArrowRight, Eye, LogOut, LogIn, PackageCheck } from 'lucide-react';
+import { Plus, Trash2, Edit2, X, ChevronLeft, Play, BarChart2, Search, ArrowRight, Eye, LogOut, LogIn, PackageCheck, RefreshCw, Layers, Zap, MoreVertical, Activity } from 'lucide-react';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { shuffleArray } from '../utils/shuffle';
+import { translateJapaneseName } from '../utils/pokemonTranslation';
 
-function DeckBuilder({ showToast }) {
+function DeckBuilder({ statsTrigger, onUpdate, showToast }) {
   const [decks, setDecks] = useState([]);
   const [activeDeck, setActiveDeck] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -182,7 +183,8 @@ function DeckBuilder({ showToast }) {
 
     try {
       setSearching(true);
-      const response = await fetch(`/api/search?name=${encodeURIComponent(searchQuery)}`);
+      const finalQuery = translateJapaneseName(searchQuery) || searchQuery;
+      const response = await fetch(`/api/search?name=${encodeURIComponent(finalQuery)}`);
       if (response.ok) {
         const data = await response.json();
         setSearchResults(data);

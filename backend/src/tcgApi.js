@@ -149,7 +149,7 @@ function getStringSimilarity(str1, str2) {
 }
 
 // Search cards locally first, then hit API if not found or empty
-async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiKey = '') {
+async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiKey = '', scope = 'database', userId = null) {
   // Sanitize the name query: drop pure-noise tokens (OCR garbage with no letters)
   // and normalize everything else to Title Case, so typed-lowercase input like
   // "pikachu" is treated the same as "Pikachu" instead of being silently dropped.
@@ -158,7 +158,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
     const ALLOWED_UPPER = new Set(['EX', 'GX', 'V', 'VMAX', 'VSTAR', 'BREAK', 'PROMO', 'V-UNION']);
     const words = nameQuery.split(/\s+/);
     const normalized = words.map(w => {
-      const cleanWord = w.replace(/[^A-Za-z\-]/g, ''); // keep only letters and hyphens for formatting checks
+      const cleanWord = w.replace(/[^\p{L}\d\-]/gu, ''); // keep letters (including unicode/japanese), numbers, and hyphens
       if (!cleanWord) return '';
 
       const upper = cleanWord.toUpperCase();
@@ -176,55 +176,97 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
   const cleanNumber = numberQuery ? numberQuery.trim() : '';
   const strippedNumber = cleanNumber.replace(/^0+/, '');
 
-  // 1. Try local search first
-  let localSql = `SELECT * FROM card_cache WHERE 1=1`;
-  const localParams = [];
+  // 1. Collection-only search
+  if (scope === 'collection') {
+    if (!userId) return [];
+    let collSql = `
+      SELECT DISTINCT cc.* 
+      FROM collection c
+      JOIN card_cache cc ON c.card_id = cc.id
+      WHERE c.user_id = ?
+    `;
+    const collParams = [userId];
 
-  if (cleanName) {
-    localSql += ` AND name LIKE ?`;
-    localParams.push(`%${cleanName}%`);
-  }
-  if (cleanNumber) {
-    if (cleanNumber !== strippedNumber && strippedNumber !== '') {
-      localSql += ` AND (number = ? OR number = ? OR CAST(number AS INTEGER) = CAST(? AS INTEGER))`;
-      localParams.push(cleanNumber, strippedNumber, cleanNumber);
-    } else {
-      localSql += ` AND (number = ? OR CAST(number AS INTEGER) = CAST(? AS INTEGER))`;
-      localParams.push(cleanNumber, cleanNumber);
+    if (cleanName) {
+      collSql += ` AND cc.name LIKE ?`;
+      collParams.push(`%${cleanName}%`);
     }
-  }
-  if (setQuery) {
-    localSql += ` AND (set_name LIKE ? OR set_id = ?)`;
-    localParams.push(`%${setQuery}%`, setQuery);
-  }
-
-  localSql += ` LIMIT 50`;
-  
-  let localResults = await db.all(localSql, localParams);
-  
-  // If we found local results and they are not empty, return them instantly.
-  // Stale prices (older than 3 days) are updated asynchronously in the background.
-  if (localResults.length > 0) {
-    const cacheAgeLimit = 1000 * 60 * 60 * 24 * 3; // 3 days
-    const staleCards = localResults.filter(r => (new Date() - new Date(r.last_updated) > cacheAgeLimit));
-    if (staleCards.length > 0) {
-      (async () => {
-        try {
-          for (const card of staleCards) {
-            await getCardById(card.id);
-            await new Promise(r => setTimeout(r, 1000)); // Respect rate limits
-          }
-        } catch (e) {
-          console.error('Background price refresh failed:', e.message);
-        }
-      })();
+    if (cleanNumber) {
+      if (cleanNumber !== strippedNumber && strippedNumber !== '') {
+        collSql += ` AND (cc.number = ? OR cc.number = ? OR CAST(cc.number AS INTEGER) = CAST(? AS INTEGER))`;
+        collParams.push(cleanNumber, strippedNumber, cleanNumber);
+      } else {
+        collSql += ` AND (cc.number = ? OR CAST(cc.number AS INTEGER) = CAST(? AS INTEGER))`;
+        collParams.push(cleanNumber, cleanNumber);
+      }
+    }
+    if (setQuery) {
+      collSql += ` AND (cc.set_name LIKE ? OR cc.set_id = ?)`;
+      collParams.push(`%${setQuery}%`, setQuery);
     }
 
-    return localResults.map(r => ({
+    collSql += ` LIMIT 50`;
+    let collResults = await db.all(collSql, collParams);
+    return collResults.map(r => ({
       ...r,
       subtypes: JSON.parse(r.subtypes || '[]'),
       types: JSON.parse(r.types || '[]')
     }));
+  }
+
+  // 2. Try local search first (if not forcing internet)
+  let localResults = [];
+  if (scope !== 'internet') {
+    let localSql = `SELECT * FROM card_cache WHERE 1=1`;
+    const localParams = [];
+
+    if (cleanName) {
+      localSql += ` AND name LIKE ?`;
+      localParams.push(`%${cleanName}%`);
+    }
+    if (cleanNumber) {
+      if (cleanNumber !== strippedNumber && strippedNumber !== '') {
+        localSql += ` AND (number = ? OR number = ? OR CAST(number AS INTEGER) = CAST(? AS INTEGER))`;
+        localParams.push(cleanNumber, strippedNumber, cleanNumber);
+      } else {
+        localSql += ` AND (number = ? OR CAST(number AS INTEGER) = CAST(? AS INTEGER))`;
+        localParams.push(cleanNumber, cleanNumber);
+      }
+    }
+    if (setQuery) {
+      localSql += ` AND (set_name LIKE ? OR set_id = ?)`;
+      localParams.push(`%${setQuery}%`, setQuery);
+    }
+
+    localSql += ` LIMIT 50`;
+    
+    localResults = await db.all(localSql, localParams);
+    
+    // If we found local results and they are not empty, return them instantly.
+    // Stale prices (older than 3 days) are updated asynchronously in the background.
+    if (localResults.length > 0) {
+      const cacheAgeLimit = 1000 * 60 * 60 * 24 * 3; // 3 days
+      const staleCards = localResults.filter(r => (new Date() - new Date(r.last_updated) > cacheAgeLimit));
+      const hasKey = apiKey || process.env.POKEMON_TCG_API_KEY;
+      if (staleCards.length > 0 && hasKey) {
+        (async () => {
+          try {
+            for (const card of staleCards) {
+              await getCardById(card.id, hasKey);
+              await new Promise(r => setTimeout(r, 1000)); // Respect rate limits
+            }
+          } catch (e) {
+            console.error('Background price refresh failed:', e.message);
+          }
+        })();
+      }
+
+      return localResults.map(r => ({
+        ...r,
+        subtypes: JSON.parse(r.subtypes || '[]'),
+        types: JSON.parse(r.types || '[]')
+      }));
+    }
   }
 
   // 2. Fetch from external API
@@ -240,8 +282,13 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
       });
       return response.data.data || [];
     } catch (err) {
-      if (err.response && err.response.status === 429) {
-        throw new Error('RATE_LIMIT_EXCEEDED');
+      if (err.response) {
+        if (err.response.status === 429) {
+          throw new Error('RATE_LIMIT_EXCEEDED');
+        }
+        if (err.response.status === 401 || err.response.status === 403) {
+          throw new Error('INVALID_API_KEY');
+        }
       }
       console.error(`API query failed for q='${queryStr}':`, err.message);
       return [];
@@ -285,9 +332,9 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
       // Add exact/numeric value match bonus for numbers (handles '017' vs '17')
       const cleanNumInt = parseInt(cleanNumber, 10);
       const cardNumInt = parseInt(c.number, 10);
-      const numberMatchBonus = (!isNaN(cleanNumInt) && !isNaN(cardNumInt) && cleanNumInt === cardNumInt) ? 0.35 : 0.0;
+      const numberMatchBonus = (!isNaN(cleanNumInt) && !isNaN(cardNumInt) && cleanNumInt === cardNumInt) ? 0.15 : 0.0;
       
-      const score = nameSim * 0.65 + numberSim * 0.35 + numberMatchBonus;
+      const score = nameSim * 0.85 + numberSim * 0.15 + numberMatchBonus;
       return { card: c, score };
     });
     scoredCards.sort((a, b) => b.score - a.score);
@@ -325,6 +372,9 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
       };
     });
   } catch (error) {
+    if (error.message === 'INVALID_API_KEY' || error.message === 'RATE_LIMIT_EXCEEDED') {
+      throw error;
+    }
     console.error('Error fetching cards from Pokémon TCG API:', error.message);
     // Return whatever local matches we have if API fails
     return localResults.map(r => ({
@@ -380,6 +430,14 @@ async function getCardById(id, apiKey = '') {
       };
     }
   } catch (error) {
+    if (error.response) {
+      if (error.response.status === 429) {
+        throw new Error('RATE_LIMIT_EXCEEDED');
+      }
+      if (error.response.status === 401 || error.response.status === 403) {
+        throw new Error('INVALID_API_KEY');
+      }
+    }
     console.error(`Error fetching card ${id} from API:`, error.message);
   }
 
@@ -396,6 +454,11 @@ async function getCardById(id, apiKey = '') {
 
 // Periodic function to update pricing for all cards in the collection
 async function updateCollectionPrices() {
+  if (!process.env.POKEMON_TCG_API_KEY) {
+    console.log('Skipping background price update: No global POKEMON_TCG_API_KEY configured to protect rate limits.');
+    return;
+  }
+
   try {
     // Select unique card IDs from both collections (owned and wishlist) and decks
     const cardsInUse = await db.all(`
@@ -406,11 +469,15 @@ async function updateCollectionPrices() {
     
     console.log(`Starting background price update for ${cardsInUse.length} unique cards...`);
     for (const item of cardsInUse) {
-      // Fetching will force update the cache and price
-      const updatedCard = await getCardById(item.card_id);
-      if (updatedCard && updatedCard.price_trend > 0) {
-        // Record the new price in history
-        await db.run(`INSERT INTO price_history (card_id, price) VALUES (?, ?)`, [item.card_id, updatedCard.price_trend]);
+      try {
+        // Fetching will force update the cache and price
+        const updatedCard = await getCardById(item.card_id, process.env.POKEMON_TCG_API_KEY);
+        if (updatedCard && updatedCard.price_trend > 0) {
+          // Record the new price in history
+          await db.run(`INSERT INTO price_history (card_id, price) VALUES (?, ?)`, [item.card_id, updatedCard.price_trend]);
+        }
+      } catch (itemErr) {
+        console.error(`Failed to update price for card ${item.card_id}:`, itemErr.message);
       }
       // Wait 1 second between requests to respect API rate limits
       await new Promise(r => setTimeout(r, 1000));
