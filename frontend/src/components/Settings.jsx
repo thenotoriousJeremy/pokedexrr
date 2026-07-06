@@ -217,10 +217,13 @@ function Settings({ user, onUpdateUser, showToast }) {
   const [copiedType, setCopiedType] = useState(''); // 'collection', 'trade', 'wishlist'
 
   const copyToClipboard = (url, type) => {
-    navigator.clipboard.writeText(url);
-    setCopiedType(type);
-    showToast(`Copied public ${type} link to clipboard.`);
-    setTimeout(() => setCopiedType(''), 2000);
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedType(type);
+      showToast(`Copied public ${type} link to clipboard.`);
+      setTimeout(() => setCopiedType(''), 2000);
+    }).catch(() => {
+      showToast('Could not copy to clipboard. Copy the link manually.');
+    });
   };
 
   return (

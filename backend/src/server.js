@@ -35,7 +35,12 @@ app.use(cors({
     }
   }
 }));
-app.use(express.json());
+// Default 100kb body limit is too small for the collection import/export
+// feature: a JSON backup wraps the export payload in a string field, which
+// added escaping overhead pushed a ~90-card collection past the default
+// limit already. 15mb comfortably covers even large (multi-thousand card)
+// collections.
+app.use(express.json({ limit: '15mb' }));
 
 // Initialize Database on startup
 db.initDb()
@@ -85,6 +90,9 @@ app.get('*', (req, res, next) => {
 app.use((err, req, res, next) => {
   if (err && err.message === 'Not allowed by CORS') {
     return res.status(403).json({ error: 'Origin not allowed' });
+  }
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Upload too large. Try exporting/importing in smaller batches.' });
   }
   console.error(err);
   res.status(500).json({ error: 'Internal server error' });

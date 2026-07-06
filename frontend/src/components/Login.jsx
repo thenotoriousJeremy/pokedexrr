@@ -176,7 +176,9 @@ function Login({ onLoginSuccess }) {
                   border: 'none',
                   color: 'var(--text-muted)',
                   cursor: 'pointer',
-                  padding: '4px'
+                  padding: '8px',
+                  display: 'flex',
+                  alignItems: 'center'
                 }}
               >
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}

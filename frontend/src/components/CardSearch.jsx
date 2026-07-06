@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Search, Plus, X, Info, HelpCircle } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { formatPrice } from '../utils/formatPrice';
+import { resolveCardPrice } from '../utils/resolveCardPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 
 function CardSearch({ onAddSuccess, showToast }) {
@@ -275,8 +276,8 @@ function CardSearch({ onAddSuccess, showToast }) {
             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
               <img src={selectedCard.image_url} alt={selectedCard.name} style={{ width: '80px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: 'var(--radius-sm)', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }} />
               <div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>TCG MARKET PRICE</div>
-                <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>${formatPrice(selectedCard.price_trend)}</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>TCG MARKET PRICE ({printing})</div>
+                <div style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--accent-yellow)' }}>${formatPrice(resolveCardPrice(selectedCard, printing))}</div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Rarity: <span style={{ color: '#fff', fontWeight: 600 }}>{selectedCard.rarity}</span></div>
               </div>
             </div>

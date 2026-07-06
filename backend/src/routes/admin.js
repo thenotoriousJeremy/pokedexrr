@@ -204,9 +204,20 @@ router.post('/seed-cards', async (req, res) => {
     }
 
     // Insert random collection entries distributed across binder & box
-    const prints = ['Normal', 'Holofoil', 'Reverse Holofoil'];
     const conditions = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played'];
     const languages = ['English', 'English', 'English', 'Japanese']; // ~25% Japanese so both display modes are visible
+
+    // Only offer printings the card actually has a tracked price for (e.g. a
+    // modern Common has no Holofoil print/price) — otherwise resolveCardPrice
+    // silently falls back to price_trend and the seeded card's "Holofoil"
+    // price ends up identical to its Normal price, which looks like a bug.
+    const printsForCard = (card) => {
+      const options = [];
+      if (card.price_normal > 0) options.push('Normal');
+      if (card.price_holofoil > 0) options.push('Holofoil');
+      if (card.price_reverse_holofoil > 0) options.push('Reverse Holofoil');
+      return options.length > 0 ? options : ['Normal'];
+    };
 
     let addedCount = 0;
 
@@ -215,6 +226,7 @@ router.post('/seed-cards', async (req, res) => {
       for (let s = 1; s <= 9; s++) {
         if (Math.random() > 0.25) {
           const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
+          const prints = printsForCard(card);
           const print = prints[Math.floor(Math.random() * prints.length)];
           const condition = conditions[Math.floor(Math.random() * conditions.length)];
           const language = languages[Math.floor(Math.random() * languages.length)];
@@ -236,6 +248,7 @@ router.post('/seed-cards', async (req, res) => {
       for (let s = 1; s <= 15; s++) {
         if (Math.random() > 0.4) {
           const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
+          const prints = printsForCard(card);
           const print = prints[Math.floor(Math.random() * prints.length)];
           const condition = conditions[Math.floor(Math.random() * conditions.length)];
           const language = languages[Math.floor(Math.random() * languages.length)];

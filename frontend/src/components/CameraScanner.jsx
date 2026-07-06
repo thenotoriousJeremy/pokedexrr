@@ -5,6 +5,7 @@ import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
 import { translateJapaneseName } from '../utils/pokemonTranslation';
 import { formatPrice } from '../utils/formatPrice';
+import { resolveCardPrice } from '../utils/resolveCardPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 
 function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
@@ -226,6 +227,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
   const autoAddCard = async (card) => {
     try {
+      const autoPrinting = (card.rarity || '').toLowerCase().includes('holo') ? 'Holofoil' : 'Normal';
       const response = await fetch('/api/collection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -233,9 +235,12 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           card_id: card.id,
           quantity: 1,
           condition: 'Near Mint',
-          printing: (card.rarity || '').toLowerCase().includes('holo') ? 'Holofoil' : 'Normal',
+          printing: autoPrinting,
           language: 'English',
-          purchase_price: card.price_trend || 0,
+          // price_trend is whichever finish the TCG API returned first (usually
+          // Normal), not necessarily the Holofoil finish just chosen above —
+          // resolve against the printing actually being recorded.
+          purchase_price: resolveCardPrice(card, autoPrinting),
           location_id: locationId ? parseInt(locationId, 10) : null,
           sub_location_1: subLocation1,
           sub_location_2: subLocation2
@@ -1204,9 +1209,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                     className="quick-add-preview-img"
                   />
                   <div className="quick-add-preview-info">
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>TCG Market</div>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>TCG Market ({printing})</div>
                     <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--accent-yellow)', margin: '0.1rem 0' }}>
-                      ${formatPrice(selectedCard.price_trend)}
+                      ${formatPrice(resolveCardPrice(selectedCard, printing))}
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
                       Rarity: <span style={{ color: '#fff', fontWeight: 600 }}>{selectedCard.rarity || 'Common'}</span>
