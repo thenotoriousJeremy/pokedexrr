@@ -163,7 +163,7 @@ router.post('/seed-cards', async (req, res) => {
       const result = await db.run(`
         INSERT INTO locations (name, type, description, sort_order, max_pages, page_style, user_id)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, ['Binder Seed Box', 'Binder', 'Seeded binder', 'custom', 10, '3x3', req.user.id]);
+      `, ['Binder Seed Box', 'Binder', 'Seeded binder', 'custom', 3, '3x3', req.user.id]);
       binder = { id: result.lastID, page_style: '3x3' };
     }
 
@@ -172,7 +172,7 @@ router.post('/seed-cards', async (req, res) => {
       const result = await db.run(`
         INSERT INTO locations (name, type, description, sort_order, max_rows, max_capacity, user_id)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, ['Box Seed Box', 'Box', 'Seeded bulk box', 'custom', 3, 200, req.user.id]);
+      `, ['Box Seed Box', 'Box', 'Seeded bulk box', 'custom', 2, 20, req.user.id]);
       box = { id: result.lastID };
     }
 
@@ -203,6 +203,16 @@ router.post('/seed-cards', async (req, res) => {
       return res.status(502).json({ error: 'Could not fetch seed card data from the Pokémon TCG API. Try again shortly.' });
     }
 
+    // Clear out any previously-seeded copies of these specific cards first, so
+    // running this repeatedly re-seeds a small fixed set instead of piling up
+    // more copies every time. Scoped to MOCK_IDS so it never touches cards a
+    // real scan/search added.
+    const mockIdPlaceholders = MOCK_IDS.map(() => '?').join(',');
+    await db.run(
+      `DELETE FROM collection WHERE user_id = ? AND card_id IN (${mockIdPlaceholders})`,
+      [req.user.id, ...MOCK_IDS]
+    );
+
     // Insert random collection entries distributed across binder & box
     const conditions = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played'];
     const languages = ['English', 'English', 'English', 'Japanese']; // ~25% Japanese so both display modes are visible
@@ -221,51 +231,73 @@ router.post('/seed-cards', async (req, res) => {
 
     let addedCount = 0;
 
-    // Seed binder entries (use pages 1 to 3, slots 1 to 9)
-    for (let p = 1; p <= 3; p++) {
-      for (let s = 1; s <= 9; s++) {
-        if (Math.random() > 0.25) {
-          const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
-          const prints = printsForCard(card);
-          const print = prints[Math.floor(Math.random() * prints.length)];
-          const condition = conditions[Math.floor(Math.random() * conditions.length)];
-          const language = languages[Math.floor(Math.random() * languages.length)];
-          const qty = Math.floor(Math.random() * 3) + 1; // 1-3 copies
-          const purchasePrice = parseFloat((Math.random() * 10).toFixed(2));
-          const pos = ((p - 1) * 9 + (s - 1)) * 1000;
+    // Kept deliberately small — enough to see every feature (binder + box +
+    // an unsorted pile to try Assistant Mode's bulk sort on) without having
+    // to page through a large fake collection.
 
-          await db.run(`
-            INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, position, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `, [card.id, qty, condition, print, language, purchasePrice, binder.id, `Page ${p}`, `Slot ${s}`, pos, req.user.id]);
-          addedCount += qty;
-        }
+    // Seed binder entries (page 1 only, ~half the 9 slots)
+    for (let s = 1; s <= 9; s++) {
+      if (Math.random() > 0.5) {
+        const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
+        const prints = printsForCard(card);
+        const print = prints[Math.floor(Math.random() * prints.length)];
+        const condition = conditions[Math.floor(Math.random() * conditions.length)];
+        const language = languages[Math.floor(Math.random() * languages.length)];
+        const qty = Math.floor(Math.random() * 2) + 1; // 1-2 copies
+        const purchasePrice = parseFloat((Math.random() * 10).toFixed(2));
+        const pos = (s - 1) * 1000;
+
+        await db.run(`
+          INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, position, user_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [card.id, qty, condition, print, language, purchasePrice, binder.id, `Page 1`, `Slot ${s}`, pos, req.user.id]);
+        addedCount += qty;
       }
     }
 
-    // Seed box entries (use row 1-2, slot 1-15)
-    for (let r = 1; r <= 2; r++) {
-      for (let s = 1; s <= 15; s++) {
-        if (Math.random() > 0.4) {
-          const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
-          const prints = printsForCard(card);
-          const print = prints[Math.floor(Math.random() * prints.length)];
-          const condition = conditions[Math.floor(Math.random() * conditions.length)];
-          const language = languages[Math.floor(Math.random() * languages.length)];
-          const qty = Math.floor(Math.random() * 4) + 1; // 1-4 copies
-          const purchasePrice = parseFloat((Math.random() * 5).toFixed(2));
-          const pos = ((r - 1) * 40 + (s - 1)) * 1000;
+    // Seed box entries (row 1 only, ~40% of 10 slots)
+    for (let s = 1; s <= 10; s++) {
+      if (Math.random() > 0.6) {
+        const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
+        const prints = printsForCard(card);
+        const print = prints[Math.floor(Math.random() * prints.length)];
+        const condition = conditions[Math.floor(Math.random() * conditions.length)];
+        const language = languages[Math.floor(Math.random() * languages.length)];
+        const qty = Math.floor(Math.random() * 2) + 1; // 1-2 copies
+        const purchasePrice = parseFloat((Math.random() * 5).toFixed(2));
+        const pos = (s - 1) * 1000;
 
-          await db.run(`
-            INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, position, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `, [card.id, qty, condition, print, language, purchasePrice, box.id, `Row ${r}`, `Slot ${s}`, pos, req.user.id]);
-          addedCount += qty;
-        }
+        await db.run(`
+          INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, position, user_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [card.id, qty, condition, print, language, purchasePrice, box.id, `Row 1`, String(s), pos, req.user.id]);
+        addedCount += qty;
       }
     }
 
-    res.json({ message: `Successfully seeded test collection with ${addedCount} cards for admin user!` });
+    // A handful of genuinely unsorted cards (no location_id) so there's
+    // something real to try Assistant Mode / bulk sort on right away.
+    let unsortedAdded = 0;
+    for (let i = 0; i < 6; i++) {
+      if (Math.random() > 0.3) {
+        const card = MOCK_POOL[Math.floor(Math.random() * MOCK_POOL.length)];
+        const prints = printsForCard(card);
+        const print = prints[Math.floor(Math.random() * prints.length)];
+        const condition = conditions[Math.floor(Math.random() * conditions.length)];
+        const language = languages[Math.floor(Math.random() * languages.length)];
+        const qty = 1;
+        const purchasePrice = parseFloat((Math.random() * 5).toFixed(2));
+
+        await db.run(`
+          INSERT INTO collection (card_id, quantity, condition, printing, language, purchase_price, location_id, sub_location_1, sub_location_2, position, user_id)
+          VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?)
+        `, [card.id, qty, condition, print, language, purchasePrice, req.user.id]);
+        addedCount += qty;
+        unsortedAdded++;
+      }
+    }
+
+    res.json({ message: `Successfully seeded a small test collection: ${addedCount} cards for admin user (${unsortedAdded} left unsorted to try Assistant Mode on).` });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to seed test cards' });
