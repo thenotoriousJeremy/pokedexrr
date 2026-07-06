@@ -3,6 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pi
 import { TrendingUp, Coins, Library, Trophy, Plus, ArrowUpRight, X } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
+import { getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import PriceHistoryChart from './PriceHistoryChart';
 
 const COLORS = [
@@ -373,11 +374,20 @@ function Dashboard({ statsTrigger, onNavigate }) {
                     <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {getCardDisplayName(card.name, card.language)}
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{card.set_name} • {card.rarity}</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      <span>{card.set_name} • {card.rarity}</span>
+                      {card.printing && card.printing !== 'Normal' && (
+                        <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 4px', borderRadius: '3px', flexShrink: 0, ...getPrintingBadgeStyle(card.printing) }}>
+                          {getPrintingBadgeLabel(card.printing)}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontWeight: 800, color: 'var(--accent-yellow)', fontSize: '0.95rem' }}>${formatPrice(card.price_trend)}</div>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Qty: {card.quantity}</div>
+                    <div style={{ fontWeight: 800, color: 'var(--accent-yellow)', fontSize: '0.95rem' }}>${formatPrice(card.price_trend)}<span style={{ fontSize: '0.6rem', fontWeight: 500, color: 'var(--text-muted)' }}> ea</span></div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {card.quantity > 1 ? `x${card.quantity} • $${formatPrice(card.price_trend * card.quantity)} total` : 'x1'}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -404,11 +414,18 @@ function Dashboard({ statsTrigger, onNavigate }) {
                       <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {getCardDisplayName(card.name, card.language)}
                       </div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{card.set_name} • #{card.number}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span>{card.set_name} • #{card.number}</span>
+                        {card.printing && card.printing !== 'Normal' && (
+                          <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 4px', borderRadius: '3px', flexShrink: 0, ...getPrintingBadgeStyle(card.printing) }}>
+                            {getPrintingBadgeLabel(card.printing)}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: 700, color: 'var(--accent-yellow)', fontSize: '0.8rem' }}>${formatPrice(card.price_trend)}</div>
-                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{card.added_at ? new Date(card.added_at).toLocaleDateString() : ''}</div>
+                      <div style={{ fontWeight: 700, color: 'var(--accent-yellow)', fontSize: '0.8rem' }}>${formatPrice(card.price_trend)}<span style={{ fontSize: '0.55rem', fontWeight: 500, color: 'var(--text-muted)' }}> ea</span></div>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{card.quantity > 1 ? `x${card.quantity}` : (card.added_at ? new Date(card.added_at).toLocaleDateString() : '')}</div>
                     </div>
                   </div>
                 ))}

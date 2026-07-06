@@ -4,6 +4,7 @@ import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
+import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import PriceHistoryChart from './PriceHistoryChart';
 import DeckBuilder from './DeckBuilder';
 
@@ -427,19 +428,35 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
         /* Visual Cards Grid Gallery View */
         <div className="card-grid">
           {filteredCollection.map((item) => {
-            const rarity = (item.rarity || '').toLowerCase();
-            const isUltra = rarity.includes('rare') || rarity.includes('secret') || rarity.includes('promo') || rarity.includes('ultra');
-            const glowClass = isUltra ? 'rarity-glow-ultra' : '';
+            const rarityStyle = getCardRarityBorder(item.rarity);
 
             return (
               <div key={item.entry_id} className="tcg-card tilt-card-wrapper" onClick={() => setInspectorCard(item)}>
-                <div className={`tcg-card-inner ${glowClass}`}>
+                <div className="tcg-card-inner" style={rarityStyle}>
                   <img src={item.image_url} alt={item.name} className="tcg-card-image" loading="lazy" />
                   {getFoilOverlayClass(item.printing) && (
                     <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
                   )}
                   <div className="tcg-card-quantity-tag">x{item.quantity}</div>
-                  
+
+                  {/* Rarity badge (shared tier system, matches Storage view) */}
+                  <span style={{
+                    position: 'absolute',
+                    top: '6px',
+                    left: '6px',
+                    fontSize: '0.55rem',
+                    fontWeight: 900,
+                    padding: '2px 4px',
+                    borderRadius: '3px',
+                    zIndex: 10,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+                    ...getRarityBadgeStyle(item.rarity)
+                  }}>
+                    {getRarityBadgeLabel(item.rarity)}
+                  </span>
+
                   {/* Overlay Tags */}
                   <div style={{
                     position: 'absolute',
@@ -507,7 +524,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                   <tr key={item.entry_id}>
                     <td>
                       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                        <div style={{ position: 'relative', width: '36px', height: '50px', flexShrink: 0, overflow: 'hidden', borderRadius: '4px' }}>
+                        <div style={{ position: 'relative', width: '36px', height: '50px', flexShrink: 0, overflow: 'hidden', borderRadius: '4px', ...getCardRarityBorder(item.rarity) }}>
                           <img src={item.image_url} alt={item.name} className="collection-row-thumbnail" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px' }} />
                           {getFoilOverlayClass(item.printing) && (
                             <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: '4px' }} />
@@ -515,11 +532,14 @@ function CollectionList({ statsTrigger, onUpdate, showToast, token, selectedCard
                         </div>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{getCardDisplayName(item.name, item.language)}</div>
-                          <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {item.set_name} • #{item.number} • {item.rarity}
+                          <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                            <span>{item.set_name} • #{item.number}</span>
+                            <span style={{ fontSize: '0.55rem', fontWeight: 800, padding: '1px 3px', borderRadius: '3px', flexShrink: 0, ...getRarityBadgeStyle(item.rarity) }}>
+                              {getRarityBadgeLabel(item.rarity)}
+                            </span>
                           </div>
                           <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
-                            {item.printing}{item.printing !== 'Normal' ? '' : ''} • {item.condition}
+                            {item.printing} • {item.condition}
                           </div>
                           <div style={{ display: 'flex', gap: '0.35rem', marginTop: '2px' }}>
                             <button className="btn btn-secondary btn-icon-only" style={{ width: '18px', height: '18px', padding: 0, borderRadius: '3px' }} onClick={() => openEdit(item)} title="Edit">

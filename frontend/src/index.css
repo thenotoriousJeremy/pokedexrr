@@ -1486,16 +1486,20 @@ button, input, select, textarea {
   top: 0; left: 0; right: 0; bottom: 0;
   overflow: hidden;
   border-radius: inherit;
+  /* Stripe alpha was 0.06 at container opacity 0.55 (~0.03 effective) — nearly
+     invisible against card art at rest, making it hard to tell apart from
+     Holofoil. Raised so the silver stripe texture reads without needing hover
+     or waiting for the sweep animation to pass over. */
   background: repeating-linear-gradient(112deg,
-    rgba(220, 240, 255, 0.06) 0px,
-    rgba(220, 240, 255, 0.06) 6px,
+    rgba(220, 240, 255, 0.22) 0px,
+    rgba(220, 240, 255, 0.22) 6px,
     rgba(0, 0, 0, 0) 6px,
     rgba(0, 0, 0, 0) 13px
   );
   pointer-events: none;
   z-index: 5;
   mix-blend-mode: overlay;
-  opacity: 0.55;
+  opacity: 0.75;
   transition: opacity 0.3s ease, background-position 0.05s ease-out;
 }
 .reverse-holo-shine-overlay::after {
