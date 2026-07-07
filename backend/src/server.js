@@ -13,6 +13,7 @@ const adminRoutes = require('./routes/admin');
 const collectionRoutes = require('./routes/collection');
 const setsRoutes = require('./routes/sets');
 const decksRoutes = require('./routes/decks');
+const settingsRoutes = require('./routes/settings');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -153,6 +154,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api', collectionRoutes);
 app.use('/api/sets', setsRoutes);
 app.use('/api/decks', decksRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Serve production static assets from Frontend
 const frontendBuildPath = path.join(__dirname, '../../frontend/dist');
