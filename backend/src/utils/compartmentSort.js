@@ -409,22 +409,39 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
   const prevCard = targetIndex > 0 ? sorted[targetIndex - 1] : null;
   const nextCard = targetIndex < sorted.length - 1 ? sorted[targetIndex + 1] : null;
 
+  const countOf = (c) => overrideCompartments
+    ? (overrideCompartments.find(oc => oc.id === c.id)?.count || 0)
+    : (cardsByCompId.get(c.id) || []).length;
+
   let cursor = 0;
-  for (const compartment of pool) {
+  for (let i = 0; i < pool.length; i++) {
+    const compartment = pool[i];
     if (targetIndex < cursor + compartment.capacity) {
-      const seq = targetIndex - cursor;
+      let target = compartment;
+      let seq = targetIndex - cursor;
+      // The capacity-window walk assumes every earlier compartment is packed
+      // to capacity, which isn't true when pages/rows have gaps. If the card
+      // sorts into a compartment that's already full, spill it to the start of
+      // the next pool compartment with room instead of overfilling this one —
+      // the auto-placement path trusts this result without a capacity recheck.
+      if (countOf(target) >= target.capacity) {
+        const spill = pool.slice(i + 1).find(c => countOf(c) < c.capacity);
+        if (!spill) return null;
+        target = spill;
+        seq = countOf(spill); // append after the cards already there
+      }
       let reason = `Sorted by ${scheme}`;
       if (prevCard) reason += `, right after ${prevCard.name}`;
       else if (nextCard) reason += `, right before ${nextCard.name}`;
       else reason += ` — first card here`;
-      if (cardCat && (compartment.assignedFilters || []).includes(cardCat)) {
-        reason += ` (${compartmentLabel(compartment, location.type)} is assigned "${cardCat}")`;
+      if (cardCat && (target.assignedFilters || []).includes(cardCat)) {
+        reason += ` (${compartmentLabel(target, location.type)} is assigned "${cardCat}")`;
       }
       return {
         location_id: location.id,
-        compartment_id: compartment.id,
+        compartment_id: target.id,
         position: (seq + 1) * 1000,
-        label: `${compartmentLabel(compartment, location.type)}, Pos ${seq + 1} (in ${location.name})`,
+        label: `${compartmentLabel(target, location.type)}, Pos ${seq + 1} (in ${location.name})`,
         reason
       };
     }

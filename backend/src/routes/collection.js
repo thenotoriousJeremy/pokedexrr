@@ -1563,40 +1563,50 @@ router.post('/import', async (req, res) => {
       return res.status(400).json({ error: 'Invalid data format. Expected an array or CSV lines.' });
     }
 
+    // Bound the work: a 15mb body can hold tens of thousands of rows, and each
+    // one does several serial SQL round-trips on the single-writer connection.
+    // Cap it so one import can't stall the whole process.
+    const MAX_IMPORT_ROWS = 5000;
+    if (cards.length > MAX_IMPORT_ROWS) {
+      return res.status(413).json({ error: `Too many rows (${cards.length}). Import at most ${MAX_IMPORT_ROWS} at a time.` });
+    }
+
+    // One transaction for the whole batch: a mid-loop failure rolls back
+    // instead of leaving a half-imported collection behind.
+    await db.run('BEGIN IMMEDIATE');
     let importedCount = 0;
     for (const card of cards) {
       const cardId = card.card_id || card.id;
       if (!cardId) continue;
 
-      // 1. Ensure the card is in the cache. card_cache is shared across all users, so
-      // never trust client-supplied metadata for it beyond a sanitized last-resort placeholder.
+      // 1. Ensure the card is in the cache. card_cache is shared across all
+      // users, so never trust client-supplied metadata beyond a sanitized
+      // placeholder. Bulk import does NOT call the external API per card — a
+      // large import would otherwise fire thousands of serial requests and
+      // exhaust the TCG API rate limit. Real metadata/prices fill in later via
+      // the background price updater and the next per-card lookup.
       let cached = await db.get(`SELECT id FROM card_cache WHERE id = ?`, [cardId]);
       if (!cached) {
-        try {
-          await tcgApi.getCardById(cardId);
-        } catch (apiErr) {
-          console.error(`Failed to fetch card ${cardId} from TCG API during import:`, apiErr.message);
-          const safeTypes = Array.isArray(card.types) ? JSON.stringify(card.types.filter(t => typeof t === 'string')) : '[]';
-          const safePrice = Number.isFinite(Number(card.market_price || card.price_trend)) ? Math.max(0, Number(card.market_price || card.price_trend)) : 0;
-          await db.run(
-            `INSERT OR IGNORE INTO card_cache
-             (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              cardId,
-              String(card.card_name || 'Imported Card').slice(0, 200),
-              String(card.supertype || 'Pokémon').slice(0, 50),
-              '[]',
-              safeTypes,
-              String(card.rarity || 'Common').slice(0, 50),
-              String(card.set_id || '').slice(0, 50),
-              String(card.set_name || 'Imported Set').slice(0, 200),
-              String(card.card_number || card.number || '').slice(0, 20),
-              '',
-              safePrice
-            ]
-          );
-        }
+        const safeTypes = Array.isArray(card.types) ? JSON.stringify(card.types.filter(t => typeof t === 'string')) : '[]';
+        const safePrice = Number.isFinite(Number(card.market_price || card.price_trend)) ? Math.max(0, Number(card.market_price || card.price_trend)) : 0;
+        await db.run(
+          `INSERT OR IGNORE INTO card_cache
+           (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            cardId,
+            String(card.card_name || 'Imported Card').slice(0, 200),
+            String(card.supertype || 'Pokémon').slice(0, 50),
+            '[]',
+            safeTypes,
+            String(card.rarity || 'Common').slice(0, 50),
+            String(card.set_id || '').slice(0, 50),
+            String(card.set_name || 'Imported Set').slice(0, 200),
+            String(card.card_number || card.number || '').slice(0, 20),
+            '',
+            safePrice
+          ]
+        );
       }
 
       // 2. Resolve location_id from location_name, scoped to this user only.
@@ -1642,9 +1652,13 @@ router.post('/import', async (req, res) => {
       importedCount++;
     }
 
+    await db.run('COMMIT');
     res.json({ success: true, message: `Successfully imported ${importedCount} cards.` });
   } catch (error) {
     console.error('Import failed:', error);
+    // Roll back the partial batch. Ignore rollback errors (e.g. no active tx if
+    // we failed before BEGIN) so the real error is what surfaces.
+    await db.run('ROLLBACK').catch(() => {});
     res.status(500).json({ error: 'Import failed' });
   }
 });
