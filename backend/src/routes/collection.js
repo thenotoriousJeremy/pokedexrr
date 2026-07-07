@@ -817,26 +817,38 @@ router.post('/smart-recommend-batch', async (req, res) => {
       if (!entry) continue;
       try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
 
-      const targetLoc = locations.find(l => locationAcceptsCard(l, entry));
-      if (!targetLoc) {
-        recommendations.push({ entry, recommended: null, reason: 'No matching location rules' });
+      // Try every container whose rules accept the card, not just the first —
+      // so a card only counts as "nowhere to go" when it fits no container's
+      // rules OR every accepting container is full. Only consider a container
+      // that still has a free slot in the running snapshot, which keeps
+      // recommendSlot from spilling into another location behind our backs.
+      const acceptingLocs = locations.filter(l => locationAcceptsCard(l, entry));
+      if (acceptingLocs.length === 0) {
+        recommendations.push({ entry, recommended: null, reason: 'no_container', message: 'No container accepts this card' });
         continue;
       }
 
-      const state = stateByLocation[targetLoc.id];
-      const recommended = await recommendSlot(db, targetLoc, entry, state.workingCompartments, state.mockCards);
-      
+      let placedLoc = null;
+      let recommended = null;
+      for (const loc of acceptingLocs) {
+        const st = stateByLocation[loc.id];
+        if (!st.workingCompartments.some(c => c.free > 0)) continue;
+        const rec = await recommendSlot(db, loc, entry, st.workingCompartments, st.mockCards);
+        if (rec && rec.location_id === loc.id) { placedLoc = loc; recommended = rec; break; }
+      }
+
       if (!recommended) {
-        recommendations.push({ entry, recommended: null, reason: 'Container full' });
+        recommendations.push({ entry, recommended: null, reason: 'full', message: 'Every matching container is full' });
         continue;
       }
-      
+
       recommendations.push({ entry, recommended });
 
+      const state = stateByLocation[placedLoc.id];
       state.workingCompartments = state.workingCompartments.map(c =>
         c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
       );
-      
+
       state.mockCards.push({
         entry_id: entry.entry_id,
         compartment_id: recommended.compartment_id,

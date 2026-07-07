@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Trash2, X, Sparkles, MoreVertical, Settings, LayoutList, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, X, MoreVertical, Settings, LayoutList, RefreshCw } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder } from '../utils/cardRarity';
@@ -298,32 +298,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   // DB by /resort — so "Placed" just advances instead of issuing a move.
   const [filingReadOnly, setFilingReadOnly] = useState(false);
 
-  const newestScannedCard = useMemo(() => {
-    const unsorted = allCards.filter(c => !c.location_id);
-    if (unsorted.length === 0) return null;
-    return [...unsorted].sort((a, b) => {
-      const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
-      const timeB = b.added_at ? new Date(b.added_at).getTime() : 0;
-      if (timeA !== timeB) return timeB - timeA;
-      return b.entry_id - a.entry_id;
-    })[0];
-  }, [allCards]);
-
-  // Standing recommendation for the newest unsorted card while browsing a
-  // container (outside filing mode) — powers the "Newest scanned" banner and
-  // its ghost preview. May be {full:true} or {rejected:true} when the card
-  // can't go in this container.
-  const [idleRec, setIdleRec] = useState(null);
-
-  const currentRecSpot = filingMode
-    ? (filingQueue[filingIndex]?.recommended || null)
-    : idleRec;
-
-  // The card currentRecSpot is about to place — used to render a ghost preview
-  // in the recommended pocket so the user sees where it physically goes.
-  const recCard = filingMode
-    ? (filingQueue[filingIndex]?.recommended ? filingQueue[filingIndex].entry : null)
-    : (idleRec && idleRec.compartment_id ? newestScannedCard : null);
+  // The recommended slot for the card currently under review in filing mode —
+  // drives the ghost preview shown in the container view.
+  const currentRecSpot = filingMode ? (filingQueue[filingIndex]?.recommended || null) : null;
+  const recCard = filingMode && filingQueue[filingIndex]?.recommended ? filingQueue[filingIndex].entry : null;
 
   // Declared here (not lower) because the filing-mode effect below reads
   // isBinderType in its dependency array, which is evaluated during render —
@@ -334,6 +312,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   useEffect(() => {
     if (filingMode && filingQueue[filingIndex]?.recommended) {
       const rec = filingQueue[filingIndex].recommended;
+      // A card's home may be a different container than the one open (Sort &
+      // File spans every container) — switch to it, then compartments reload
+      // and this effect reruns to snap to the right page/row.
+      if (rec.location_id && rec.location_id !== activeLocationId) {
+        setActiveLocationId(rec.location_id);
+        return;
+      }
       if (isBinderType) {
         const compIdx = compartments.findIndex(c => c.id === rec.compartment_id);
         if (compIdx !== -1) setActivePageIndex(compIdx);
@@ -343,21 +328,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         setCoverflowActiveIndex(Math.max(0, posIdx));
       }
     }
-  }, [filingMode, filingIndex, filingQueue, compartments, isBinderType]);
-
-  // Keep a live recommendation for the newest unsorted card whenever a
-  // container is open outside filing mode, so the user always sees where the
-  // card they just scanned should physically go — and why.
-  useEffect(() => {
-    if (filingMode || !newestScannedCard || !activeLocationId) { setIdleRec(null); return; }
-    let cancelled = false;
-    const params = new URLSearchParams({ card_id: newestScannedCard.card_id, printing: newestScannedCard.printing || 'Normal' });
-    fetch(`/api/locations/${activeLocationId}/recommend?${params}`)
-      .then(res => (res.ok ? res.json() : null))
-      .then(data => { if (!cancelled) setIdleRec(data); })
-      .catch(() => { if (!cancelled) setIdleRec(null); });
-    return () => { cancelled = true; };
-  }, [filingMode, newestScannedCard, activeLocationId]);
+  }, [filingMode, filingIndex, filingQueue, compartments, isBinderType, activeLocationId]);
   const touchStartRef = useRef(0);
 
   const [activeCompartmentId, setActiveCompartmentId] = useState(null);
@@ -734,23 +705,34 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   };
 
   const startFilingMode = async () => {
-    if (unsortedCards.length === 0 || !activeLocationId) return;
+    if (unsortedCards.length === 0 || locations.length === 0) return;
     try {
-      const res = await fetch(`/api/locations/${activeLocationId}/recommend-batch`, {
+      // Ask across every container where each card can go, then walk through
+      // only the ones that actually have a home. Cards that fit nowhere are
+      // reported and left in the Unsorted queue.
+      const res = await fetch('/api/smart-recommend-batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ entry_ids: unsortedCards.map(c => c.entry_id) })
       });
-      if (res.ok) {
-        const data = await res.json();
-        setFilingQueue(data);
-        setFilingIndex(0);
-        setFilingMode(true);
-        if (data[0] && data[0].recommended && data[0].recommended.location_id) {
-          setActiveLocationId(data[0].recommended.location_id);
-        }
-      } else {
-        showToast('Failed to start filing mode.');
+      if (!res.ok) { showToast('Failed to start filing mode.'); return; }
+      const data = await res.json();
+      const placeable = data.filter(d => d.recommended);
+      const noRoom = data.filter(d => !d.recommended);
+
+      if (placeable.length === 0) {
+        showToast(`No unsorted card fits any container. ${noRoom.length} left unsorted — add space or adjust filing rules.`);
+        return;
+      }
+
+      setFilingQueue(placeable);
+      setFilingIndex(0);
+      setFilingMode(true);
+      if (placeable[0].recommended.location_id) {
+        setActiveLocationId(placeable[0].recommended.location_id);
+      }
+      if (noRoom.length > 0) {
+        showToast(`Filing ${placeable.length} card(s). ${noRoom.length} have nowhere to go and stay unsorted.`);
       }
     } catch (err) { console.error(err); showToast('Error starting filing mode.'); }
   };
@@ -1078,63 +1060,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           <p style={{ color: 'var(--text-secondary)' }}>Select a container to view its compartments.</p>
         ) : (
           <>
-            {currentRecSpot && newestScannedCard && !filingMode && (
-              <div className="glass-panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap', border: '1px dashed var(--primary-glow)', background: 'rgba(255, 255, 255, 0.03)', marginBottom: '0.5rem' }}>
-                <div style={{ fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.15rem', minWidth: 0 }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                    <Sparkles size={14} style={{ color: 'gold', flexShrink: 0 }} />
-                    <span>
-                      Newest scanned: <strong>{newestScannedCard.name}</strong> ({newestScannedCard.printing}) &rarr;{' '}
-                      <span style={{ color: '#ffc107', fontWeight: 'bold' }}>
-                        {currentRecSpot.rejected ? "Doesn't match this container's rule" : currentRecSpot.full ? 'Container Full!' : currentRecSpot.label}
-                      </span>
-                    </span>
-                  </span>
-                  {currentRecSpot.reason && (
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', paddingLeft: '1.3rem' }}>{currentRecSpot.reason}</span>
-                  )}
-                </div>
-                {currentRecSpot.compartment_id && (
-                  <div style={{ display: 'flex', gap: '0.4rem' }}>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => {
-                        // Recommendation can overflow into another container.
-                        if (currentRecSpot.location_id && currentRecSpot.location_id !== activeLocationId) {
-                          setActiveLocationId(currentRecSpot.location_id);
-                          return;
-                        }
-                        if (isBinderType) {
-                          const compIdx = compartments.findIndex(c => c.id === currentRecSpot.compartment_id);
-                          if (compIdx !== -1) {
-                            setActivePageIndex(compIdx);
-                          }
-                        } else {
-                          setActiveCompartmentId(currentRecSpot.compartment_id);
-                          const compCards = cardsByCompartment.get(currentRecSpot.compartment_id) || [];
-                          const posIdx = Math.floor(currentRecSpot.position / 1000) - 1;
-                          setCoverflowActiveIndex(Math.min(posIdx, compCards.length));
-                        }
-                      }}
-                      style={{ fontSize: '0.65rem', padding: '0.2rem 0.5rem' }}
-                    >
-                      View Spot
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => handleFileCard(newestScannedCard.entry_id, currentRecSpot.location_id || activeLocationId)}
-                      style={{ fontSize: '0.65rem', padding: '0.2rem 0.5rem' }}
-                    >
-                      File Here
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-
             {isBinderType && compartments.length > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem', margin: '0.2rem 0', background: 'rgba(0,0,0,0.1)', padding: '0.4rem', borderRadius: 'var(--radius-sm)' }}>
                 <button
@@ -1647,8 +1572,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   type="button"
                   className="btn btn-primary"
                   onClick={startFilingMode}
-                  disabled={!activeLocationId}
-                  title={activeLocationId ? 'Walk through each card with its recommended spot' : 'Select a container first'}
+                  disabled={locations.length === 0}
+                  title={locations.length === 0 ? 'Create a container first' : 'File the cards that fit any container, walking through each spot'}
                   style={{ fontSize: '0.8rem', padding: '0.5rem', width: '100%' }}
                 >
                   Sort & File Cards
@@ -1661,7 +1586,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   title={activeLocationId ? 'File every unsorted card into the open container in one go' : 'Select a container first'}
                   style={{ fontSize: '0.7rem', padding: '0.35rem', width: '100%' }}
                 >
-                  Auto-File All (no walkthrough)
+                  Auto-File All (into open container)
                 </button>
               </>
             )}
