@@ -48,3 +48,10 @@ patch*.py
 *.sln
 *.sw?
 .DS_Store
+
+# AI/Agent directories
+.claude/
+.codegraph/
+.gemini/
+.cursor/
+.aider/
