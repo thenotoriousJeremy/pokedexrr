@@ -281,6 +281,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [ruleStartDraft, setRuleStartDraft] = useState('a');
   const [ruleEndDraft, setRuleEndDraft] = useState('z');
   const [ruleSetsDraft, setRuleSetsDraft] = useState([]);
+  const [ruleSetSearch, setRuleSetSearch] = useState('');
 
   const [inspectorCard, setInspectorCard] = useState(null);
 
@@ -498,6 +499,14 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     });
     return Array.from(cats).sort();
   }, [allCards, selectedLoc?.sort_order, setsList]);
+
+  // Set names the user actually owns cards from — the default choices in the
+  // specific-sets filter picker so it isn't the entire set catalog by default.
+  const ownedSetNames = useMemo(() => {
+    const s = new Set();
+    allCards.forEach(c => { if (c.set_name) s.add(c.set_name); });
+    return s;
+  }, [allCards]);
 
   const cardsByCompartment = useMemo(() => {
     const map = new Map();
@@ -888,20 +897,47 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
               {ruleTypeDraft === 'specific_sets' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                  <select
-                    className="select-control" value=""
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (!v) return;
-                      setRuleSetsDraft(prev => prev.includes(v) ? prev.filter(s => s !== v) : [...prev, v]);
-                    }}
-                    style={{ fontSize: '0.75rem' }}
-                  >
-                    <option value="">Add a set...</option>
-                    {setsList.map(s => (
-                      <option key={s.id} value={s.name}>{ruleSetsDraft.includes(s.name) ? `✓ ${s.name}` : s.name}</option>
-                    ))}
-                  </select>
+                  <input
+                    className="input-control"
+                    placeholder="Search all sets to add..."
+                    value={ruleSetSearch}
+                    onChange={(e) => setRuleSetSearch(e.target.value)}
+                    style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
+                  />
+                  {(() => {
+                    // No search: only sets you own cards from (the common case).
+                    // Searching: the full catalog, filtered by name.
+                    const q = ruleSetSearch.trim().toLowerCase();
+                    const list = setsList.filter(s => q ? s.name.toLowerCase().includes(q) : ownedSetNames.has(s.name));
+                    return (
+                      <>
+                        <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                          {q
+                            ? `${list.length} matching set${list.length === 1 ? '' : 's'}`
+                            : `${list.length} set${list.length === 1 ? '' : 's'} in your collection — search to add others`}
+                        </div>
+                        <div style={{ maxHeight: '160px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.25rem' }}>
+                          {list.length === 0 ? (
+                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', padding: '0.25rem' }}>
+                              {q ? 'No sets match.' : 'No cards in your collection yet — search to add sets.'}
+                            </span>
+                          ) : list.map(s => {
+                            const on = ruleSetsDraft.includes(s.name);
+                            return (
+                              <button
+                                type="button" key={s.id}
+                                onClick={() => setRuleSetsDraft(prev => prev.includes(s.name) ? prev.filter(x => x !== s.name) : [...prev, s.name])}
+                                className="kebab-item"
+                                style={{ fontSize: '0.72rem', padding: '0.3rem 0.4rem', background: on ? 'rgba(255,71,71,0.15)' : 'transparent', borderRadius: '3px' }}
+                              >
+                                <span style={{ width: '0.9rem', flexShrink: 0 }}>{on ? '✓' : ''}</span>{s.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    );
+                  })()}
                   {ruleSetsDraft.length === 0 ? (
                     <span style={{ fontSize: '0.65rem', color: 'var(--accent-red)' }}>No sets selected — this container would reject every card.</span>
                   ) : (
@@ -989,6 +1025,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     setRuleStartDraft(cfg.start || 'a');
                     setRuleEndDraft(cfg.end || 'z');
                     setRuleSetsDraft(Array.isArray(cfg.sets) ? cfg.sets : []);
+                    setRuleSetSearch('');
                     setShowRulesModal(true);
                   }}>
                     <Settings size={14} /> Container Settings
