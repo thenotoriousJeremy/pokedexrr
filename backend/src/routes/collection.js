@@ -7,7 +7,7 @@ const {
   isVintageSet,
   parseSqliteUtc
 } = require('../utils/priceHelpers');
-const { recommendSlot, compartmentLabel, loadCompartments, rebalanceCompartmentByScheme, sortCards, locationAcceptsCard } = require('../utils/compartmentSort');
+const { recommendSlot, compartmentLabel, loadCompartments, rebalanceCompartmentByScheme, sortCards, locationAcceptsCard, loadSetsCache, getSortCategory } = require('../utils/compartmentSort');
 
 // Default compartment plan by container type — used when a caller doesn't
 // specify one at creation time (see POST /locations).
@@ -34,7 +34,7 @@ async function resolveCompartmentAndPosition({ locationId, compartmentId, positi
     // deleted after the client picked it) — verify it still exists rather than
     // trusting it into an INSERT and blowing up the compartment_id FK.
     const compartment = await db.get(`
-      SELECT c.id, c.idx, c.label, c.capacity, l.type as loc_type, l.name as loc_name FROM compartments c JOIN locations l ON c.location_id = l.id
+      SELECT c.id, c.idx, c.label, c.capacity, l.id as loc_id, l.type as loc_type, l.name as loc_name FROM compartments c JOIN locations l ON c.location_id = l.id
       WHERE c.id = ? AND l.user_id = ?
     `, [compartmentId, userId]);
     if (!compartment) return { compartment_id: null, position: position !== undefined ? position : 0 };
@@ -50,9 +50,11 @@ async function resolveCompartmentAndPosition({ locationId, compartmentId, positi
       throw new Error('COMPARTMENT_FULL');
     }
 
+    // Return the compartment's real location so a manual placement can never
+    // leave collection.location_id pointing at a different container.
     const label = `${compartmentLabel(compartment, compartment.loc_type)} (in ${compartment.loc_name})`;
-    if (position !== undefined) return { compartment_id: compartmentId, position, label };
-    return { compartment_id: compartmentId, position: ((countRow?.cnt || 0) + 1) * 1000, label };
+    if (position !== undefined) return { compartment_id: compartmentId, position, label, location_id: compartment.loc_id };
+    return { compartment_id: compartmentId, position: ((countRow?.cnt || 0) + 1) * 1000, label, location_id: compartment.loc_id };
   }
   if (!locationId) {
     return { compartment_id: null, position: position !== undefined ? position : 0 };
@@ -65,6 +67,12 @@ async function resolveCompartmentAndPosition({ locationId, compartmentId, positi
   if (!cardMetadata) return { compartment_id: null, position: 0 };
   cardMetadata.printing = printing || 'Normal';
   try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
+
+  // Distinguish "this container's rule doesn't allow the card" from "no room
+  // anywhere" so the client can tell the user which one actually happened.
+  if (!locationAcceptsCard(location, cardMetadata)) {
+    return { compartment_id: null, position: 0, rejected: true };
+  }
 
   const recommended = await recommendSlot(db, location, cardMetadata);
   if (!recommended) return { compartment_id: null, position: 0, full: true }; // container full — leave unsorted rather than error
@@ -239,7 +247,11 @@ router.post('/collection', async (req, res) => {
     const resolved = await resolveCompartmentAndPosition({
       locationId: location_id, compartmentId: compartment_id, position, userId: req.user.id, cardId: card_id, printing
     });
-    const finalLocationId = resolved.location_id !== undefined && resolved.location_id !== null ? resolved.location_id : location_id;
+    // No compartment resolved (full / rule-rejected) = leave the card truly
+    // unsorted rather than parked on a location with no physical slot.
+    const finalLocationId = resolved.compartment_id
+      ? (resolved.location_id !== undefined && resolved.location_id !== null ? resolved.location_id : location_id)
+      : null;
 
     // No stacking logic here anymore
     
@@ -290,7 +302,8 @@ router.post('/collection', async (req, res) => {
       placement: resolved.compartment_id
         ? await describePlacement(db, lastInsertedId, req.user.id)
         : null,
-      container_full: !!resolved.full
+      container_full: !!resolved.full,
+      rule_rejected: !!resolved.rejected
     });
   } catch (error) {
     console.error(error);
@@ -336,6 +349,7 @@ router.put('/collection/:id', async (req, res) => {
     let finalCompartmentId = entry.compartment_id;
     let finalPosition = position;
     let resolvedFull = false;
+    let resolvedRejected = false;
     const isMoving = compartment_id !== undefined || (location_id !== undefined && location_id !== entry.location_id);
     if (isMoving) {
       const resolved = await resolveCompartmentAndPosition({
@@ -351,6 +365,7 @@ router.put('/collection/:id', async (req, res) => {
       finalCompartmentId = resolved.compartment_id;
       finalPosition = resolved.position;
       resolvedFull = !!resolved.full;
+      resolvedRejected = !!resolved.rejected;
     }
 
     // Compute what the final values would be after this update
@@ -372,8 +387,16 @@ router.put('/collection/:id', async (req, res) => {
     if (printing !== undefined) { fields.push('printing = ?'); params.push(printing); }
     if (language !== undefined) { fields.push('language = ?'); params.push(language); }
     if (purchase_price !== undefined) { fields.push('purchase_price = ?'); params.push(purchase_price); }
-    if (location_id !== undefined) { fields.push('location_id = ?'); params.push(location_id); }
-    if (isMoving) { fields.push('compartment_id = ?'); params.push(finalCompartmentId); }
+    // On a move, persist the location the resolver actually landed on (it can
+    // differ from the requested one when the container is full and the card
+    // overflows to another location, or when a compartment implies its owner).
+    // No compartment resolved (full / rule-rejected / cleared) = truly
+    // unsorted, so the card stays visible in the Unsorted queue instead of
+    // being parked on a location with no physical slot.
+    if (isMoving) {
+      fields.push('location_id = ?'); params.push(finalCompartmentId ? finalLocId : null);
+      fields.push('compartment_id = ?'); params.push(finalCompartmentId);
+    } else if (location_id !== undefined) { fields.push('location_id = ?'); params.push(location_id); }
     if (list_type !== undefined) { fields.push('list_type = ?'); params.push(list_type); }
     if (is_trade !== undefined) { fields.push('is_trade = ?'); params.push(is_trade ? 1 : 0); }
     if (finalPosition !== undefined) { fields.push('position = ?'); params.push(finalPosition); }
@@ -395,7 +418,7 @@ router.put('/collection/:id', async (req, res) => {
 
     // Read the real post-rebalance slot so the label's Pos is accurate.
     const finalPlacement = isMoving && finalCompartmentId ? await describePlacement(db, id, req.user.id) : null;
-    res.json({ message: 'Collection entry updated successfully', placement: finalPlacement, container_full: resolvedFull });
+    res.json({ message: 'Collection entry updated successfully', placement: finalPlacement, container_full: resolvedFull, rule_rejected: resolvedRejected });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to update entry' });
@@ -435,11 +458,32 @@ router.get('/locations', async (req, res) => {
   }
 });
 
+const RULE_TYPES = ['any', 'alphabetical_range', 'specific_sets'];
+
+// rule_config arrives as an object (structured editor) or an already-encoded
+// JSON string; store canonical JSON text either way. Double-stringifying a
+// string would make locationAcceptsCard parse back a string instead of an
+// object, silently breaking the filing rule. Throws on unparseable strings.
+function normalizeRuleConfig(rule_config) {
+  if (rule_config === undefined || rule_config === null || rule_config === '') return null;
+  if (typeof rule_config === 'string') { JSON.parse(rule_config); return rule_config; }
+  return JSON.stringify(rule_config);
+}
+
 router.post('/locations', async (req, res) => {
   const { name, type, sort_order = 'name-asc', foil_sorting = 'normals_first', rule_type = 'any', rule_config, compartmentPlan } = req.body;
 
   if (!name || !type) {
     return res.status(400).json({ error: 'name and type are required' });
+  }
+  if (!RULE_TYPES.includes(rule_type)) {
+    return res.status(400).json({ error: 'Invalid rule_type' });
+  }
+  let ruleConfigJson;
+  try {
+    ruleConfigJson = normalizeRuleConfig(rule_config);
+  } catch {
+    return res.status(400).json({ error: 'rule_config must be valid JSON' });
   }
   try {
     const existing = await db.get(`SELECT id FROM locations WHERE name = ? AND user_id = ?`, [name, req.user.id]);
@@ -450,7 +494,7 @@ router.post('/locations', async (req, res) => {
     const result = await db.run(`
       INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, rule_config, user_id)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [name, type, sort_order, foil_sorting || 'normals_first', rule_type, rule_config ? JSON.stringify(rule_config) : null, req.user.id]);
+    `, [name, type, sort_order, foil_sorting || 'normals_first', rule_type, ruleConfigJson, req.user.id]);
 
     const plan = compartmentPlan || defaultCompartmentPlan(type);
     await db.createCompartments(result.lastID, Math.max(1, parseInt(plan.count, 10) || 1), Math.max(1, parseInt(plan.capacity, 10) || 40));
@@ -465,6 +509,15 @@ router.post('/locations', async (req, res) => {
 router.put('/locations/:id', async (req, res) => {
   const { id } = req.params;
   const { name, type, sort_order, foil_sorting, rule_type, rule_config } = req.body;
+  if (rule_type !== undefined && !RULE_TYPES.includes(rule_type)) {
+    return res.status(400).json({ error: 'Invalid rule_type' });
+  }
+  let ruleConfigJson;
+  try {
+    ruleConfigJson = rule_config !== undefined ? normalizeRuleConfig(rule_config) : undefined;
+  } catch {
+    return res.status(400).json({ error: 'rule_config must be valid JSON' });
+  }
   try {
     const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!loc) {
@@ -488,7 +541,7 @@ router.put('/locations/:id', async (req, res) => {
         rule_type = COALESCE(?, rule_type),
         rule_config = COALESCE(?, rule_config)
       WHERE id = ? AND user_id = ?
-    `, [name, type, sort_order, foil_sorting, rule_type, rule_config !== undefined ? JSON.stringify(rule_config) : undefined, id, req.user.id]);
+    `, [name, type, sort_order, foil_sorting, rule_type, ruleConfigJson, id, req.user.id]);
     res.json({ message: 'Location updated' });
   } catch (error) {
     console.error(error);
@@ -660,10 +713,7 @@ router.post('/locations/:id/auto-assign-categories', async (req, res) => {
       WHERE c.user_id = ?
     `, [req.user.id]);
 
-    const { loadSetsCache, sortCards } = require('../utils/compartmentSort');
     await loadSetsCache(db);
-    // Since getSortCategory is not exported, we need to export it, but wait! We can just fetch it from utils/compartmentSort.js!
-    const { getSortCategory } = require('../utils/compartmentSort');
 
     const catCounts = new Map();
     allCards.forEach(c => {
@@ -725,6 +775,10 @@ router.get('/locations/:id/recommend', async (req, res) => {
     if (!cardMetadata) return res.status(404).json({ error: 'Card not found in cache' });
     cardMetadata.printing = printing || 'Normal';
     try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
+
+    // Distinguish rule rejection from a full container so the client can say
+    // which one actually happened.
+    if (!locationAcceptsCard(location, cardMetadata)) return res.json({ rejected: true });
 
     const recommendation = await recommendSlot(db, location, cardMetadata);
     if (!recommendation) return res.json({ full: true });
@@ -831,12 +885,19 @@ router.post('/locations/:id/recommend-batch', async (req, res) => {
       if (!entry) continue;
       try { entry.types = JSON.parse(entry.types || '[]'); } catch { entry.types = []; }
 
-      const recommended = await recommendSlot(db, location, entry, workingCompartments, mockCards);
-      if (!recommended) {
-        recommendations.push({ entry, recommended: null });
+      // Tell the client whether the miss was a rule mismatch or no room, so
+      // the filing walkthrough can explain it instead of claiming "full".
+      if (!locationAcceptsCard(location, entry)) {
+        recommendations.push({ entry, recommended: null, rejected: true });
         continue;
       }
-      
+
+      const recommended = await recommendSlot(db, location, entry, workingCompartments, mockCards);
+      if (!recommended) {
+        recommendations.push({ entry, recommended: null, full: true });
+        continue;
+      }
+
       recommendations.push({ entry, recommended });
 
       workingCompartments = workingCompartments.map(c =>

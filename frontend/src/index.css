@@ -1331,7 +1331,7 @@ button, input, select, textarea {
   top: 100%;
   right: 0;
   margin-top: 0.25rem;
-  background: var(--bg-card);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-glass);
   border-radius: var(--radius-sm);
   box-shadow: 0 4px 12px rgba(0,0,0,0.5);

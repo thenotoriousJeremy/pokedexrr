@@ -40,7 +40,15 @@ export function getPrintingRank(printing, foilSorting) {
 // Sorts `cards` in place (and returns it) according to `sortOrder`. `foilSorting`
 // only affects the 'set-number-printing' order. Unrecognized/'custom' orders are
 // left untouched (stable no-op), matching each call site's original fallback.
-export function sortCardsByOrder(cards, sortOrder, foilSorting) {
+// `setsList` (from /api/sets, release-date order) makes the set-based schemes
+// sort chronologically, matching the backend's placement engine — without it
+// the display order would disagree with where recommendSlot files cards.
+export function sortCardsByOrder(cards, sortOrder, foilSorting, setsList = []) {
+  const setRank = (name) => {
+    if (!setsList || setsList.length === 0) return 0;
+    const idx = setsList.findIndex(s => s.name === name);
+    return idx >= 0 ? idx : 999999;
+  };
   if (sortOrder === 'scanned-desc') {
     cards.sort((a, b) => {
       const timeA = a.added_at ? new Date(a.added_at).getTime() : 0;
@@ -61,6 +69,8 @@ export function sortCardsByOrder(cards, sortOrder, foilSorting) {
     cards.sort((a, b) => (b.price_trend || 0) - (a.price_trend || 0));
   } else if (sortOrder === 'set-number') {
     cards.sort((a, b) => {
+      const cmpChrono = setRank(a.set_name) - setRank(b.set_name);
+      if (cmpChrono !== 0) return cmpChrono;
       const cmpSet = (a.set_name || '').localeCompare(b.set_name || '');
       if (cmpSet !== 0) return cmpSet;
       const numA = parseInt(a.number || '0', 10) || 0;
@@ -70,6 +80,8 @@ export function sortCardsByOrder(cards, sortOrder, foilSorting) {
     });
   } else if (sortOrder === 'set-number-printing') {
     cards.sort((a, b) => {
+      const cmpChrono = setRank(a.set_name) - setRank(b.set_name);
+      if (cmpChrono !== 0) return cmpChrono;
       const setA = a.set_name || '';
       const setB = b.set_name || '';
       const cmpSet = setA.localeCompare(setB);

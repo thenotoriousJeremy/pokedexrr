@@ -21,15 +21,32 @@ const PORT = process.env.PORT || 3001;
 // enabling helmet's restrictive default, which can silently break asset loading.
 app.use(helmet({ contentSecurityPolicy: false }));
 
-// Restrict cross-origin access to known frontend origins. Defaults cover the
-// Vite dev server; production deployments should set CORS_ORIGIN explicitly.
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173,https://localhost:5173,http://localhost:3001')
+// Restrict cross-origin access to known frontend origins. Explicit CORS_ORIGIN
+// wins for production. Without it (dev / self-hosted), allow localhost plus
+// private-LAN origins on any port: the Vite dev server runs with host:true +
+// HTTPS so the mobile scanner can reach it over the LAN, which makes the
+// browser send an Origin like https://192.168.1.20:5173 on writes (PUT/POST/
+// DELETE) — GETs are same-origin and send none, which is why only writes were
+// being rejected before.
+const explicitOrigins = (process.env.CORS_ORIGIN || '')
   .split(',')
   .map(o => o.trim())
   .filter(Boolean);
+
+// Loopback + RFC1918 private ranges (10/8, 172.16-31/12, 192.168/16) and
+// *.local, with any scheme/port. Not internet-routable, so this is safe for a
+// self-hosted app while still blocking arbitrary public websites.
+const PRIVATE_ORIGIN = /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|\[::1\]|[a-z0-9-]+\.local)(:\d+)?$/i;
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // same-origin / non-browser client
+  if (explicitOrigins.length > 0) return explicitOrigins.includes(origin);
+  return PRIVATE_ORIGIN.test(origin);
+}
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (isAllowedOrigin(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));

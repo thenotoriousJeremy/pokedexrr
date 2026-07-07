@@ -40,9 +40,12 @@ function locationAcceptsCard(location, cardMetadata) {
   return true;
 }
 
+// Must stay aligned with POKEMON_TYPE_ORDER in frontend/src/utils/cardSort.js —
+// the frontend renders compartments in this order and the backend places cards
+// by it; a mismatch makes the REC SPOT ghost point at the wrong slot.
 const POKEMON_TYPE_ORDER = {
   'Grass': 1, 'Fire': 2, 'Water': 3, 'Lightning': 4, 'Psychic': 5,
-  'Fighting': 6, 'Darkness': 7, 'Metal': 8, 'Dragon': 9, 'Colorless': 10, 'Trainer': 11, 'Energy': 12
+  'Fighting': 6, 'Darkness': 7, 'Metal': 8, 'Fairy': 9, 'Dragon': 10, 'Colorless': 11, 'Trainer': 12, 'Energy': 13
 };
 
 const PRINTING_ORDER_NORMALS_FIRST = { 'Normal': 1, 'Reverse Holofoil': 2, 'Holofoil': 3, '1st Edition': 4, 'Promo': 5 };
@@ -176,10 +179,18 @@ async function loadCompartments(db, locationId, userId) {
   }));
 }
 
-// Recommends a {compartment_id, position, label} for placing cardMetadata
-// (name/set_name/number/types/rarity/price_trend/printing) into a location.
-// Recommends a {compartment_id, position, label} for placing cardMetadata
-// (name/set_name/number/types/rarity/price_trend/printing) into a location.
+// Human-readable names for the sort schemes, used in recommendation reasons.
+const SORT_SCHEME_LABELS = {
+  'name-asc': 'A-Z alphabetical',
+  'set-number': 'set & number',
+  'set-number-printing': 'set, printing & number',
+  'price-desc': 'value (high to low)',
+  'type-name': 'energy type'
+};
+
+// Recommends a {compartment_id, position, label, reason} for placing
+// cardMetadata (name/set_name/number/types/rarity/price_trend/printing) into
+// a location. `reason` is a short human-readable justification for the pick.
 // overrideCompartments lets a caller (e.g. a bulk "apply all" action) pass a
 // simulated in-memory snapshot instead of hitting the DB fresh each call, so
 // a batch of cards never collide on the same slot.
@@ -201,7 +212,13 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
   allLocationCards.push(...mockCards);
 
   allLocationCards.forEach(c => {
-    try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; }
+    // mockCards persist across batch iterations, so types may already be a
+    // parsed array — JSON.parse would then throw and wipe the type info.
+    if (typeof c.types === 'string') {
+      try { c.types = JSON.parse(c.types || '[]'); } catch { c.types = []; }
+    } else if (!Array.isArray(c.types)) {
+      c.types = [];
+    }
     c.price_trend = resolveCardPrice(c);
   });
 
@@ -235,7 +252,8 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
         if (rec) {
           return {
             ...rec,
-            location_id: otherLoc.id
+            location_id: otherLoc.id,
+            reason: `"${location.name}" is full — overflowed to "${otherLoc.name}". ${rec.reason || ''}`.trim()
           };
         }
       }
@@ -248,6 +266,9 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
     return null;
   }
 
+  // Resolve the printing-specific price before deriving the category so
+  // price-bucket filters see the same number sortCards will sort by.
+  cardMetadata.price_trend = resolveCardPrice(cardMetadata);
   const cardCat = getSortCategory(cardMetadata, location.sort_order);
 
   // 2. Compartment-level strict filters
@@ -306,20 +327,30 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
     pool = [...pool, ...unassignedComps];
   }
   
-  pool.sort((a, b) => a.idx - b.idx);
-  
   // Check if final pool has free space
-  const finalHasFreeSpace = pool.some(c => {
+  const hasFreeSpace = (c) => {
     const count = overrideCompartments
       ? (overrideCompartments.find(oc => oc.id === c.id)?.count || 0)
       : (cardsByCompId.get(c.id) || []).length;
     return count < c.capacity;
-  });
+  };
 
-  // We NO LONGER fallback to `[...compartments]`. If it's full, or doesn't match rules, it returns null!
-  if (pool.length === 0 || !finalHasFreeSpace) {
+  if (pool.length === 0 || !pool.some(hasFreeSpace)) {
+    // Soft fallback: dynamic categories are inferred preferences, not user
+    // rules. When every category-matching/empty compartment is taken, place
+    // into any compartment WITHOUT an explicit filter mismatch rather than
+    // reporting "full" while pockets sit empty. Explicit filters stay hard.
+    pool = compartments.filter(c =>
+      !(c.assignedFilters && c.assignedFilters.length > 0) ||
+      (cardCat && c.assignedFilters.includes(cardCat))
+    );
+  }
+
+  if (pool.length === 0 || !pool.some(hasFreeSpace)) {
     return null;
   }
+
+  pool.sort((a, b) => a.idx - b.idx);
 
   // Handle custom sort order recommendation
   if (location.sort_order === 'custom') {
@@ -339,11 +370,18 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
 
     if (!best) return null;
     const bestCards = cardsByCompId.get(best.id) || [];
+    let reason = 'Manual order — next open slot';
+    if (cardCat && (best.assignedFilters || []).includes(cardCat)) {
+      reason = `${compartmentLabel(best, location.type)} is assigned to "${cardCat}"`;
+    } else if (cardCat && (dynamicCatsByCompId.get(best.id) || []).includes(cardCat)) {
+      reason = `${compartmentLabel(best, location.type)} already holds "${cardCat}" cards`;
+    }
     return {
       location_id: location.id,
       compartment_id: best.id,
       position: (bestCards.length + 1) * 1000,
-      label: `${compartmentLabel(best, location.type)} (in ${location.name})`
+      label: `${compartmentLabel(best, location.type)} (in ${location.name})`,
+      reason
     };
   }
 
@@ -367,15 +405,27 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
   const targetIndex = sorted.findIndex(c => c.entry_id === -1);
   if (targetIndex === -1) return null;
 
+  const scheme = SORT_SCHEME_LABELS[location.sort_order] || location.sort_order;
+  const prevCard = targetIndex > 0 ? sorted[targetIndex - 1] : null;
+  const nextCard = targetIndex < sorted.length - 1 ? sorted[targetIndex + 1] : null;
+
   let cursor = 0;
   for (const compartment of pool) {
     if (targetIndex < cursor + compartment.capacity) {
       const seq = targetIndex - cursor;
+      let reason = `Sorted by ${scheme}`;
+      if (prevCard) reason += `, right after ${prevCard.name}`;
+      else if (nextCard) reason += `, right before ${nextCard.name}`;
+      else reason += ` — first card here`;
+      if (cardCat && (compartment.assignedFilters || []).includes(cardCat)) {
+        reason += ` (${compartmentLabel(compartment, location.type)} is assigned "${cardCat}")`;
+      }
       return {
         location_id: location.id,
         compartment_id: compartment.id,
         position: (seq + 1) * 1000,
-        label: `${compartmentLabel(compartment, location.type)}, Pos ${seq + 1} (in ${location.name})`
+        label: `${compartmentLabel(compartment, location.type)}, Pos ${seq + 1} (in ${location.name})`,
+        reason
       };
     }
     cursor += compartment.capacity;
