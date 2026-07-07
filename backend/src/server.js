@@ -17,9 +17,32 @@ const decksRoutes = require('./routes/decks');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// CSP is left to be configured deliberately for this app's asset setup rather than
-// enabling helmet's restrictive default, which can silently break asset loading.
-app.use(helmet({ contentSecurityPolicy: false }));
+// Content Security Policy. Shipped in Report-Only mode: the scanner runs
+// Tesseract.js, whose default recognize() pulls its worker/core/wasm and
+// language traineddata from CDNs (unpkg / jsDelivr / tessdata.projectnaptha.com)
+// and needs blob: workers + wasm-unsafe-eval. Card images load directly from
+// images.pokemontcg.io. Enforcing this before verifying the mobile camera+OCR
+// path could silently break the headline feature, so violations are only
+// reported (console) for now.
+// ponytail: Report-Only ceiling. Flip `reportOnly` to false to enforce once
+// the mobile scan + OCR flow has been verified against these directives (and
+// tighten/remove any CDN hosts that turn out to be unused).
+app.use(helmet({
+  contentSecurityPolicy: {
+    reportOnly: true,
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'wasm-unsafe-eval'", 'blob:', 'https://cdn.jsdelivr.net', 'https://unpkg.com'],
+      workerSrc: ["'self'", 'blob:'],
+      connectSrc: ["'self'", 'https://cdn.jsdelivr.net', 'https://unpkg.com', 'https://tessdata.projectnaptha.com'],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https://images.pokemontcg.io'],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      fontSrc: ["'self'", 'data:'],
+      objectSrc: ["'none'"],
+      upgradeInsecureRequests: null
+    }
+  }
+}));
 
 // Restrict cross-origin access to known frontend origins. Explicit CORS_ORIGIN
 // wins for production. Without it (dev / self-hosted), allow localhost plus
