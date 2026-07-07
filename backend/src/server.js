@@ -17,6 +17,17 @@ const decksRoutes = require('./routes/decks');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Behind a reverse proxy (nginx/Traefik/Caddy terminating TLS — effectively
+// required, since mobile camera access needs HTTPS), set TRUST_PROXY so req.ip
+// and the rate limiters use the real client IP from X-Forwarded-For instead of
+// the proxy's. Leave it UNSET when the app is directly exposed: trusting that
+// header otherwise lets any client spoof its IP and defeat the rate limiter.
+// Accepts a hop count ("1"), "true", or an express trust-proxy string ("loopback").
+if (process.env.TRUST_PROXY) {
+  const tp = process.env.TRUST_PROXY;
+  app.set('trust proxy', tp === 'true' ? true : (Number.isNaN(Number(tp)) ? tp : Number(tp)));
+}
+
 // Content Security Policy. Shipped in Report-Only mode: the scanner runs
 // Tesseract.js, whose default recognize() pulls its worker/core/wasm and
 // language traineddata from CDNs (unpkg / jsDelivr / tessdata.projectnaptha.com)

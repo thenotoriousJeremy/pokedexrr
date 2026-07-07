@@ -6,8 +6,22 @@ const { verifyPassword, generateSession } = require('../utils/authHelpers');
 
 const router = express.Router();
 
+// Open self-registration is off by default: this is an invite-only app where an
+// administrator creates accounts (Admin panel) and hands out credentials. Set
+// ALLOW_REGISTRATION=true to let anyone self-register a member account.
+const REGISTRATION_ENABLED = process.env.ALLOW_REGISTRATION === 'true';
+
+// Public config the login screen reads to decide whether to show the Sign Up
+// option. No auth — must be reachable before login.
+router.get('/config', (req, res) => {
+  res.json({ registrationEnabled: REGISTRATION_ENABLED });
+});
+
 // Register a new user
 router.post('/register', authLimiter, async (req, res) => {
+  if (!REGISTRATION_ENABLED) {
+    return res.status(403).json({ error: 'Registration is disabled. Ask an administrator for an account.' });
+  }
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password are required' });

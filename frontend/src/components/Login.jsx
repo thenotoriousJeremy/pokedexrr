@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { User, Lock, ArrowRight, Eye, EyeOff } from 'lucide-react';
 
 function Login({ onLoginSuccess }) {
@@ -9,6 +9,16 @@ function Login({ onLoginSuccess }) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // Whether open self-registration is allowed (invite-only by default). Drives
+  // whether the Sign Up option is shown at all.
+  const [registrationEnabled, setRegistrationEnabled] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/auth/config')
+      .then(res => res.ok ? res.json() : { registrationEnabled: false })
+      .then(data => setRegistrationEnabled(!!data.registrationEnabled))
+      .catch(() => setRegistrationEnabled(false));
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -234,29 +244,31 @@ function Login({ onLoginSuccess }) {
           </button>
         </form>
 
-        <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-          {isRegister ? 'Already have an account?' : "Don't have an account?"}{' '}
-          <button
-            onClick={() => {
-              setIsRegister(!isRegister);
-              setError('');
-              setPassword('');
-              setConfirmPassword('');
-            }}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--accent-red)',
-              fontWeight: 600,
-              cursor: 'pointer',
-              textDecoration: 'underline',
-              padding: '0 2px'
-            }}
-            disabled={loading}
-          >
-            {isRegister ? 'Sign In' : 'Sign Up'}
-          </button>
-        </div>
+        {registrationEnabled && (
+          <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            {isRegister ? 'Already have an account?' : "Don't have an account?"}{' '}
+            <button
+              onClick={() => {
+                setIsRegister(!isRegister);
+                setError('');
+                setPassword('');
+                setConfirmPassword('');
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--accent-red)',
+                fontWeight: 600,
+                cursor: 'pointer',
+                textDecoration: 'underline',
+                padding: '0 2px'
+              }}
+              disabled={loading}
+            >
+              {isRegister ? 'Sign In' : 'Sign Up'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

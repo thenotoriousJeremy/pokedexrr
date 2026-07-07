@@ -15,6 +15,8 @@ services:
       - POKEMON_TCG_API_KEY= # Optional: Add your Pokemon TCG API Key here to increase rate limits
       - CORS_ORIGIN=http://localhost:3001 # Update if serving the frontend from a different origin
       - DEFAULT_ADMIN_PASSWORD= # Optional: pin the initial admin password instead of using the auto-generated one (see startup logs)
+      - ALLOW_REGISTRATION= # Optional: "true" enables open self-registration. Default (unset) = invite-only; admin creates accounts.
+      - TRUST_PROXY= # Set to "1" (proxy hop count) when running behind a TLS-terminating reverse proxy so rate limiting sees the real client IP. Leave unset if directly exposed.
     volumes:
       - pokedexrr-data:/app/database
 
