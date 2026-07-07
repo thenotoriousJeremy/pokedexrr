@@ -51,6 +51,12 @@ const POKEMON_TYPE_ORDER = {
 const PRINTING_ORDER_NORMALS_FIRST = { 'Normal': 1, 'Reverse Holofoil': 2, 'Holofoil': 3, '1st Edition': 4, 'Promo': 5 };
 const PRINTING_ORDER_FOILS_FIRST = { 'Reverse Holofoil': 1, 'Holofoil': 2, 'Normal': 3, '1st Edition': 4, 'Promo': 5 };
 
+// Filing order for the 'language' scheme. Mirrors LANGUAGES in
+// frontend/src/utils/cardOptions.js; anything unlisted files last. This is the
+// home for non-Latin (e.g. Japanese) cards that an A-Z alphabetical range
+// can't place by first letter.
+const LANGUAGE_ORDER = { 'English': 1, 'Japanese': 2, 'German': 3, 'French': 4, 'Spanish': 5, 'Italian': 6 };
+
 function sortCards(cards, sortOrder, foilSorting) {
   const printingOrder = foilSorting === 'foils_first' ? PRINTING_ORDER_FOILS_FIRST : PRINTING_ORDER_NORMALS_FIRST;
   const sorted = [...cards];
@@ -100,6 +106,13 @@ function sortCards(cards, sortOrder, foilSorting) {
       if (orderA !== orderB) return orderA - orderB;
       return a.name.localeCompare(b.name);
     });
+  } else if (sortOrder === 'language') {
+    sorted.sort((a, b) => {
+      const la = LANGUAGE_ORDER[a.language] || 99;
+      const lb = LANGUAGE_ORDER[b.language] || 99;
+      if (la !== lb) return la - lb;
+      return (a.name || '').localeCompare(b.name || '');
+    });
   }
   return sorted;
 }
@@ -139,6 +152,7 @@ function getSortCategory(card, sortOrder) {
     if (p >= 1) return '$1+';
     return '< $1';
   }
+  if (sortOrder.startsWith('language')) return card.language || 'English';
   return null;
 }
 
@@ -185,7 +199,8 @@ const SORT_SCHEME_LABELS = {
   'set-number': 'set & number',
   'set-number-printing': 'set, printing & number',
   'price-desc': 'value (high to low)',
-  'type-name': 'energy type'
+  'type-name': 'energy type',
+  'language': 'language'
 };
 
 // Recommends a {compartment_id, position, label, reason} for placing
@@ -209,7 +224,7 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
 
   // 1. Get all cards in this location to check which sets are currently in which compartments
   const allLocationCards = await db.all(`
-    SELECT c.id as entry_id, c.compartment_id, c.printing, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
+    SELECT c.id as entry_id, c.compartment_id, c.printing, c.language, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
     FROM collection c
     JOIN card_cache cc ON c.card_id = cc.id
@@ -394,6 +409,7 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
   const newCard = {
     entry_id: -1,
     printing: cardMetadata.printing || 'Normal',
+    language: cardMetadata.language || 'English',
     name: cardMetadata.name || '',
     supertype: cardMetadata.supertype || '',
     types: cardMetadata.types || [],
@@ -465,7 +481,7 @@ async function rebalanceCompartmentByScheme(db, compartmentId, userId, location)
     return rebalanceCompartmentPositions(db, compartmentId, userId);
   }
   const cards = await db.all(`
-    SELECT c.id, c.printing, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
+    SELECT c.id, c.printing, c.language, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
     FROM collection c JOIN card_cache cc ON c.card_id = cc.id
     WHERE c.compartment_id = ? AND c.user_id = ?

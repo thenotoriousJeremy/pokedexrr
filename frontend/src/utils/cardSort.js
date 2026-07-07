@@ -37,6 +37,10 @@ export function getPrintingRank(printing, foilSorting) {
   return order[printing] || 10;
 }
 
+// Filing order for the 'language' scheme. Mirrors LANGUAGE_ORDER in
+// backend/src/utils/compartmentSort.js so display order matches placement.
+export const LANGUAGE_ORDER = { 'English': 1, 'Japanese': 2, 'German': 3, 'French': 4, 'Spanish': 5, 'Italian': 6 };
+
 // Sorts `cards` in place (and returns it) according to `sortOrder`. `foilSorting`
 // only affects the 'set-number-printing' order. Unrecognized/'custom' orders are
 // left untouched (stable no-op), matching each call site's original fallback.
@@ -108,6 +112,13 @@ export function sortCardsByOrder(cards, sortOrder, foilSorting, setsList = []) {
       const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
       if (orderA !== orderB) return orderA - orderB;
       return a.name.localeCompare(b.name);
+    });
+  } else if (sortOrder === 'language') {
+    cards.sort((a, b) => {
+      const la = LANGUAGE_ORDER[a.language] || 99;
+      const lb = LANGUAGE_ORDER[b.language] || 99;
+      if (la !== lb) return la - lb;
+      return (a.name || '').localeCompare(b.name || '');
     });
   }
   return cards;

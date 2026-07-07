@@ -13,7 +13,24 @@ const tmpDb = path.join(os.tmpdir(), `pokedexrr-test-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
 
 const db = require('../src/db');
-const { recommendSlot } = require('../src/utils/compartmentSort');
+const { recommendSlot, sortCards, getSortCategory } = require('../src/utils/compartmentSort');
+
+// Pure test (no DB): the 'language' filing scheme orders by language rank
+// (English, Japanese, ...) then by name, and buckets cards by language.
+function testLanguageScheme() {
+  const cards = [
+    { name: 'Zebra', language: 'Japanese' },
+    { name: 'Alpha', language: 'English' },
+    { name: 'Beta', language: 'Japanese' },
+    { name: 'Gamma', language: 'German' },
+  ];
+  const sorted = sortCards(cards, 'language', 'normals_first');
+  assert.deepStrictEqual(sorted.map(c => c.name), ['Alpha', 'Beta', 'Zebra', 'Gamma'],
+    'language scheme must order English, then Japanese-by-name, then German');
+  assert.strictEqual(getSortCategory({ language: 'Japanese' }, 'language'), 'Japanese');
+  assert.strictEqual(getSortCategory({}, 'language'), 'English', 'missing language defaults to English');
+  console.log('PASS: language filing scheme orders by language then name');
+}
 
 function cleanup() {
   try { db.dbConnection.close(); } catch { /* already closed */ }
@@ -31,6 +48,7 @@ async function insertCard(id, name) {
 }
 
 async function main() {
+  testLanguageScheme();
   await db.initDb(); // creates schema + default admin (user id 1)
   const userId = 1;
 

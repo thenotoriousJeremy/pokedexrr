@@ -28,7 +28,7 @@ function defaultCompartmentPlan(type) {
 // location_id, the recommendation engine picks a compartment automatically;
 // given neither, the card is unsorted. Shared by add/update so both follow
 // the exact same rule instead of drifting apart.
-async function resolveCompartmentAndPosition({ locationId, compartmentId, position, userId, cardId, printing, excludeEntryId }) {
+async function resolveCompartmentAndPosition({ locationId, compartmentId, position, userId, cardId, printing, language, excludeEntryId }) {
   if (compartmentId !== undefined && compartmentId !== null) {
     // A caller-supplied compartment can go stale (the location/compartment was
     // deleted after the client picked it) — verify it still exists rather than
@@ -66,6 +66,7 @@ async function resolveCompartmentAndPosition({ locationId, compartmentId, positi
   const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity FROM card_cache WHERE id = ?`, [cardId]);
   if (!cardMetadata) return { compartment_id: null, position: 0 };
   cardMetadata.printing = printing || 'Normal';
+  cardMetadata.language = language || 'English';
   try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
 
   // Distinguish "this container's rule doesn't allow the card" from "no room
@@ -245,7 +246,7 @@ router.post('/collection', async (req, res) => {
     }
 
     const resolved = await resolveCompartmentAndPosition({
-      locationId: location_id, compartmentId: compartment_id, position, userId: req.user.id, cardId: card_id, printing
+      locationId: location_id, compartmentId: compartment_id, position, userId: req.user.id, cardId: card_id, printing, language
     });
     // No compartment resolved (full / rule-rejected) = leave the card truly
     // unsorted rather than parked on a location with no physical slot.
@@ -359,6 +360,7 @@ router.put('/collection/:id', async (req, res) => {
         userId: req.user.id,
         cardId: entry.card_id,
         printing: printing !== undefined ? printing : entry.printing,
+        language: language !== undefined ? language : entry.language,
         excludeEntryId: id
       });
       finalLocId = resolved.location_id !== undefined && resolved.location_id !== null ? resolved.location_id : (location_id !== undefined ? location_id : entry.location_id);
@@ -707,7 +709,7 @@ router.post('/locations/:id/auto-assign-categories', async (req, res) => {
     if (compartments.length === 0) return res.status(400).json({ error: 'This location has no compartments' });
 
     const allCards = await db.all(`
-      SELECT c.quantity, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend
+      SELECT c.quantity, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       WHERE c.user_id = ?
@@ -766,7 +768,7 @@ router.post('/locations/:id/auto-assign-categories', async (req, res) => {
 // the sort assistant to preview a placement before committing to it.
 router.get('/locations/:id/recommend', async (req, res) => {
   const { id } = req.params;
-  const { card_id, printing } = req.query;
+  const { card_id, printing, language } = req.query;
   try {
     const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!location) return res.status(404).json({ error: 'Location not found' });
@@ -774,6 +776,7 @@ router.get('/locations/:id/recommend', async (req, res) => {
     const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity FROM card_cache WHERE id = ?`, [card_id]);
     if (!cardMetadata) return res.status(404).json({ error: 'Card not found in cache' });
     cardMetadata.printing = printing || 'Normal';
+    cardMetadata.language = language || 'English';
     try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
 
     // Distinguish rule rejection from a full container so the client can say
@@ -809,7 +812,7 @@ router.post('/smart-recommend-batch', async (req, res) => {
 
     for (const entryId of entry_ids) {
       const entry = await db.get(`
-        SELECT c.id as entry_id, c.card_id, c.printing, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url
+        SELECT c.id as entry_id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
         WHERE c.id = ? AND c.user_id = ?
@@ -853,6 +856,7 @@ router.post('/smart-recommend-batch', async (req, res) => {
         entry_id: entry.entry_id,
         compartment_id: recommended.compartment_id,
         printing: entry.printing,
+        language: entry.language,
         name: entry.name,
         supertype: entry.supertype,
         types: JSON.stringify(entry.types),
@@ -889,7 +893,7 @@ router.post('/locations/:id/recommend-batch', async (req, res) => {
 
     for (const entryId of entry_ids) {
       const entry = await db.get(`
-        SELECT c.id as entry_id, c.card_id, c.printing, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url
+        SELECT c.id as entry_id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
         WHERE c.id = ? AND c.user_id = ?
@@ -920,6 +924,7 @@ router.post('/locations/:id/recommend-batch', async (req, res) => {
         entry_id: entry.entry_id,
         compartment_id: recommended.compartment_id,
         printing: entry.printing,
+        language: entry.language,
         name: entry.name,
         supertype: entry.supertype,
         types: JSON.stringify(entry.types),
@@ -960,7 +965,7 @@ router.post('/locations/:id/apply-all', async (req, res) => {
 
     for (const entryId of entry_ids) {
       const entry = await db.get(`
-        SELECT c.id, c.card_id, c.printing, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity
+        SELECT c.id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
         WHERE c.id = ? AND c.user_id = ?
@@ -1000,7 +1005,7 @@ router.post('/locations/:id/resort', async (req, res) => {
     if (!location) return res.status(404).json({ error: 'Location not found' });
 
     const cards = await db.all(`
-      SELECT c.id as entry_id, c.card_id, c.printing, c.quantity,
+      SELECT c.id as entry_id, c.card_id, c.printing, c.language, c.quantity,
              cc.name, cc.set_name, cc.number, cc.types, cc.rarity, cc.supertype, cc.image_url,
              cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
       FROM collection c
@@ -1037,7 +1042,7 @@ router.post('/locations/:id/resort', async (req, res) => {
           c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
         );
         mockCards.push({
-          entry_id: entry.entry_id, compartment_id: recommended.compartment_id, printing: entry.printing,
+          entry_id: entry.entry_id, compartment_id: recommended.compartment_id, printing: entry.printing, language: entry.language,
           name: entry.name, supertype: entry.supertype, types: JSON.stringify(entry.types), rarity: entry.rarity,
           set_name: entry.set_name, number: entry.number, price_trend: entry.price_trend,
           price_normal: entry.price_normal, price_holofoil: entry.price_holofoil, price_reverse_holofoil: entry.price_reverse_holofoil
@@ -1627,7 +1632,7 @@ router.post('/import', importLimiter, async (req, res) => {
       }
 
       const resolved = await resolveCompartmentAndPosition({
-        locationId, compartmentId: null, position: undefined, userId: req.user.id, cardId, printing: card.printing || 'Normal'
+        locationId, compartmentId: null, position: undefined, userId: req.user.id, cardId, printing: card.printing || 'Normal', language: card.language || 'English'
       });
 
       // 3. Insert card into the collection

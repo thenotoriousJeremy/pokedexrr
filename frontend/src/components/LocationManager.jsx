@@ -38,7 +38,8 @@ const SORT_BASES = [
   { value: 'name-asc', label: 'A-Z Alphabetical' },
   { value: 'set-number', label: 'Set & Number' },
   { value: 'price-desc', label: 'Value (High-Low)' },
-  { value: 'type-name', label: 'Energy Type' }
+  { value: 'type-name', label: 'Energy Type' },
+  { value: 'language', label: 'Language' }
 ];
 
 // Given a stored sort_order value, splits it into the base scheme shown in
@@ -100,6 +101,7 @@ function getSortCategory(card, sortOrder, setsList = []) {
     if (p >= 1) return '$1+';
     return '< $1';
   }
+  if (sortOrder.startsWith('language')) return card.language || 'English';
   return null;
 }
 
