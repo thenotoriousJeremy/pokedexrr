@@ -79,15 +79,17 @@ function extractDetailedPrices(card) {
   return { normal, holofoil, reverseHolofoil, avg1, avg7, avg30 };
 }
 
-// Fetch and cache all sets
-async function fetchAndCacheSets() {
+// Fetch and cache all sets. Pass force=true to re-fetch even when the table is
+// already populated — used by the weekly refresh so newly released sets show up
+// without a restart (INSERT OR REPLACE below upserts, so this is idempotent).
+async function fetchAndCacheSets(force = false) {
   try {
     const existingSets = await db.get('SELECT COUNT(*) as count FROM sets');
-    if (existingSets && existingSets.count > 0) {
+    if (!force && existingSets && existingSets.count > 0) {
       console.log(`Sets table already populated (${existingSets.count} sets). Skipping fetch.`);
       return;
     }
-    
+
     console.log('Fetching sets from Pokemon TCG API...');
     let sets = [];
     let page = 1;

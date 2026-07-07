@@ -94,8 +94,16 @@ db.initDb()
     const { loadSetsCache } = require('./utils/compartmentSort');
     await loadSetsCache(db);
     
-    // Schedule a weekly price update (every 7 days)
-    setInterval(() => {
+    // Weekly: refresh sets (picks up newly released ones), reload the in-memory
+    // sets cache so chronological sorting stays current without a restart, then
+    // update prices.
+    setInterval(async () => {
+      try {
+        await tcgApi.fetchAndCacheSets(true);
+        await loadSetsCache(db);
+      } catch (err) {
+        console.error('Weekly sets refresh failed:', err);
+      }
       tcgApi.updateCollectionPrices();
     }, 1000 * 60 * 60 * 24 * 7);
 
