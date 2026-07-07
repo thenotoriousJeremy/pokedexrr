@@ -33,6 +33,12 @@ logs/
 # Agent instructions
 CLAUDE.md
 
+# One-off dev scratch (ad-hoc patch scripts and scratch test runners).
+# The real test suite lives in backend/test/ and is NOT matched by these.
+patch*.py
+/backend/test.js
+/backend/test[0-9].js
+
 # IDE files
 .vscode/
 .idea/
