@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users, Globe } from 'lucide-react';
 
 function AdminPanel({ showToast }) {
@@ -319,7 +319,7 @@ function AdminPanel({ showToast }) {
           </h3>
           <form onSubmit={handleSaveSettings} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <div style={{ background: 'rgba(255, 71, 71, 0.03)', border: '1px solid var(--border-glass)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-              If this app runs behind a reverse proxy, the browser's own address may not be the one others should use to reach a collection share link. Set the public URL here to override it. Leave blank to use the browser's address (or the <code>PUBLIC_BASE_URL</code> environment variable, if set).
+              If this app runs behind a reverse proxy, the browser&apos;s own address may not be the one others should use to reach a collection share link. Set the public URL here to override it. Leave blank to use the browser&apos;s address (or the <code>PUBLIC_BASE_URL</code> environment variable, if set).
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label htmlFor="admin-public-base-url">Public Base URL</label>
