@@ -52,5 +52,10 @@ USER node
 # Expose port
 EXPOSE 3001
 
+# Liveness/readiness probe. start-period covers startup (set sync + price job).
+# busybox wget ships with the alpine base image.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
+  CMD wget -qO- http://localhost:3001/api/health || exit 1
+
 # Command to start Express server
 CMD ["node", "src/server.js"]

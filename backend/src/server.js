@@ -115,6 +115,18 @@ db.initDb()
     console.error('Failed to initialize database:', err);
   });
 
+// Readiness/liveness probe for orchestrators (Docker HEALTHCHECK, etc.).
+// Unauthenticated; pings the DB so a wedged database reads as unhealthy.
+// Declared before the /api collection mount so nothing shadows it.
+app.get('/api/health', async (req, res) => {
+  try {
+    await db.get('SELECT 1');
+    res.json({ status: 'ok' });
+  } catch (err) {
+    res.status(503).json({ status: 'db_unavailable' });
+  }
+});
+
 // --- API ROUTES ---
 app.use('/api/auth', authRoutes);
 app.use('/api/shared', sharedRoutes);
