@@ -3,6 +3,7 @@ import { Plus, Trash2, Edit2, X, ChevronLeft, Play, BarChart2, Search, LogOut, P
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { shuffleArray } from '../utils/shuffle';
 import { translateJapaneseName } from '../utils/pokemonTranslation';
+import CheckoutWizardModal from './CheckoutWizardModal';
 
 function DeckBuilder({ showToast }) {
   const [decks, setDecks] = useState([]);
@@ -28,6 +29,8 @@ function DeckBuilder({ showToast }) {
 
   // Checkout States
   const [checkingOut, setCheckingOut] = useState(false);
+  const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+  const [checkoutLocations, setCheckoutLocations] = useState([]);
 
   // True while an add/qty write is in flight. Blocks overlapping clicks that
   // would otherwise each compute a new quantity from the same stale render and
@@ -142,6 +145,24 @@ function DeckBuilder({ showToast }) {
       return;
     }
 
+    // Check limits on increment
+    const card = activeDeck.cards.find(c => c.id === cardId);
+    if (card && newQty > card.quantity) {
+      if (newQty > (card.owned_qty || 0)) {
+        showToast(`You only own ${card.owned_qty} copies of ${card.name}.`);
+        return;
+      }
+      
+      const isBasicEnergy = card.supertype === 'Energy' && (!card.subtypes || !card.subtypes.includes('Special'));
+      if (!isBasicEnergy) {
+        const sameNameTotal = activeDeck.cards.filter(c => c.name === card.name).reduce((s, c) => s + c.quantity, 0);
+        if (sameNameTotal >= 4) {
+          showToast(`Cannot have more than 4 copies of ${card.name}.`);
+          return;
+        }
+      }
+    }
+
     setSavingCard(true);
     try {
       const response = await fetch(`/api/decks/${activeDeck.id}/cards`, {
@@ -208,7 +229,7 @@ function DeckBuilder({ showToast }) {
     try {
       setSearching(true);
       const finalQuery = translateJapaneseName(searchQuery) || searchQuery;
-      const response = await fetch(`/api/search?name=${encodeURIComponent(finalQuery)}`);
+      const response = await fetch(`/api/search?name=${encodeURIComponent(finalQuery)}&scope=collection`);
       if (response.ok) {
         const data = await response.json();
         setSearchResults(data);
@@ -224,17 +245,32 @@ function DeckBuilder({ showToast }) {
   };
 
   // --- CHECKOUT / RETURN ---
-  const handleCheckout = async () => {
-    if (!activeDeck) return;
+  const handleCheckout = async (deck = null) => {
+    const targetDeck = deck || activeDeck;
+    if (!targetDeck) return;
     try {
       setCheckingOut(true);
-      const res = await fetch(`/api/decks/${activeDeck.id}/checkout`, { method: 'PUT' });
+      const res = await fetch(`/api/decks/${targetDeck.id}/checkout`, { method: 'PUT' });
       if (res.ok) {
-        showToast(`🎮 "${activeDeck.name}" is now checked out for play!`);
-        setActiveDeck(prev => ({ ...prev, checked_out: 1, checked_out_at: new Date().toISOString() }));
+        showToast(`🎮 "${targetDeck.name}" is now checked out for play!`);
+        if (activeDeck && activeDeck.id === targetDeck.id) {
+          setActiveDeck(prev => ({ ...prev, checked_out: 1, checked_out_at: new Date().toISOString() }));
+        }
         fetchDecks();
+
+        const locRes = await fetch(`/api/decks/${targetDeck.id}/locations`);
+        if (locRes.ok) {
+          const locData = await locRes.json();
+          setCheckoutLocations(locData);
+          setShowCheckoutModal(true);
+        }
       } else {
-        showToast('Failed to check out deck.');
+        const errData = await res.json().catch(() => null);
+        if (errData && errData.details && errData.details.length > 0) {
+          showToast(`Checkout Failed: ${errData.details[0]}${errData.details.length > 1 ? ` (+${errData.details.length - 1} more)` : ''}`);
+        } else {
+          showToast(errData?.error || 'Failed to check out deck.');
+        }
       }
     } catch (err) {
       console.error(err);
@@ -244,14 +280,17 @@ function DeckBuilder({ showToast }) {
     }
   };
 
-  const handleReturn = async () => {
-    if (!activeDeck) return;
+  const handleReturn = async (deck = null) => {
+    const targetDeck = deck || activeDeck;
+    if (!targetDeck) return;
     try {
       setCheckingOut(true);
-      const res = await fetch(`/api/decks/${activeDeck.id}/return`, { method: 'PUT' });
+      const res = await fetch(`/api/decks/${targetDeck.id}/return`, { method: 'PUT' });
       if (res.ok) {
-        showToast(`📦 "${activeDeck.name}" returned to storage!`);
-        setActiveDeck(prev => ({ ...prev, checked_out: 0, checked_out_at: null }));
+        showToast(`📦 "${targetDeck.name}" returned to storage.`);
+        if (activeDeck && activeDeck.id === targetDeck.id) {
+          setActiveDeck(prev => ({ ...prev, checked_out: 0, checked_out_at: null }));
+        }
         fetchDecks();
       } else {
         showToast('Failed to return deck.');
@@ -369,7 +408,7 @@ function DeckBuilder({ showToast }) {
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.25rem' }}>
               {decks.map(deck => (
-                <div key={deck.id} className="glass-panel" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '1rem', border: deck.checked_out ? '1px solid rgba(234,179,8,0.4)' : '1px solid var(--border-glass-hover)', position: 'relative', overflow: 'hidden' }}>
+                <div key={deck.id} className="glass-panel" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '1rem', border: deck.checked_out ? '1px solid rgba(234,179,8,0.4)' : '1px solid var(--border-glass-hover)', position: 'relative', overflow: 'hidden', cursor: 'pointer', transition: 'transform 0.2s, box-shadow 0.2s' }} onClick={() => loadDeckDetails(deck.id)} onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.4)'; }} onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}>
                   
                   {/* In Play Banner */}
                   {deck.checked_out ? (
@@ -420,10 +459,16 @@ function DeckBuilder({ showToast }) {
                   <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Created {new Date(deck.created_at).toLocaleDateString()}</span>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      <button className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => loadDeckDetails(deck.id)}>
-                        <Edit2 size={12} /> Edit
-                      </button>
-                      <button className="btn btn-danger btn-icon-only" style={{ padding: '0.35rem' }} onClick={() => handleDeleteDeck(deck.id, deck.name)}>
+                      {deck.checked_out ? (
+                        <button className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', border: '1px solid rgba(234,179,8,0.4)', color: '#eab308' }} onClick={(e) => { e.stopPropagation(); handleReturn(deck); }} disabled={checkingOut}>
+                          <PackageCheck size={12} /> Return
+                        </button>
+                      ) : (
+                        <button className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }} onClick={(e) => { e.stopPropagation(); handleCheckout(deck); }} disabled={checkingOut}>
+                          <LogOut size={12} /> Checkout
+                        </button>
+                      )}
+                      <button className="btn btn-danger btn-icon-only" style={{ padding: '0.35rem' }} onClick={(e) => { e.stopPropagation(); handleDeleteDeck(deck.id, deck.name); }}>
                         <Trash2 size={12} />
                       </button>
                     </div>
@@ -496,7 +541,7 @@ function DeckBuilder({ showToast }) {
               {activeDeck.checked_out ? (
                 <button
                   className="btn btn-secondary"
-                  onClick={handleReturn}
+                  onClick={() => handleReturn(activeDeck)}
                   disabled={checkingOut}
                   style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', border: '1px solid rgba(234,179,8,0.4)', color: '#eab308' }}
                 >
@@ -505,7 +550,7 @@ function DeckBuilder({ showToast }) {
               ) : (
                 <button
                   className="btn btn-secondary"
-                  onClick={handleCheckout}
+                  onClick={() => handleCheckout(activeDeck)}
                   disabled={checkingOut}
                   style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
                 >
@@ -569,17 +614,33 @@ function DeckBuilder({ showToast }) {
                     <div className="spinner" style={{ margin: '1rem auto' }}></div>
                   ) : searchResults.length > 0 && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '1rem', maxHeight: '200px', overflowY: 'auto', background: 'rgba(0,0,0,0.15)', padding: '0.5rem', borderRadius: 'var(--radius-sm)' }}>
-                      {searchResults.map(card => (
-                        <div key={card.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.35rem 0.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-glass)' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <img src={card.image_url} alt={card.name} style={{ width: '24px', height: '33px', objectFit: 'cover', borderRadius: '2px' }} />
-                            <span style={{ fontSize: '0.8rem', color: '#fff' }}>{card.name} ({card.set_name} • #{card.number})</span>
-                          </div>
-                          <button className="btn btn-primary btn-icon-only" style={{ padding: '0.2rem' }} disabled={savingCard} onClick={() => handleAddCardToDeck(card)}>
-                            <Plus size={12} />
-                          </button>
-                        </div>
-                      ))}
+                      {searchResults.map(card => {
+                          const existingInDeck = activeDeck?.cards.find(c => c.id === card.id);
+                          const qtyInDeck = existingInDeck ? existingInDeck.quantity : 0;
+                          const ownedQty = card.owned_qty || 0;
+                          const isAtMaxOwned = qtyInDeck >= ownedQty;
+
+                          const sameNameTotal = activeDeck?.cards.filter(c => c.name === card.name).reduce((s, c) => s + c.quantity, 0) || 0;
+                          const isBasicEnergy = card.supertype === 'Energy' && (!card.subtypes || !card.subtypes.includes('Special'));
+                          const isAtRuleMax = !isBasicEnergy && sameNameTotal >= 4;
+
+                          const disabledAdd = savingCard || isAtMaxOwned || isAtRuleMax;
+
+                          return (
+                            <div key={card.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.35rem 0.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-glass)' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <img src={card.image_url} alt={card.name} style={{ width: '24px', height: '33px', objectFit: 'cover', borderRadius: '2px' }} />
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                  <span style={{ fontSize: '0.8rem', color: '#fff' }}>{card.name} ({card.set_name} • #{card.number})</span>
+                                  <span style={{ fontSize: '0.65rem', color: isAtMaxOwned ? 'var(--accent-red)' : 'var(--text-secondary)' }}>Owned: {ownedQty} | In Deck: {qtyInDeck}</span>
+                                </div>
+                              </div>
+                              <button className="btn btn-primary btn-icon-only" style={{ padding: '0.2rem' }} disabled={disabledAdd} onClick={() => handleAddCardToDeck(card)} title={isAtRuleMax ? "4-copy limit reached" : isAtMaxOwned ? "Not enough owned copies" : "Add to deck"}>
+                                <Plus size={12} />
+                              </button>
+                            </div>
+                          );
+                      })}
                     </div>
                   )}
                 </div>
@@ -620,25 +681,25 @@ function DeckBuilder({ showToast }) {
 
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                                   {/* Qty modifier buttons */}
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-glass)' }}>
-                                    <button
-                                      className="btn btn-secondary btn-icon-only"
-                                      style={{ width: '22px', height: '22px', padding: 0 }}
-                                      disabled={savingCard}
-                                      onClick={() => handleUpdateCardQty(card.id, card.quantity - 1)}
-                                    >
-                                      -
-                                    </button>
-                                    <span style={{ padding: '0 0.4rem', fontSize: '0.85rem', fontWeight: 700, minWidth: '18px', textAlign: 'center', color: '#fff' }}>{card.quantity}</span>
-                                    <button
-                                      className="btn btn-secondary btn-icon-only"
-                                      style={{ width: '22px', height: '22px', padding: 0 }}
-                                      disabled={savingCard}
-                                      onClick={() => handleUpdateCardQty(card.id, card.quantity + 1)}
-                                    >
-                                      +
-                                    </button>
-                                  </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-glass)' }}>
+                                      <button
+                                        className="btn btn-secondary btn-icon-only"
+                                        style={{ width: '22px', height: '22px', padding: 0 }}
+                                        disabled={savingCard}
+                                        onClick={() => handleUpdateCardQty(card.id, card.quantity - 1)}
+                                      >
+                                        -
+                                      </button>
+                                      <span style={{ padding: '0 0.4rem', fontSize: '0.85rem', fontWeight: 700, minWidth: '18px', textAlign: 'center', color: '#fff' }}>{card.quantity}</span>
+                                      <button
+                                        className="btn btn-secondary btn-icon-only"
+                                        style={{ width: '22px', height: '22px', padding: 0 }}
+                                        disabled={savingCard || card.quantity >= (card.owned_qty || 0) || (card.supertype !== 'Energy' && activeDeck.cards.filter(c => c.name === card.name).reduce((s, c) => s + c.quantity, 0) >= 4)}
+                                        onClick={() => handleUpdateCardQty(card.id, card.quantity + 1)}
+                                      >
+                                        +
+                                      </button>
+                                    </div>
 
                                   <button className="btn btn-danger btn-icon-only" style={{ padding: '0.35rem' }} onClick={() => handleRemoveCard(card.id)}>
                                     <Trash2 size={12} />
@@ -847,6 +908,14 @@ function DeckBuilder({ showToast }) {
             `}</style>
           </div>
         </div>
+      )}
+
+      {/* Checkout Locator Modal */}
+      {showCheckoutModal && (
+        <CheckoutWizardModal 
+          locationsData={checkoutLocations} 
+          onClose={() => setShowCheckoutModal(false)} 
+        />
       )}
 
     </div>

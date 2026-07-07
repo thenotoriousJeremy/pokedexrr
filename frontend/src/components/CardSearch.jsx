@@ -201,7 +201,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
           printing,
           language,
           purchase_price: parseFloat(purchasePrice) || 0,
-          location_id: locationId ? parseInt(locationId, 10) : null
+          location_id: null
         })
       });
 

@@ -75,12 +75,13 @@ router.get('/:id', async (req, res) => {
         cc.set_name,
         cc.number,
         cc.image_url,
-        cc.price_trend
+        cc.price_trend,
+        (SELECT COALESCE(SUM(quantity), 0) FROM collection WHERE card_id = cc.id AND user_id = ? AND list_type = 'collection') AS owned_qty
       FROM deck_cards dc
       JOIN card_cache cc ON dc.card_id = cc.id
       WHERE dc.deck_id = ?
     `;
-    const cards = await db.all(cardsQuery, [id]);
+    const cards = await db.all(cardsQuery, [req.user.id, id]);
 
     const formatted = cards.map(c => ({
       ...c,
@@ -95,6 +96,83 @@ router.get('/:id', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to retrieve deck details' });
+  }
+});
+
+// Get physical locations for cards in a deck
+router.get('/:id/locations', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!deck) return res.status(404).json({ error: 'Deck not found' });
+
+    // Find how many of each card are in the deck
+    const requiredCards = await db.all(`SELECT card_id, quantity FROM deck_cards WHERE deck_id = ?`, [id]);
+    const requiredMap = new Map(requiredCards.map(r => [r.card_id, r.quantity]));
+
+    // Find all owned instances of those cards
+    const query = `
+      SELECT 
+        c.id as entry_id, c.card_id, c.quantity as owned_qty, c.position, c.location_id, c.compartment_id,
+        cc.name as card_name, cc.set_name, cc.number,
+        l.name as location_name, l.type as location_type,
+        cp.label as compartment_label, cp.idx as compartment_idx
+      FROM collection c
+      JOIN card_cache cc ON c.card_id = cc.id
+      LEFT JOIN locations l ON c.location_id = l.id
+      LEFT JOIN compartments cp ON c.compartment_id = cp.id
+      WHERE c.user_id = ? AND c.list_type = 'collection' AND c.card_id IN (SELECT card_id FROM deck_cards WHERE deck_id = ?)
+      ORDER BY (c.location_id IS NOT NULL) DESC, cc.name ASC, c.added_at DESC
+    `;
+    const instances = await db.all(query, [req.user.id, id]);
+    
+    // Group them and figure out what to tell the user
+    // We only need to tell them where to find \`required\` amount.
+    const results = [];
+    for (const [cardId, requiredQty] of requiredMap.entries()) {
+      let needed = requiredQty;
+      const cardInstances = instances.filter(i => i.card_id === cardId);
+      
+      const foundLocations = [];
+      for (const inst of cardInstances) {
+        if (needed <= 0) break;
+        const take = Math.min(inst.owned_qty, needed);
+        needed -= take;
+        
+        const isBinder = inst.location_type === 'Binder' || inst.location_type === 'Toploader Binder';
+        let compDisplay = inst.compartment_label;
+        if (!compDisplay && inst.compartment_idx !== null) {
+          compDisplay = isBinder ? `Page ${inst.compartment_idx}` : `Row ${inst.compartment_idx}`;
+        }
+
+        foundLocations.push({
+          take,
+          card_name: inst.card_name,
+          set_name: inst.set_name,
+          number: inst.number,
+          location_name: inst.location_name || 'Unassigned Pile',
+          location_type: inst.location_type,
+          compartment_display: compDisplay,
+          position: inst.location_name ? inst.position : null,
+          location_id: inst.location_id,
+          compartment_id: inst.compartment_id,
+          entry_id: inst.entry_id
+        });
+      }
+      
+      results.push({
+        card_id: cardId,
+        required: requiredQty,
+        found: requiredQty - needed,
+        missing: needed,
+        locations: foundLocations
+      });
+    }
+
+    res.json(results);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve card locations' });
   }
 });
 
@@ -213,10 +291,38 @@ router.delete('/:id/cards/:card_id', async (req, res) => {
 router.put('/:id/checkout', async (req, res) => {
   const { id } = req.params;
   try {
-    const deck = await db.get(`SELECT id FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    const deck = await db.get(`SELECT id, name FROM decks WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!deck) {
       return res.status(404).json({ error: 'Deck not found or unauthorized' });
     }
+
+    // Validate that we have enough cards physically available
+    const validationQuery = `
+      SELECT 
+        dc.card_id, 
+        cc.name, 
+        dc.quantity AS required_qty,
+        (SELECT COALESCE(SUM(quantity), 0) FROM collection WHERE card_id = dc.card_id AND user_id = ? AND list_type = 'collection') AS owned_qty,
+        (SELECT COALESCE(SUM(dc2.quantity), 0) FROM deck_cards dc2 JOIN decks d2 ON dc2.deck_id = d2.id WHERE d2.checked_out = 1 AND d2.user_id = ? AND d2.id != ? AND dc2.card_id = dc.card_id) AS locked_qty
+      FROM deck_cards dc
+      JOIN card_cache cc ON dc.card_id = cc.id
+      WHERE dc.deck_id = ?
+    `;
+    const cards = await db.all(validationQuery, [req.user.id, req.user.id, id, id]);
+    
+    let errors = [];
+    for (const card of cards) {
+      const available = card.owned_qty - card.locked_qty;
+      if (card.required_qty > available) {
+        const deficit = card.required_qty - available;
+        errors.push(`Missing ${deficit}x ${card.name} (Owned: ${card.owned_qty}, In Use: ${card.locked_qty})`);
+      }
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({ error: 'Not enough cards available to check out this deck.', details: errors });
+    }
+
     await db.run(
       `UPDATE decks SET checked_out = 1, checked_out_at = CURRENT_TIMESTAMP WHERE id = ?`,
       [id]

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, MapPin } from 'lucide-react';
+import { X, MapPin, Trash2 } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
@@ -71,6 +71,45 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
     } catch (err) {
       console.error(err);
       showToast && showToast('Error editing card.');
+    }
+  };
+
+  const handleQuickToggle = async (field, value) => {
+    // Optimistic UI updates
+    if (field === 'is_trade') setIsTrade(value);
+    if (field === 'list_type') setListType(value);
+    
+    // We update the backend by sending all current form state but overriding the toggled field
+    const payload = {
+      quantity: parseInt(q, 10),
+      condition,
+      printing,
+      language,
+      purchase_price: parseFloat(purchasePrice) || 0,
+      location_id: locationId ? parseInt(locationId, 10) : null,
+      list_type: field === 'list_type' ? value : listType,
+      is_trade: field === 'is_trade' ? value : isTrade
+    };
+    try {
+      const res = await fetch(`/api/collection/${card.entry_id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        showToast && showToast(`Card updated.`);
+        onUpdate && onUpdate();
+      } else {
+        // revert on fail
+        if (field === 'is_trade') setIsTrade(isTrade);
+        if (field === 'list_type') setListType(listType);
+        showToast && showToast('Failed to update card.');
+      }
+    } catch (err) {
+      console.error(err);
+      if (field === 'is_trade') setIsTrade(isTrade);
+      if (field === 'list_type') setListType(listType);
+      showToast && showToast('Error updating card.');
     }
   };
 
@@ -282,6 +321,7 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
                     {card.location_name && card.compartment_display_label && (
                       <span style={{ color: 'var(--text-secondary)' }}>
                         {` • ${card.compartment_display_label}`}
+                        {card.position > 0 ? ` • Slot ${Math.floor(card.position / 1000)}` : ''}
                       </span>
                     )}
                   </div>
@@ -298,9 +338,30 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
                     View in Storage
                   </button>
                 )}
-                <button className="btn btn-danger" style={{ flex: 1 }} onClick={handleDelete}>
-                  Delete
+                <button className="btn btn-danger" style={{ padding: '0 0.75rem' }} onClick={handleDelete} title="Delete">
+                  <Trash2 size={16} />
                 </button>
+              </div>
+
+              {/* Quick toggles row */}
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {card.list_type === 'wishlist' ? (
+                  <button 
+                    className="btn btn-primary" 
+                    style={{ flex: 1, backgroundColor: 'rgba(74,222,128,0.2)', color: 'var(--type-grass)', border: '1px solid rgba(74,222,128,0.3)' }} 
+                    onClick={() => handleQuickToggle('list_type', 'collection')}
+                  >
+                    Move to Collection
+                  </button>
+                ) : (
+                  <button 
+                    className={`btn ${isTrade === 1 ? 'btn-primary' : 'btn-secondary'}`} 
+                    style={{ flex: 1, ...(isTrade === 1 ? { backgroundColor: 'rgba(74,222,128,0.2)', color: 'var(--type-grass)', border: '1px solid rgba(74,222,128,0.3)' } : {}) }} 
+                    onClick={() => handleQuickToggle('is_trade', isTrade === 1 ? 0 : 1)}
+                  >
+                    {isTrade === 1 ? 'Remove from Trade' : 'Add to Trade Binder'}
+                  </button>
+                )}
               </div>
             </>
           )}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
-import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus } from 'lucide-react';
+import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords } from 'lucide-react';
 import Login from './components/Login';
 
 // View components are code-split so heavy deps (tesseract.js OCR in the scanner,
@@ -11,6 +11,7 @@ const LocationManager = lazy(() => import('./components/LocationManager'));
 const Settings = lazy(() => import('./components/Settings'));
 const AdminPanel = lazy(() => import('./components/AdminPanel'));
 const SharedCollection = lazy(() => import('./components/SharedCollection'));
+const DeckBuilder = lazy(() => import('./components/DeckBuilder'));
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -183,6 +184,8 @@ function App() {
             token={token} 
             selectedCardFilter={selectedCardFilter}
             setSelectedCardFilter={setSelectedCardFilter}
+            onNavigate={setActiveTab}
+            setSelectedLocationId={setSelectedLocationId}
           />
         );
       case 'storage':
@@ -195,6 +198,8 @@ function App() {
             setSelectedLocationId={setSelectedLocationId}
           />
         );
+      case 'deckbuilder':
+        return <DeckBuilder showToast={showToast} />;
       case 'settings':
         return <Settings user={user} onUpdateUser={handleUpdateUser} showToast={showToast} />;
       case 'admin':
@@ -242,6 +247,13 @@ function App() {
           >
             <MapPin size={18} />
             <span>Storage</span>
+          </button>
+          <button 
+            className={`nav-tab ${activeTab === 'deckbuilder' ? 'active' : ''}`}
+            onClick={() => setActiveTab('deckbuilder')}
+          >
+            <Swords size={18} />
+            <span>Deck Builder</span>
           </button>
 
           <button 

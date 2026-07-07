@@ -4,6 +4,7 @@ import { sortCardsByOrder } from '../utils/cardSort';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder } from '../utils/cardRarity';
 import CardInspectorModal from './CardInspectorModal';
+import CompartmentView, { getSortCategory } from './CompartmentView';
 
 const CONTAINER_TYPES = ['Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other'];
 
@@ -47,211 +48,6 @@ const SORT_BASES = [
 function splitSortOrder(sortOrder) {
   if (sortOrder === 'set-number-printing') return { base: 'set-number', foilAware: true };
   return { base: sortOrder || 'custom', foilAware: false };
-}
-
-// A binder page's pocket grid is square-ish (3x3 for the default capacity-9
-// page) rather than however many columns happen to fit the viewport.
-function pocketColumns(capacity) {
-  return Math.max(1, Math.round(Math.sqrt(capacity || 1)));
-}
-
-function PrintingBadge({ printing }) {
-  const label = getPrintingBadgeLabel(printing);
-  if (!label) return null;
-  return (
-    <span style={{
-      position: 'absolute', top: '4px', right: '4px',
-      fontSize: '0.55rem', fontWeight: 900, letterSpacing: '0.05em',
-      padding: '1px 5px', borderRadius: '3px', zIndex: 2,
-      boxShadow: '0 1px 3px rgba(0,0,0,0.5)', textTransform: 'uppercase',
-      ...getPrintingBadgeStyle(printing)
-    }}>{label}</span>
-  );
-}
-
-// Derives the category label a card falls under for a given sort scheme —
-// drives the divider headers and the per-compartment filter choices. Must
-// stay in sync with getSortCategory in backend/src/utils/compartmentSort.js.
-function getSortCategory(card, sortOrder, setsList = []) {
-  if (!card || !sortOrder || sortOrder === 'custom') return null;
-  if (sortOrder.startsWith('name')) return card.name ? card.name.charAt(0).toUpperCase() : '?';
-  if (sortOrder.startsWith('set')) {
-    if (!card.set_name) return 'Unknown Set';
-    if (!setsList || setsList.length === 0) return card.set_name;
-    const idx = setsList.findIndex(s => s.name === card.set_name);
-    return idx >= 0 ? `${idx + 1}. ${card.set_name}` : card.set_name;
-  }
-  if (sortOrder.startsWith('type')) {
-    let typeStr = 'Colorless';
-    if (card.types) {
-      try {
-        const t = typeof card.types === 'string' ? JSON.parse(card.types) : card.types;
-        if (t && t.length > 0) typeStr = t[0];
-      } catch (e) { /* no-op */ }
-    }
-    return typeStr;
-  }
-  if (sortOrder.startsWith('price')) {
-    const p = card.price_trend || 0;
-    if (p >= 100) return '$100+';
-    if (p >= 50) return '$50+';
-    if (p >= 20) return '$20+';
-    if (p >= 10) return '$10+';
-    if (p >= 5) return '$5+';
-    if (p >= 1) return '$1+';
-    return '< $1';
-  }
-  if (sortOrder.startsWith('language')) return card.language || 'English';
-  return null;
-}
-
-function BinderPageContent({ compartment, cards, sortOrder, availableFilters, setsList = [], onRename, onSetCapacity, onToggleFilter, onRemove, onDeleteCard, onMoveCard, moveTargets, canRemove, recommendedSpot, focusEntryId }) {
-  const [editingLabel, setEditingLabel] = useState(false);
-  const [labelDraft, setLabelDraft] = useState(compartment.display_label);
-  const [showSets, setShowSets] = useState(false);
-  const isCustom = sortOrder === 'custom';
-  const cols = pocketColumns(compartment.capacity);
-  const recIdx = recommendedSpot ? recommendedSpot.index : -1;
-  // Insert a translucent ghost of the card being filed at its recommended slot,
-  // so the page mirrors where the card physically goes and shifts the rest down.
-  const rendered = [...cards];
-  if (recIdx >= 0) {
-    while (rendered.length < recIdx) rendered.push(null);
-    rendered.splice(recIdx, 0, {
-      __ghost: true,
-      image_url: recommendedSpot.image_url,
-      name: recommendedSpot.name,
-      set_name: recommendedSpot.set_name
-    });
-  }
-  const slotCount = Math.max(compartment.capacity, rendered.length);
-  const pockets = Array.from({ length: slotCount }, (_, i) => rendered[i] || null);
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', height: '100%' }}>
-      <div key={compartment.id} className="row-flash" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
-        {editingLabel ? (
-          <input
-            autoFocus
-            className="input-control"
-            value={labelDraft}
-            onChange={(e) => setLabelDraft(e.target.value)}
-            onBlur={() => { setEditingLabel(false); onRename(labelDraft); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') { setEditingLabel(false); onRename(labelDraft); } if (e.key === 'Escape') setEditingLabel(false); }}
-            style={{ padding: '0.15rem 0.4rem', fontSize: '0.75rem', width: '110px' }}
-          />
-        ) : (
-          <strong onDoubleClick={() => { setLabelDraft(compartment.display_label); setEditingLabel(true); }} title="Double-click to rename" style={{ cursor: 'pointer', fontSize: '0.8rem' }}>
-            {compartment.display_label}
-          </strong>
-        )}
-        <button type="button" className="btn btn-secondary" onClick={() => setShowSets(s => !s)} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem' }}>
-          {(compartment.assignedFilters || []).length === 0 ? 'Any category' : (compartment.assignedFilters || []).length === 1 ? compartment.assignedFilters[0] : `${compartment.assignedFilters.length} cats`}
-        </button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.1rem', fontSize: '0.6rem', color: 'var(--text-muted)' }}>
-          <span>{compartment.count} /</span>
-          <input
-            key={`cap-${compartment.capacity}`}
-            type="number" min="1" className="input-control" defaultValue={compartment.capacity}
-            onBlur={(e) => { const v = parseInt(e.target.value, 10); if (v > 0 && v !== compartment.capacity) onSetCapacity(v); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-            title="Change capacity"
-            style={{ width: '40px', padding: '0 0.1rem', fontSize: '0.65rem', background: 'transparent', border: '1px solid transparent', color: 'inherit', textAlign: 'left' }}
-          />
-        </div>
-        {canRemove && (
-          <button type="button" className="btn btn-danger btn-icon-only" onClick={onRemove} title="Remove this page (must be empty)" style={{ width: '22px', height: '22px', padding: 0, marginLeft: 'auto' }}>
-            <Trash2 size={11} />
-          </button>
-        )}
-      </div>
-
-      {showSets && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.4rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
-          <select
-            className="select-control"
-            value=""
-            onChange={(e) => { if (e.target.value) onToggleFilter(e.target.value); }}
-            style={{ fontSize: '0.7rem', padding: '0.15rem 0.3rem' }}
-          >
-            <option value="">Choose category to toggle...</option>
-            {availableFilters.map(filterVal => (
-              <option key={filterVal} value={filterVal}>
-                {(compartment.assignedFilters || []).includes(filterVal) ? `✓ ${filterVal}` : filterVal}
-              </option>
-            ))}
-          </select>
-          {compartment.assignedFilters && compartment.assignedFilters.length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-              {compartment.assignedFilters.map(filterVal => (
-                <span key={filterVal} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.6rem', padding: '0.1rem 0.3rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
-                  {filterVal}
-                  <span style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => onToggleFilter(filterVal)}>&times;</span>
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="binder-pocket-grid" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
-        {pockets.map((card, i) => {
-          const prev = i > 0 ? pockets[i - 1] : null;
-          
-          const cat = getSortCategory(card, sortOrder, setsList);
-          const prevCat = getSortCategory(prev, sortOrder, setsList);
-          const categoryStart = cat && (!prev || prevCat !== cat);
-
-          if (card && card.__ghost) {
-            return (
-              <div id="recommended-spot" key="rec-ghost" className={`binder-pocket recommended-ghost ${categoryStart ? 'set-start' : ''}`}>
-                {card.image_url && <img src={card.image_url} alt={card.name} style={{ opacity: 0.85 }} />}
-                <div className="rec-ghost-label">Slot {i + 1}</div>
-                {categoryStart && <div className="set-divider-label" title={cat}>{cat}</div>}
-              </div>
-            );
-          }
-          return card ? (
-            <div key={card.entry_id} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              <div
-                className={`binder-pocket ${categoryStart ? 'set-start' : ''} ${card.entry_id === focusEntryId ? 'focus-flash' : ''}`}
-                style={{ ...getCardRarityBorder(card.rarity) }}
-              >
-                <img src={card.image_url} alt={card.name} title={card.name} />
-
-              {getFoilOverlayClass(card.printing) && (
-                <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />
-              )}
-              <PrintingBadge printing={card.printing} />
-              {categoryStart && <div className="set-divider-label" title={cat}>{cat}</div>}
-              <div className="binder-pocket-actions">
-                {isCustom && moveTargets.length > 1 && (
-                  <select
-                    value=""
-                    onChange={(e) => { if (e.target.value) onMoveCard(card.entry_id, parseInt(e.target.value, 10)); }}
-                  >
-                    <option value="">Move...</option>
-                    {moveTargets.filter(t => t.id !== compartment.id).map(t => (
-                      <option key={t.id} value={t.id}>{t.display_label}</option>
-                    ))}
-                  </select>
-                )}
-                <button type="button" onClick={() => onDeleteCard(card.entry_id)} title="Remove from container">
-                  <X size={12} />
-                </button>
-              </div>
-            </div>
-            <div style={{ fontSize: '0.65rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-              #{i + 1} | {card.set_name} {card.number}
-            </div>
-          </div>
-          ) : (
-            <div key={`empty-${i}`} className="binder-pocket-empty" />
-          );
-        })}
-      </div>
-    </div>
-  );
 }
 
 function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId }) {
@@ -1128,7 +924,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       style={{ touchAction: 'pan-y' }}
                     >
                       <div className="binder-page-left" style={{ width: '100%' }}>
-                        <BinderPageContent {...pageProps(activePage, targetIdx)} />
+                        <CompartmentView {...pageProps(activePage, targetIdx)} locationType={selectedLoc.type} />
                       </div>
                     </div>
                   );
@@ -1142,12 +938,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   return (
                     <div className="binder-page-container">
                       <div className="binder-page-left">
-                        <BinderPageContent {...pageProps(left, leftIdx)} />
+                        <CompartmentView {...pageProps(left, leftIdx)} locationType={selectedLoc.type} />
                       </div>
                       <div className="binder-spine" />
                       {right && (
                         <div className="binder-page-right">
-                          <BinderPageContent {...pageProps(right, rightIdx)} />
+                          <CompartmentView {...pageProps(right, rightIdx)} locationType={selectedLoc.type} />
                         </div>
                       )}
                     </div>
@@ -1158,56 +954,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
                 const activeComp = compartments.find(c => c.id === activeCompartmentId) || compartments[0];
                 if (!activeComp) return null;
-
-                const activeCompCards = cardsByCompartment.get(activeComp.id) || [];
-                const baseCards = [...activeCompCards];
-                if (currentRecSpot && currentRecSpot.compartment_id === activeComp.id) {
-                  const recIdx = Math.floor(currentRecSpot.position / 1000) - 1;
-                  while (baseCards.length < recIdx) baseCards.push(null);
-                  baseCards.splice(recIdx, 0, {
-                    __ghost: true,
-                    entry_id: 'rec-ghost',
-                    image_url: recCard?.image_url,
-                    name: recCard?.name,
-                    set_name: recCard?.set_name,
-                    printing: recCard?.printing || 'Normal'
-                  });
-                }
-
-                const renderedCards = [];
-                let currentCat = null;
-                let slotCounter = 1;
-                for (const card of baseCards) {
-                  if (card) {
-                    const cat = getSortCategory(card, selectedLoc.sort_order, setsList);
-                    if (cat && cat !== currentCat) {
-                      renderedCards.push({
-                        __divider: true,
-                        entry_id: `div-${cat}`,
-                        label: cat
-                      });
-                      currentCat = cat;
-                    }
-                    renderedCards.push({ ...card, __slotNumber: slotCounter });
-                  } else {
-                    renderedCards.push({
-                      __empty: true,
-                      __slotNumber: slotCounter,
-                      entry_id: `spacer-${slotCounter}`
-                    });
-                  }
-                  slotCounter++;
-                }
-                const activeCardIndex = Math.min(coverflowActiveIndex, Math.max(0, renderedCards.length - 1));
-                const activeCard = renderedCards[activeCardIndex];
-
-                const isCustom = selectedLoc.sort_order === 'custom';
-                const canRemoveActive = compartments.length > 1 && activeCompCards.length === 0;
                 const activeCompIdx = compartments.findIndex(c => c.id === activeComp.id);
 
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-
                     <div key={activeComp.id} className="row-flash" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', background: 'rgba(0,0,0,0.1)', padding: '0.4rem 0.6rem', borderRadius: 'var(--radius-sm)', flexWrap: 'wrap' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <button className="btn btn-secondary btn-icon-only" disabled={activeCompIdx <= 0} onClick={() => setActiveCompartmentId(compartments[activeCompIdx - 1]?.id)} style={{ width: '24px', height: '24px', padding: 0 }}>
@@ -1217,7 +967,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           className="select-control"
                           value={activeComp.id}
                           onChange={(e) => setActiveCompartmentId(parseInt(e.target.value, 10))}
-                          style={{ fontSize: '0.8rem', padding: '0.2rem 0.5rem', width: 'auto', minWidth: '120px' }}
+                          style={{ fontSize: '0.8rem', padding: '0.2rem 0.4rem' }}
                         >
                           {compartments.map(c => <option key={c.id} value={c.id}>{c.display_label}</option>)}
                         </select>
@@ -1225,214 +975,30 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           &rarr;
                         </button>
                       </div>
-
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <button type="button" className="btn btn-secondary" onClick={() => setShowRowSets(s => !s)} style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem' }}>
-                          {activeComp.assignedFilters.length === 0 ? 'Any category' : activeComp.assignedFilters.length === 1 ? activeComp.assignedFilters[0] : `${activeComp.assignedFilters.length} cats`}
-                        </button>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.1rem', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                          <span>{activeComp.count} /</span>
-                          <input
-                            key={`cap-${activeComp.capacity}`}
-                            type="number" min="1" className="input-control" defaultValue={activeComp.capacity}
-                            onBlur={(e) => { const v = parseInt(e.target.value, 10); if (v > 0 && v !== activeComp.capacity) handleSetCapacity(activeComp.id, v); }}
-                            onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-                            title="Change capacity"
-                            style={{ width: '40px', padding: '0 0.1rem', fontSize: '0.7rem', background: 'transparent', border: '1px solid transparent', color: 'inherit', textAlign: 'left' }}
-                          />
-                        </div>
-                        {canRemoveActive && (
-                          <button
-                            type="button"
-                            className="btn btn-danger btn-icon-only"
-                            onClick={() => handleRemoveCompartment(activeComp.id)}
-                            title="Remove this compartment (must be empty)"
-                            style={{ width: '22px', height: '22px', padding: 0 }}
-                          >
-                            <Trash2 size={11} />
-                          </button>
-                        )}
-                      </div>
                     </div>
-
-                    {showRowSets && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.4rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
-                          <select
-                            className="select-control"
-                            value=""
-                            onChange={(e) => { if (e.target.value) handleToggleCompartmentFilter(activeComp, e.target.value); }}
-                            style={{ fontSize: '0.7rem', padding: '0.15rem 0.3rem' }}
-                          >
-                            <option value="">Choose category to toggle...</option>
-                            {availableCategories.map(filterVal => (
-                              <option key={filterVal} value={filterVal}>
-                                {activeComp.assignedFilters.includes(filterVal) ? `✓ ${filterVal}` : filterVal}
-                              </option>
-                            ))}
-                          </select>
-                          {activeComp.assignedFilters.length > 0 && (
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-                              {activeComp.assignedFilters.map(filterVal => (
-                                <span key={filterVal} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.6rem', padding: '0.1rem 0.3rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
-                                  {filterVal}
-                                  <span style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => handleToggleCompartmentFilter(activeComp, filterVal)}>&times;</span>
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    {/* iPod Album Art Cover Flow Layout */}
-                    {activeCompCards.length === 0 ? (
-                      <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.8rem' }}>
-                        Empty row. Scan or file cards here!
-                      </div>
-                    ) : (
-                      <>
-                        <div
-                          className="box-coverflow-container"
-                          onTouchStart={handleCoverflowTouchStart}
-                          onTouchEnd={(e) => handleCoverflowTouchEnd(e, renderedCards.length)}
-                        >
-                          <button
-                            type="button"
-                            className="box-coverflow-nav left"
-                            disabled={activeCardIndex <= 0}
-                            onClick={() => setCoverflowActiveIndex(prev => Math.max(0, prev - 1))}
-                          >
-                            &larr;
-                          </button>
-
-                          <div className="box-coverflow-track">
-                            {(() => {
-                              return renderedCards.map((card, i) => {
-                                const offset = i - activeCardIndex;
-                                const absOffset = Math.abs(offset);
-                                let transform = '';
-                                let zIndex = 10 - absOffset;
-                                let opacity = 1;
-                                let filter = 'none';
-
-                                if (offset === 0) {
-                                  transform = `translateX(0px) scale(1.22) translateZ(0px)`;
-                                  opacity = 1;
-                                } else {
-                                  const dir = offset > 0 ? 1 : -1;
-                                  const translateX = dir * (85 + absOffset * 35);
-                                  const rotateY = dir * -48;
-                                  transform = `translateX(${translateX}px) scale(0.8) rotateY(${rotateY}deg)`;
-                                  opacity = Math.max(0.12, 1 - absOffset * 0.22);
-                                  filter = `brightness(${Math.max(0.35, 1 - absOffset * 0.18)})`;
-                                }
-
-                                if (card.__empty) {
-                                  return (
-                                    <div
-                                      key={card.entry_id}
-                                      className={`box-coverflow-card ${offset === 0 ? 'active' : ''}`}
-                                      style={{ transform, zIndex, opacity: opacity * 0.6, filter }}
-                                      onClick={() => setCoverflowActiveIndex(i)}
-                                    >
-                                      <div style={{ width: '100%', height: '100%', background: 'rgba(0,0,0,0.3)', border: '2px dashed rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '5px' }}>
-                                        <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem', fontWeight: 'bold' }}>Slot {card.__slotNumber}</span>
-                                      </div>
-                                    </div>
-                                  );
-                                }
-
-                                if (card.__divider) {
-                                  return (
-                                    <div
-                                      key={card.entry_id}
-                                      className={`box-coverflow-card ${offset === 0 ? 'active' : ''}`}
-                                      style={{ transform, zIndex, opacity, filter: 'none', background: 'linear-gradient(135deg, rgba(255, 71, 71, 0.8), rgba(150, 0, 0, 0.8))', border: '1px solid rgba(255, 71, 71, 0.5)', display: 'flex', flexDirection: 'column', overflow: 'visible' }}
-                                      onClick={() => setCoverflowActiveIndex(i)}
-                                    >
-                                      <div style={{ position: 'absolute', top: '-18px', left: '10px', background: 'var(--accent-red)', color: '#fff', padding: '2px 12px', borderRadius: '6px 6px 0 0', fontSize: '0.7rem', fontWeight: 'bold', boxShadow: '0 -2px 5px rgba(0,0,0,0.3)', whiteSpace: 'nowrap' }}>
-                                        {card.label}
-                                      </div>
-                                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '0.5rem', color: '#fff' }}>
-                                        <div style={{ fontSize: '1.2rem', fontWeight: 'bold', textAlign: 'center', padding: '0 1rem' }}>{card.label}</div>
-                                      </div>
-                                    </div>
-                                  );
-                                }
-
-                                const isRecSpot = card.__ghost;
-
-                                return (
-                                  <div
-                                    id={isRecSpot ? "recommended-spot" : undefined}
-                                    key={card.entry_id}
-                                    className={`box-coverflow-card ${offset === 0 ? 'active' : ''} ${card.entry_id === focusEntryId ? 'focus-flash' : ''} ${isRecSpot ? 'recommended-ghost' : ''}`}
-                                    style={{
-                                      transform,
-                                      zIndex,
-                                      opacity: isRecSpot ? opacity : opacity,
-                                      filter
-                                    }}
-                                    onClick={() => setCoverflowActiveIndex(i)}
-                                  >
-                                  <img src={card.image_url} alt={card.name} />
-                                  <PrintingBadge printing={card.printing} />
-                                  {isRecSpot && (
-                                    <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: '#ffc107', color: '#000', fontSize: '0.75rem', fontWeight: 'bold', padding: '3px 8px', borderRadius: '4px', zIndex: 10, boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>Slot {card.__slotNumber}</div>
-                                  )}
-                                </div>
-                              );
-                            })})()}
-                          </div>
-
-                          <button
-                            type="button"
-                            className="box-coverflow-nav right"
-                            disabled={activeCardIndex >= renderedCards.length - 1}
-                            onClick={() => setCoverflowActiveIndex(prev => Math.min(renderedCards.length - 1, prev + 1))}
-                          >
-                            &rarr;
-                          </button>
-                        </div>
-
-                        {/* Focused Card Actions */}
-                        {activeCard && !activeCard.__ghost && !activeCard.__divider && !activeCard.__empty && (
-                          <div className="focused-card-info-panel">
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-                              <div>
-                                <strong style={{ fontSize: '0.85rem' }}>#{activeCard.__slotNumber} | {activeCard.name}</strong>
-                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
-                                  {activeCard.set_name} • #{activeCard.number} • {activeCard.printing}
-                                </div>
-                              </div>
-
-                              <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                                {isCustom && compartments.length > 1 && (
-                                  <select
-                                    className="select-control"
-                                    value=""
-                                    onChange={(e) => { if (e.target.value) handleMoveCard(activeCard.entry_id, parseInt(e.target.value, 10)); }}
-                                    style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', width: '110px' }}
-                                  >
-                                    <option value="">Move to...</option>
-                                    {compartments.filter(t => t.id !== activeComp.id).map(t => (
-                                      <option key={t.id} value={t.id}>{t.display_label}</option>
-                                    ))}
-                                  </select>
-                                )}
-
-                                <button
-                                  type="button"
-                                  className="btn btn-danger"
-                                  onClick={() => handleRemoveFromContainer(activeCard.entry_id)}
-                                  style={{ fontSize: '0.65rem', padding: '0.2rem 0.45rem' }}
-                                >
-                                  Remove Card
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    )}
+                    
+                    <CompartmentView 
+                      compartment={activeComp}
+                      cards={cardsByCompartment.get(activeComp.id) || []}
+                      locationType={selectedLoc.type}
+                      sortOrder={selectedLoc.sort_order}
+                      setsList={setsList}
+                      moveTargets={compartments}
+                      onRename={(label) => handleRenameCompartment(activeComp.id, label)}
+                      onSetCapacity={(cap) => handleSetCapacity(activeComp.id, cap)}
+                      onRemove={() => handleRemoveCompartment(activeComp.id)}
+                      onDeleteCard={handleDeleteCard}
+                      onMoveCard={handleMoveCard}
+                      recommendedSpot={currentRecSpot && currentRecSpot.compartment_id === activeComp.id ? {
+                        index: Math.floor(currentRecSpot.position / 1000) - 1,
+                        image_url: recCard?.image_url,
+                        name: recCard?.name,
+                        set_name: recCard?.set_name
+                      } : null}
+                      focusEntryId={focusEntryId}
+                      targetActiveIndex={coverflowActiveIndex}
+                      canRemove={compartments.length > 1 && (cardsByCompartment.get(activeComp.id) || []).length === 0}
+                    />
                   </div>
                 );
               })()}

@@ -126,6 +126,7 @@ router.get('/collection', async (req, res) => {
   try {
     const listType = req.query.list_type || 'collection';
     const isTrade = req.query.is_trade;
+    const compId = req.query.compartment_id;
 
     let filterSql = `WHERE c.user_id = ? AND c.list_type = ?`;
     let filterParams = [req.user.id, listType];
@@ -133,6 +134,10 @@ router.get('/collection', async (req, res) => {
     if (isTrade !== undefined) {
       filterSql += ` AND c.is_trade = ?`;
       filterParams.push(isTrade === 'true' || isTrade === '1' ? 1 : 0);
+    }
+    if (compId !== undefined) {
+      filterSql += ` AND c.compartment_id = ?`;
+      filterParams.push(compId);
     }
 
     const query = `
@@ -505,6 +510,18 @@ router.post('/locations', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to create location' });
+  }
+});
+
+router.get('/locations/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const loc = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+    if (!loc) return res.status(404).json({ error: 'Location not found' });
+    res.json(loc);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve location' });
   }
 });
 

@@ -232,10 +232,10 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
   if (scope === 'collection') {
     if (!userId) return [];
     let collSql = `
-      SELECT DISTINCT cc.* 
+      SELECT cc.*, SUM(c.quantity) AS owned_qty 
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
-      WHERE c.user_id = ?
+      WHERE c.user_id = ? AND c.list_type = 'collection'
     `;
     const collParams = [userId];
 
@@ -257,7 +257,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
       collParams.push(`%${setQuery}%`, setQuery);
     }
 
-    collSql += ` LIMIT 50`;
+    collSql += ` GROUP BY cc.id LIMIT 50`;
     let collResults = await db.all(collSql, collParams);
     return collResults.map(r => ({
       ...r,

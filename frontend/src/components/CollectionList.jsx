@@ -6,10 +6,9 @@ import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
 import { translateJapaneseName } from '../utils/pokemonTranslation';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
-import DeckBuilder from './DeckBuilder';
 import CardInspectorModal from './CardInspectorModal';
 
-function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter, setSelectedCardFilter }) {
+function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter, setSelectedCardFilter, onNavigate, setSelectedLocationId }) {
   const [collection, setCollection] = useState([]);
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -27,7 +26,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const [viewMode, setViewMode] = useState('gallery'); // 'gallery' or 'list'
   const [inspectorCard, setInspectorCard] = useState(null);
   const [inspectorStartEdit, setInspectorStartEdit] = useState(false);
-  const [subTab, setSubTab] = useState('collection'); // 'collection', 'wishlist', 'trade'
+  const [subTab, setSubTab] = useState('collection'); // 'collection', 'wishlist'
 
   // Search & Filter state
   const [searchFilter, setSearchFilter] = useState('');
@@ -38,6 +37,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const [minPriceFilter, setMinPriceFilter] = useState('');
   const [maxPriceFilter, setMaxPriceFilter] = useState('');
   const [sortBy, setSortBy] = useState('added-newest');
+  const [tradeOnly, setTradeOnly] = useState(false);
   
   // Stacking state
   const [stackCards, setStackCards] = useState(false);
@@ -48,7 +48,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     fetchCollection();
     fetchLocations();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statsTrigger, subTab]);
+  }, [statsTrigger, subTab, tradeOnly]);
 
   const fetchCollection = async () => {
     try {
@@ -56,8 +56,9 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       let url = '/api/collection?list_type=collection';
       if (subTab === 'wishlist') {
         url = '/api/collection?list_type=wishlist';
-      } else if (subTab === 'trade') {
-        url = '/api/collection?list_type=collection&is_trade=1';
+      }
+      if (tradeOnly) {
+        url += '&is_trade=1';
       }
 
       const response = await fetch(url);
@@ -110,6 +111,16 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const openEdit = (item) => {
     setInspectorCard(item);
     setInspectorStartEdit(true);
+  };
+
+  const handleViewStorage = (card) => {
+    setInspectorCard(null);
+    if (setSelectedLocationId) {
+      setSelectedLocationId(card.location_id || 'unassigned');
+    }
+    if (onNavigate) {
+      onNavigate('storage');
+    }
   };
 
   // Extract unique rarities from collection for filters
@@ -194,20 +205,6 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
           >
             Wishlist
           </button>
-          <button 
-            className={`btn ${subTab === 'trade' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setSubTab('trade')}
-            style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
-          >
-            Trade Binder
-          </button>
-          <button 
-            className={`btn ${subTab === 'deckbuilder' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setSubTab('deckbuilder')}
-            style={{ fontSize: '0.85rem', padding: '0.45rem 1.25rem', borderRadius: 'var(--radius-sm)' }}
-          >
-            Deck Builder
-          </button>
         </div>
 
         {/* View Toggle */}
@@ -231,11 +228,8 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
         </div>
       </div>
 
-      {subTab === 'deckbuilder' ? (
-        <DeckBuilder showToast={showToast} />
-      ) : (
-        <>
-          {/* Filter Options Panel */}
+      <>
+        {/* Filter Options Panel */}
           <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1.25rem' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               
@@ -378,6 +372,19 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                     </div>
                   </>
                 )}
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input 
+                    type="checkbox" 
+                    id="tradeOnlyOpt" 
+                    checked={tradeOnly} 
+                    onChange={(e) => setTradeOnly(e.target.checked)} 
+                    style={{ width: '14px', height: '14px', cursor: 'pointer' }}
+                  />
+                  <label htmlFor="tradeOnlyOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--accent-yellow)', fontWeight: 600 }}>
+                    For Trade Only
+                  </label>
+                </div>
               </div>
 
             </div>
@@ -541,9 +548,9 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
         onClose={() => { setInspectorCard(null); setInspectorStartEdit(false); }}
         onUpdate={onUpdate}
         showToast={showToast}
+        onViewStorage={handleViewStorage}
       />
     </>
-  )}
 </div>
   );
 }

@@ -322,7 +322,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           // Normal), not necessarily the Holofoil finish just chosen above —
           // resolve against the printing actually being recorded.
           purchase_price: resolveCardPrice(card, autoPrinting),
-          location_id: locationId ? parseInt(locationId, 10) : null
+          location_id: null
         })
       });
 
@@ -730,7 +730,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           printing,
           language,
           purchase_price: parseFloat(purchasePrice) || 0,
-          location_id: locationId ? parseInt(locationId, 10) : null
+          location_id: null
         })
       });
 
@@ -772,22 +772,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   return (
     <div className="scanner-container">
 
-      {/* Target container: where scanned cards get filed. The backend picks the
-          exact page/row slot and the add toast tells the user where to put the
-          physical card. */}
-      <div className="glass-panel" style={{ width: '100%', padding: '0.6rem 1rem', display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
-        <MapPin size={15} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
-        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Store scans in</span>
-        <select
-          className="select-control"
-          value={locationId}
-          onChange={(e) => setLocationId(e.target.value)}
-          style={{ flex: 1, fontSize: '0.8rem', padding: '0.3rem 0.5rem' }}
-        >
-          <option value="">Unsorted (file later)</option>
-          {locations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.type})</option>)}
-        </select>
-      </div>
+
 
       {/* Camera Window */}
       {!cameraActive ? (
@@ -1338,13 +1323,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                       </select>
                     </div>
 
-                    <div className="form-group quick-add-full-width" style={{ marginBottom: 0 }}>
-                      <label>Store In</label>
-                      <select className="select-control" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
-                        <option value="">Unsorted (file later)</option>
-                        {locations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.type})</option>)}
-                      </select>
-                    </div>
+
                   </div>
                 </div>
               </div>

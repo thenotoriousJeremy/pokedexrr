@@ -1056,10 +1056,11 @@ button, input, select, textarea {
 /* Double Page Binder Layout Styles */
 .binder-page-container {
   display: flex;
-  background: linear-gradient(135deg, rgba(20, 16, 12, 0.98) 0%, rgba(10, 8, 5, 1) 100%);
-  border: 2px solid #281912; /* Rich dark mahogany look, narrower border */
+  background: radial-gradient(circle at center, #222 0%, #111 100%);
+  background-image: radial-gradient(circle at center, #222 0%, #111 100%), url("data:image/svg+xml,%3Csvg width='4' height='4' viewBox='0 0 4 4' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 3h1v1H1V3zm2-2h1v1H3V1z' fill='%23000000' fill-opacity='0.2' fill-rule='evenodd'/%3E%3C/svg%3E");
+  border: 2px solid #3d2b1f; /* Richer dark leather brown */
   border-radius: var(--radius-md);
-  box-shadow: 0 20px 50px rgba(0,0,0,0.7), inset 0 0 30px rgba(0,0,0,0.9);
+  box-shadow: 0 25px 60px rgba(0,0,0,0.8), inset 0 0 40px rgba(0,0,0,0.95);
   position: relative;
   overflow: hidden;
   width: 100%;
@@ -1069,11 +1070,11 @@ button, input, select, textarea {
 }
 
 .binder-spine {
-  width: 16px;
-  background: linear-gradient(to right, #111 0%, #333 40%, #111 50%, #333 60%, #111 100%);
-  border-left: 1px solid rgba(255,255,255,0.05);
-  border-right: 1px solid rgba(255,255,255,0.05);
-  box-shadow: inset 0 0 10px rgba(0,0,0,0.8);
+  width: 24px;
+  background: linear-gradient(to right, #0a0a0a 0%, #3a3a3a 35%, #555 50%, #3a3a3a 65%, #0a0a0a 100%);
+  border-left: 1px solid rgba(255,255,255,0.1);
+  border-right: 1px solid rgba(255,255,255,0.1);
+  box-shadow: inset 0 0 15px rgba(0,0,0,0.9), 0 0 10px rgba(0,0,0,0.6);
   flex-shrink: 0;
   position: relative;
 }
@@ -1086,16 +1087,20 @@ button, input, select, textarea {
   bottom: 10%;
   left: 50%;
   transform: translateX(-50%);
-  width: 8px;
+  width: 12px;
+  border-radius: 6px;
+  box-shadow: 2px 0 5px rgba(0,0,0,0.5);
   background: repeating-linear-gradient(
     to bottom,
     transparent,
-    transparent 45px,
-    #888 45px,
-    #eee 48px,
-    #555 52px,
-    transparent 52px,
-    transparent 90px
+    transparent 60px,
+    #777 60px,
+    #ccc 62px,
+    #eee 65px,
+    #999 68px,
+    #555 70px,
+    transparent 70px,
+    transparent 120px
   );
 }
 
@@ -1156,11 +1161,29 @@ button, input, select, textarea {
 .binder-pocket {
   position: relative;
   aspect-ratio: 0.718;
-  border-radius: 4px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6), 0 1px 3px rgba(0, 0, 0, 0.4);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.8), 0 2px 5px rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94), box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.binder-pocket:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.8), 0 8px 15px rgba(0, 0, 0, 0.5);
+  border-color: rgba(255, 255, 255, 0.3);
+  z-index: 10;
+}
+
+/* Subtle plastic glare overlay for the pocket */
+.binder-pocket::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 5px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.2) 0%, rgba(255,255,255,0.05) 20%, transparent 40%, transparent 100%);
+  pointer-events: none;
+  z-index: 5;
 }
 
 .binder-pocket img {
@@ -1168,6 +1191,7 @@ button, input, select, textarea {
   height: 100%;
   object-fit: cover;
   display: block;
+  border-radius: 4px;
 }
 
 .binder-pocket-empty {
