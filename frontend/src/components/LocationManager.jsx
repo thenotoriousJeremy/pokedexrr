@@ -179,7 +179,7 @@ function CompartmentCard({ compartment, cards, sortOrder, availableFilters, sets
 // One binder page: a fixed pocket grid (capacity slots, empty ones shown as
 // dashed placeholders) instead of CompartmentCard's variable-length row list.
 function getSortCategory(card, sortOrder, setsList = []) {
-  if (!card) return null;
+  if (!card || !sortOrder || sortOrder === 'custom') return null;
   if (sortOrder.startsWith('name')) return card.name ? card.name.charAt(0).toUpperCase() : '?';
   if (sortOrder.startsWith('set')) {
     if (!card.set_name) return 'Unknown Set';
