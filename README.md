@@ -161,3 +161,9 @@ The server exposes `GET /api/health` (no auth). It returns `200 {"status":"ok"}`
         └── workflows/
               └── docker-build.yml   # verify (backend tests) -> build & push to GHCR
 ```
+
+---
+
+## 📄 License
+
+Released under the [MIT License](LICENSE).
