@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Camera, RefreshCw, AlertTriangle, X, Settings, Library, MapPin } from 'lucide-react';
+import { Camera, RefreshCw, AlertTriangle, X, Settings, Library, MapPin, Zap, ZapOff } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
@@ -62,6 +62,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [focusMode, setFocusMode] = useState('continuous'); // 'continuous' | 'manual'
   const [focusDistance, setFocusDistance] = useState(0);
   const [focusRange, setFocusRange] = useState({ min: 0, max: 1, step: 0.1 });
+  // Torch/Flashlight control
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [isTorchOn, setIsTorchOn] = useState(false);
   const [cardLayout, setCardLayout] = useState('modern');
   // Which game the current layout belongs to. 'mtg' is its own layout; every
   // other layout value is a Pokémon sub-layout.
@@ -325,6 +328,11 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           } else {
             setFocusSupported(false);
           }
+          if (caps.torch) {
+            setTorchSupported(true);
+          } else {
+            setTorchSupported(false);
+          }
         }
       } catch (e) {
         console.warn('Focus detection failed:', e);
@@ -338,11 +346,16 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
   const stopCamera = () => {
     if (stream) {
+      const track = stream.getVideoTracks()[0];
+      if (track && isTorchOn) {
+        track.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {});
+      }
       stream.getTracks().forEach(track => track.stop());
       setStream(null);
     }
     setCameraActive(false);
     setAutoScan(false); // Reset autoScan on camera stop
+    setIsTorchOn(false);
     setScannedName('');
     setScannedNumber('');
     setDebugNameImg('');
@@ -894,6 +907,42 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 }
               }}
             />
+            
+            {/* Torch Toggle Overlay Button */}
+            {torchSupported && (
+              <button
+                type="button"
+                className={`btn ${isTorchOn ? 'btn-primary' : 'btn-secondary'}`}
+                style={{
+                  position: 'absolute',
+                  top: '1rem',
+                  right: '1rem',
+                  zIndex: 20,
+                  borderRadius: '50%',
+                  padding: '0.6rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const nextState = !isTorchOn;
+                  setIsTorchOn(nextState);
+                  try {
+                    const track = stream?.getVideoTracks()[0];
+                    if (track) {
+                      track.applyConstraints({ advanced: [{ torch: nextState }] }).catch(() => {});
+                    }
+                  } catch (err) {
+                    console.warn('Torch toggle failed:', err);
+                  }
+                }}
+              >
+                {isTorchOn ? <Zap size={18} /> : <ZapOff size={18} />}
+              </button>
+            )}
+            
             {/* Outline Box Guides */}
             <div className="camera-overlay">
               <style>{`
