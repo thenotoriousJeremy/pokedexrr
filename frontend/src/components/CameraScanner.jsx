@@ -7,6 +7,13 @@ import { translateJapaneseName } from '../utils/pokemonTranslation';
 import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
+import * as cardHashMatch from '../utils/cardHashMatch';
+
+// Max Hamming distance (0-256) to treat a perceptual-hash match as usable. Scan
+// noise (glare, angle, lighting) plus resize-kernel differences push a correct
+// full-card match into the tens, so this is deliberately loose — the user still
+// confirms from the results list. ponytail: tune if false matches/misses appear.
+const HASH_MAX_DISTANCE = 90;
 
 // Turn a failed /api/search response into a user-facing message. 429 (rate
 // limit) and 403 (bad API key) are called out distinctly so the user knows to
@@ -66,6 +73,8 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [torchSupported, setTorchSupported] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
   const [cardLayout, setCardLayout] = useState('modern');
+  // Whether the MTG perceptual-hash DB has loaded (identify-by-image path).
+  const [hashReady, setHashReady] = useState(false);
   // Which game the current layout belongs to. 'mtg' is its own layout; every
   // other layout value is a Pokémon sub-layout.
   const scanGame = cardLayout === 'mtg' ? 'mtg' : 'pokemon';
@@ -230,6 +239,15 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Lazy-load the current game's hash DB (identify-by-image). Runs whenever the
+  // game changes; loads are cached per game so switching back is instant. Leaves
+  // hashReady false (scanner falls back to OCR) if that game's DB isn't built.
+  useEffect(() => {
+    let cancelled = false;
+    cardHashMatch.loadHashDb(scanGame).then(ok => { if (!cancelled) setHashReady(ok); });
+    return () => { cancelled = true; };
+  }, [scanGame]);
+
   const fetchLocations = async () => {
     try {
       const response = await fetch('/api/locations');
@@ -305,12 +323,36 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         }
       }
       
+      // Apply ONLY the advanced set. Re-sending the top-level resolution
+      // constraints (facingMode/width/height) makes many Android Chrome builds
+      // reset the track and silently drop torch/focus. applyConstraints leaves
+      // any field we don't name untouched, so the resolution stays put.
       track.applyConstraints({
-        ...currentConstraints,
         advanced: [advObj]
       }).catch(err => console.warn('applyConstraints error:', err));
     } catch (e) {
       console.warn('updateAdvancedConstraints error:', e);
+    }
+  };
+
+  // Torch gets its own path (not the shared merge) so it applies the bare
+  // `advanced: [{ torch }]` constraint and surfaces the real reason on-screen —
+  // the user can't open a phone console. iOS Safari never reports caps.torch,
+  // so those users get a clear "not supported" instead of a dead button.
+  const toggleTorch = async () => {
+    const track = stream?.getVideoTracks()[0];
+    if (!track) { showToast('Camera not ready — start the camera first.'); return; }
+    const caps = typeof track.getCapabilities === 'function' ? track.getCapabilities() : {};
+    if (!caps.torch) {
+      showToast('Flashlight not available on this device/browser (iPhone Safari has no web torch).');
+      return;
+    }
+    const next = !isTorchOn;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: next }] });
+      setIsTorchOn(next);
+    } catch (err) {
+      showToast(`Flashlight failed: ${err.name || err.message || 'unknown error'}`);
     }
   };
 
@@ -532,13 +574,57 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     return tempCanvas.toDataURL('image/jpeg', 0.95);
   };
 
+  // Extract a rotated crop as a raw canvas (no contrast stretch) for perceptual
+  // hashing. Mirrors getProcessedDataUrl's inverse-rotation math at 1x scale.
+  const getCropCanvas = (sourceCanvas, cx, cy, w, h, rotationDeg) => {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w));
+    c.height = Math.max(1, Math.round(h));
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.translate(c.width / 2, c.height / 2);
+    ctx.rotate(-rotationDeg * (Math.PI / 180));
+    ctx.drawImage(sourceCanvas, -cx, -cy);
+    return c;
+  };
+
+  // Present search results the same way whether they came from image-hash or OCR:
+  // show the picker, and for a single non-MTG match auto-add / quick-add per mode.
+  // MTG skips auto-add (name fallback returns many printings to choose from).
+  const applyMatches = async (matches, notFoundMsg) => {
+    setScanMatches(matches);
+    if (matches.length === 0) {
+      setScanStatus(notFoundMsg);
+      setScanFlash('error');
+      setTimeout(() => setScanFlash(null), 1500);
+      return;
+    }
+    setScanStatus(`Found ${matches.length} matching card(s)!`);
+    setScanFlash('success');
+    setTimeout(() => setScanFlash(null), 1500);
+    if (matches.length === 1 && scanGame !== 'mtg') {
+      if (autoScan) {
+        setAutoAddTargetCard(matches[0]);
+        setAutoAddCountdown(2);
+        setScanMatches([]);
+      } else if (bulkMode) {
+        await autoAddCard(matches[0]);
+        setScanMatches([]); // Clear results so the auto-scan loop triggers again
+      } else {
+        stopCamera();
+        openQuickAdd(matches[0]);
+      }
+    }
+  };
+
   const handleCapture = async () => {
     if (loading || !videoRef.current || !cameraActive) return;
 
     setLoading(true);
     const scanId = ++currentScanId.current;
     setScanMatches([]);
-    setScanStatus('Initializing OCR scanner...');
+    setScanStatus('Initializing scanner...');
 
     const video = videoRef.current;
     const videoRect = video.getBoundingClientRect();
@@ -581,6 +667,38 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     const numRightCrop = getCropParams(rightNumGuide);
 
     try {
+      // Identify by perceptual hash of the whole card first (MTG + Pokémon). This
+      // sidesteps the flaky corner OCR (tiny set code / collector number over art).
+      // Japanese Pokémon cards aren't in the English-only hash DB, so they skip
+      // straight to OCR + translation. Falls through if no confident match.
+      const hashEligible = hashReady && (scanGame === 'mtg' || (scanGame === 'pokemon' && cardLayout !== 'japanese'));
+      if (hashEligible) {
+        const cardCrop = getCropParams(guideElement);
+        if (cardCrop) {
+          setScanStatus('Matching card image...');
+          const cropCanvas = getCropCanvas(orientedCanvas, cardCrop.cx, cardCrop.cy, cardCrop.w, cardCrop.h, guideRotation);
+          const candidates = cardHashMatch.match(cropCanvas, scanGame, 6);
+          console.log('Hash candidates:', candidates);
+          if (candidates.length && candidates[0].distance <= HASH_MAX_DISTANCE) {
+            const top = candidates[0];
+            const params = new URLSearchParams({ game: scanGame });
+            if (top.set) params.append('set', top.set);
+            if (top.number) params.append('number', top.number);
+            if (top.name) params.append('name', top.name);
+            const searchResponse = await fetch(`/api/search?${params.toString()}`);
+            if (scanId !== currentScanId.current) return;
+            if (searchResponse.ok) {
+              const matches = await searchResponse.json();
+              if (matches.length) {
+                await applyMatches(matches, '');
+                return;
+              }
+            }
+          }
+          setScanStatus('No confident image match. Falling back to text scan...');
+        }
+      }
+
       // 2. Process crop images using the oriented canvas
       // We pass the center points, dimensions, and current rotation to inverse-rotate the crop perfectly!
       const nameDataUrl = nameCrop ? getProcessedDataUrl(orientedCanvas, nameCrop.cx, nameCrop.cy, nameCrop.w, nameCrop.h, guideRotation) : '';
@@ -740,34 +858,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       if (scanId !== currentScanId.current) return;
       if (searchResponse.ok) {
         const matches = await searchResponse.json();
-        setScanMatches(matches);
-        
-        if (matches.length === 0) {
-          setScanStatus(`Could not find cards matching "${detectedName}" (${detectedNumber}). Try again or search manually.`);
-          setScanFlash('error');
-          setTimeout(() => setScanFlash(null), 1500);
-        } else {
-          setScanStatus(`Found ${matches.length} matching card(s)!`);
-          setScanFlash('success');
-          setTimeout(() => setScanFlash(null), 1500);
-          
-          // Auto-open drawer if exactly one perfect match is found, or auto-add in bulk mode.
-          // MTG scans skip auto-add — name-only fallback returns multiple printings
-          // and the user must pick the correct one from the list.
-          if (matches.length === 1 && scanGame !== 'mtg') {
-            if (autoScan) {
-              setAutoAddTargetCard(matches[0]);
-              setAutoAddCountdown(2);
-              setScanMatches([]);
-            } else if (bulkMode) {
-              await autoAddCard(matches[0]);
-              setScanMatches([]); // Clear results so auto-scan loop triggers again
-            } else {
-              stopCamera();
-              openQuickAdd(matches[0]);
-            }
-          }
-        }
+        await applyMatches(matches, `Could not find cards matching "${detectedName}" (${detectedNumber}). Try again or search manually.`);
       } else {
         if (searchResponse.status === 429) setAutoScan(false); // stop the loop from hammering the API
         setScanStatus(searchFailureMessage(searchResponse.status));
@@ -901,8 +992,8 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         </div>
       ) : (
         <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div 
-            className="camera-preview-wrapper"
+          <div
+            className="camera-preview-wrapper camera-active"
             style={{
               ...(videoRatio ? { aspectRatio: `${videoRatio}` } : {}),
               touchAction: 'none'
@@ -947,19 +1038,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   justifyContent: 'center',
                   boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
                 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const nextState = !isTorchOn;
-                  setIsTorchOn(nextState);
-                  try {
-                    const track = stream?.getVideoTracks()[0];
-                    if (track) {
-                      updateAdvancedConstraints(track, { torch: nextState });
-                    }
-                  } catch (err) {
-                    console.warn('Torch toggle failed:', err);
-                  }
-                }}
+                onClick={(e) => { e.stopPropagation(); toggleTorch(); }}
               >
                 {isTorchOn ? <Zap size={18} /> : <ZapOff size={18} />}
               </button>
@@ -1212,8 +1291,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
             </div>
           )}
 
-          {/* OCR Crop Results */}
-          {cameraActive && (
+          {/* OCR Crop Results — only render when we actually have crop feeds,
+              so an empty dashed box doesn't eat vertical space on phone. */}
+          {cameraActive && (debugNameImg || debugNumLeftImg || debugNumRightImg) && (
             <div className="glass-panel" style={{ width: '100%', padding: '0.75rem 1rem', background: 'rgba(0,0,0,0.3)', border: '1px dashed var(--border-glass-hover)', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.25rem' }}>
               {/* Show cropped OCR feeds for alignment debugging */}
               {(debugNameImg || debugNumLeftImg || debugNumRightImg) && (
