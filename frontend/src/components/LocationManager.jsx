@@ -83,6 +83,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   const [inspectorCard, setInspectorCard] = useState(null);
 
+  // Multi-select over cards inside the open container.
+  const [storageSelectMode, setStorageSelectMode] = useState(false);
+  const [storageSelectedIds, setStorageSelectedIds] = useState(() => new Set());
+
   const [unsortedSearch, setUnsortedSearch] = useState('');
   const [unsortedSort, setUnsortedSort] = useState('scanned-desc');
 
@@ -189,6 +193,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     setActiveCompartmentId(null);
     setActivePageIndex(0);
     setCoverflowActiveIndex(0);
+    setStorageSelectMode(false);
+    setStorageSelectedIds(new Set());
   }, [activeLocationId]);
 
   useEffect(() => {
@@ -294,6 +300,25 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     const s = new Set();
     allCards.forEach(c => { if (c.set_name) s.add(c.set_name); });
     return s;
+  }, [allCards]);
+
+  // Distinct values per filterable field from the cards actually owned, so the
+  // FilterBuilder value box suggests real options (e.g. subtypes like "Basic")
+  // instead of only a hardcoded list.
+  const filterFieldOptions = useMemo(() => {
+    const uniq = (fn) => Array.from(new Set(allCards.flatMap(fn).filter(v => v !== null && v !== undefined && v !== ''))).sort();
+    return {
+      name: uniq(c => [c.name]),
+      supertype: uniq(c => [c.supertype]),
+      types: uniq(c => c.types || []),
+      subtypes: uniq(c => c.subtypes || []),
+      color_identity: uniq(c => c.color_identity || []),
+      cmc: uniq(c => [c.cmc]).sort((a, b) => a - b),
+      set_name: uniq(c => [c.set_name]),
+      set_id: uniq(c => [c.set_id]),
+      rarity: uniq(c => [c.rarity]),
+      printing: uniq(c => [c.printing]),
+    };
   }, [allCards]);
 
   const cardsByCompartment = useMemo(() => {
@@ -489,6 +514,41 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     } catch (err) { console.error(err); showToast('Error removing card.'); }
   };
 
+  // --- Multi-select over the open container ---
+  const toggleStorageSelect = (entryId) => {
+    setStorageSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(entryId)) next.delete(entryId); else next.add(entryId);
+      return next;
+    });
+  };
+  const armStorageSelect = (entryId) => {
+    setStorageSelectMode(true);
+    setStorageSelectedIds(prev => new Set(prev).add(entryId));
+  };
+  const exitStorageSelect = () => { setStorageSelectMode(false); setStorageSelectedIds(new Set()); };
+
+  // Cards physically in the open container (any compartment).
+  const cardsInActiveLocation = useMemo(
+    () => allCards.filter(c => c.location_id === activeLocationId),
+    [allCards, activeLocationId]
+  );
+
+  const runStorageBulk = async (action, value, confirmMsg) => {
+    const ids = Array.from(storageSelectedIds);
+    if (ids.length === 0) { showToast('No cards selected.'); return; }
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
+    try {
+      const res = await fetch('/api/collection/bulk', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entry_ids: ids, action, value })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) { showToast(data.message || 'Done.'); exitStorageSelect(); await refreshAll(); onUpdate(); }
+      else showToast(data.error || 'Bulk action failed.');
+    } catch (err) { console.error(err); showToast('Error performing bulk action.'); }
+  };
+
   const handleFileCard = async (entryId, locationId) => {
     try {
       const res = await fetch(`/api/collection/${entryId}`, {
@@ -630,7 +690,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             <h3 style={{ margin: 0 }}>Container Settings</h3>
             
             <SortBuilder value={sortDraft} onChange={setSortDraft} />
-            <FilterBuilder value={filterDraft} onChange={setFilterDraft} />
+            <FilterBuilder value={filterDraft} onChange={setFilterDraft} setsList={setsList} fieldOptions={filterFieldOptions} />
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
               <button className="btn btn-secondary" onClick={() => setShowRulesModal(false)}>Cancel</button>
@@ -669,6 +729,18 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           </div>
           
           {selectedLoc && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            {!filingMode && (selectedLoc.total_cards || 0) > 0 && (
+              <button
+                type="button"
+                className={`btn ${storageSelectMode ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => (storageSelectMode ? exitStorageSelect() : setStorageSelectMode(true))}
+                style={{ fontSize: '0.7rem', padding: '0.3rem 0.6rem' }}
+                title="Or long-press a card to start selecting"
+              >
+                {storageSelectMode ? 'Done' : 'Select'}
+              </button>
+            )}
             <div className="kebab-menu">
               <button className="kebab-menu-button" onClick={() => setShowKebabMenu(s => !s)}>
                 <MoreVertical size={16} color="var(--text-secondary)" />
@@ -736,8 +808,35 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 </div>
               )}
             </div>
+            </div>
           )}
         </div>
+
+        {storageSelectMode && (
+          <div className="glass-panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', background: 'rgba(255,71,71,0.08)' }}>
+            <span style={{ fontWeight: 800, color: '#fff', fontSize: '0.8rem' }}>{storageSelectedIds.size} selected</span>
+            <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem' }} onClick={() => setStorageSelectedIds(new Set(cardsInActiveLocation.map(c => c.entry_id)))}>Select all ({cardsInActiveLocation.length})</button>
+            <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem' }} onClick={() => setStorageSelectedIds(new Set())}>Clear</button>
+            <div style={{ width: '1px', height: '20px', background: 'var(--border-glass)' }} />
+            <button
+              className="btn btn-primary"
+              style={{ fontSize: '0.68rem', padding: '0.25rem 0.6rem' }}
+              disabled={!storageSelectedIds.size}
+              onClick={() => runStorageBulk('move', null, `Remove ${storageSelectedIds.size} card(s) from this container? They move to Unsorted.`)}
+            >
+              Remove from Storage
+            </button>
+            <button
+              className="btn btn-danger"
+              style={{ fontSize: '0.68rem', padding: '0.25rem 0.6rem' }}
+              disabled={!storageSelectedIds.size}
+              onClick={() => runStorageBulk('delete', null, `Delete ${storageSelectedIds.size} card(s) from your collection? This cannot be undone.`)}
+            >
+              Delete
+            </button>
+            <button className="btn btn-secondary" style={{ fontSize: '0.68rem', padding: '0.25rem 0.5rem', marginLeft: 'auto' }} onClick={exitStorageSelect}>Done</button>
+          </div>
+        )}
 
         {showCreate && (
           <form onSubmit={handleCreateLocation} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.5rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)' }}>
@@ -843,7 +942,11 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     name: recCard?.name,
                     set_name: recCard?.set_name
                   } : null,
-                  focusEntryId
+                  focusEntryId,
+                  selectMode: storageSelectMode,
+                  selectedIds: storageSelectedIds,
+                  onCardLongPress: armStorageSelect,
+                  onCardToggle: toggleStorageSelect
                 });
 
                 if (isMobile) {
@@ -932,6 +1035,10 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       focusEntryId={focusEntryId}
                       targetActiveIndex={coverflowActiveIndex}
                       canRemove={compartments.length > 1 && (cardsByCompartment.get(activeComp.id) || []).length === 0}
+                      selectMode={storageSelectMode}
+                      selectedIds={storageSelectedIds}
+                      onCardLongPress={armStorageSelect}
+                      onCardToggle={toggleStorageSelect}
                     />
                   </div>
                 );

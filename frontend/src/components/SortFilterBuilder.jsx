@@ -34,7 +34,8 @@ function SortableItem({ id, children }) {
 const SORT_OPTIONS = [
   { value: 'name', label: 'Alphabetical (Name)' },
   { value: 'price', label: 'Price / Value' },
-  { value: 'set', label: 'Set & Number' },
+  { value: 'set', label: 'Set' },
+  { value: 'number', label: 'Card Number' },
   { value: 'printing', label: 'Foil / Printing' },
   { value: 'type', label: 'Type' },
   { value: 'color', label: 'Color Identity' },
@@ -149,7 +150,7 @@ const KNOWN_OPTIONS = {
   color_identity: ['W', 'U', 'B', 'R', 'G', 'Colorless']
 };
 
-export function FilterBuilder({ value, onChange, setsList = [] }) {
+export function FilterBuilder({ value, onChange, setsList = [], fieldOptions = {} }) {
   const rules = Array.isArray(value) ? value : [];
 
   const addRule = () => {
@@ -176,9 +177,14 @@ export function FilterBuilder({ value, onChange, setsList = [] }) {
       )}
 
       {rules.map((rule) => {
-        let options = KNOWN_OPTIONS[rule.field] || [];
-        if (rule.field === 'set_name') options = setsList.map(s => s.name);
-        if (rule.field === 'set_id') options = setsList.map(s => s.id);
+        // Prefer values from the user's actual collection; fall back to the
+        // hardcoded list (or the set catalog) when none are owned yet.
+        let options = fieldOptions[rule.field] || [];
+        if (options.length === 0) {
+          options = KNOWN_OPTIONS[rule.field] || [];
+          if (rule.field === 'set_name') options = setsList.map(s => s.name);
+          if (rule.field === 'set_id') options = setsList.map(s => s.id);
+        }
         
         return (
           <div key={rule.id} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap', background: 'rgba(0,0,0,0.1)', padding: '0.4rem', borderRadius: '4px', border: '1px solid var(--border-glass)' }}>

@@ -1,7 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Layers } from 'lucide-react';
 import { getPrintingBadgeStyle, getPrintingBadgeLabel, getFoilOverlayClass } from '../utils/cardPrinting';
-import { getCardRarityBorder } from '../utils/cardRarity';
+import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
+import { formatPrice } from '../utils/formatPrice';
+
+const infoChipStyle = { fontSize: '0.6rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)', whiteSpace: 'nowrap' };
 
 function pocketColumns(capacity) {
   return Math.max(1, Math.round(Math.sqrt(capacity || 1)));
@@ -71,14 +74,60 @@ export default function CompartmentView({
   onSetCapacity = null,
   onToggleFilter = null,
   onRemove = null,
-  onDeleteCard = null,
   onMoveCard = null,
   moveTargets = [],
   canRemove = false,
   recommendedSpot = null,
-  focusEntryId = null
+  focusEntryId = null,
+
+  // Multi-select (optional; enabled when onCardLongPress is provided)
+  selectMode = false,
+  selectedIds = null,
+  onCardLongPress = null,
+  onCardToggle = null
 }) {
   const isBinder = locationType === 'Binder' || locationType === 'Toploader Binder';
+  const isSelected = (entryId) => !!(selectedIds && selectedIds.has(entryId));
+
+  // Long-press-to-arm selection, mirrors CollectionList. Coexists with the
+  // swipe/coverflow touch handlers because a >10px move cancels the timer.
+  const longPressTimer = useRef(null);
+  const longPressFired = useRef(false);
+  const pointerStart = useRef(null);
+  useEffect(() => () => clearTimeout(longPressTimer.current), []);
+
+  const beginPress = (e, entryId) => {
+    if (!onCardLongPress) return;
+    longPressFired.current = false;
+    pointerStart.current = { x: e.clientX, y: e.clientY };
+    clearTimeout(longPressTimer.current);
+    longPressTimer.current = setTimeout(() => {
+      longPressFired.current = true;
+      onCardLongPress(entryId);
+      if (navigator.vibrate) navigator.vibrate(25);
+    }, 450);
+  };
+  const movePress = (e) => {
+    if (!pointerStart.current) return;
+    if (Math.abs(e.clientX - pointerStart.current.x) > 10 || Math.abs(e.clientY - pointerStart.current.y) > 10) {
+      clearTimeout(longPressTimer.current);
+    }
+  };
+  const endPress = () => { clearTimeout(longPressTimer.current); pointerStart.current = null; };
+  const pressHandlers = (entryId) => ({
+    onPointerDown: (e) => beginPress(e, entryId),
+    onPointerMove: movePress,
+    onPointerUp: endPress,
+    onPointerLeave: endPress,
+    onContextMenu: (e) => e.preventDefault(),
+  });
+  // Returns true if the click was consumed by selection (caller should stop).
+  const handleSelectClick = (entryId) => {
+    if (longPressFired.current) { longPressFired.current = false; return true; }
+    if (selectMode) { onCardToggle && onCardToggle(entryId); return true; }
+    return false;
+  };
+  const selectedOutline = { outline: '3px solid var(--accent-red)', outlineOffset: '1px' };
 
   // --- Box Coverflow State ---
   const slotCountBox = Math.max(compartment?.capacity || 1, cards.length);
@@ -228,37 +277,37 @@ export default function CompartmentView({
               <div key={card.entry_id || `slot-${i}`} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                 <div
                   className={`binder-pocket ${categoryStart ? 'set-start' : ''} ${card.entry_id === focusEntryId ? 'focus-flash' : ''}`}
-                  style={{ 
+                  style={{
                     ...getCardRarityBorder(card.rarity),
-                    ...(isTarget ? { 
-                      borderColor: 'var(--accent-green)', 
-                      boxShadow: '0 0 15px rgba(34,197,94,0.4), inset 0 0 20px rgba(34,197,94,0.3)' 
-                    } : {})
+                    ...(isTarget ? {
+                      borderColor: 'var(--accent-green)',
+                      boxShadow: '0 0 15px rgba(34,197,94,0.4), inset 0 0 20px rgba(34,197,94,0.3)'
+                    } : {}),
+                    ...(isSelected(card.entry_id) ? selectedOutline : {})
                   }}
-                  onClick={() => onCardClick && onCardClick(card)}
+                  {...pressHandlers(card.entry_id)}
+                  onClick={() => { if (handleSelectClick(card.entry_id)) return; onCardClick && onCardClick(card); }}
                 >
                   <img src={card.image_url} alt={card.name} title={card.name} />
                   {getFoilOverlayClass(card.printing) && <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4px' }} />}
                   <PrintingBadge printing={card.printing} />
+                  {selectMode && (
+                    <div style={{ position: 'absolute', top: '3px', left: '3px', zIndex: 25, width: '18px', height: '18px', borderRadius: '50%', background: isSelected(card.entry_id) ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.65rem', fontWeight: 900 }}>{isSelected(card.entry_id) ? '✓' : ''}</div>
+                  )}
                   {categoryStart && <div className="set-divider-label" title={cat}>{cat}</div>}
                   
                   {isTarget && (
                     <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'var(--accent-green)', color: '#000', width: '30px', height: '30px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 4px 10px rgba(0,0,0,0.5)' }}>✓</div>
                   )}
                   
-                  {onDeleteCard && (
+                  {sortOrder === 'custom' && moveTargets.length > 1 && onMoveCard && (
                     <div className="binder-pocket-actions">
-                      {sortOrder === 'custom' && moveTargets.length > 1 && onMoveCard && (
-                        <select value="" onChange={(e) => { if (e.target.value) onMoveCard(card.entry_id, parseInt(e.target.value, 10)); }}>
-                          <option value="">Move...</option>
-                          {moveTargets.filter(t => t.id !== compartment.id).map(t => (
-                            <option key={t.id} value={t.id}>{t.display_label}</option>
-                          ))}
-                        </select>
-                      )}
-                      <button type="button" className="btn btn-danger btn-icon-only" onClick={() => onDeleteCard(card.entry_id)} title="Remove card">
-                        &times;
-                      </button>
+                      <select value="" onChange={(e) => { if (e.target.value) onMoveCard(card.entry_id, parseInt(e.target.value, 10)); }}>
+                        <option value="">Move...</option>
+                        {moveTargets.filter(t => t.id !== compartment.id).map(t => (
+                          <option key={t.id} value={t.id}>{t.display_label}</option>
+                        ))}
+                      </select>
                     </div>
                   )}
                 </div>
@@ -428,8 +477,10 @@ export default function CompartmentView({
                   <div
                     key={card.entry_id}
                     className={`box-coverflow-card ${offset === 0 ? 'active' : ''}`}
-                    style={{ transform, zIndex, opacity, filter, ...highlightStyle, ...getCardRarityBorder(card.rarity) }}
+                    style={{ transform, zIndex, opacity, filter, ...highlightStyle, ...getCardRarityBorder(card.rarity), ...(isSelected(card.entry_id) ? selectedOutline : {}) }}
+                    {...pressHandlers(card.entry_id)}
                     onClick={() => {
+                      if (handleSelectClick(card.entry_id)) return;
                       if (offset === 0 && onCardClick) onCardClick(card);
                       else setCoverflowActiveIndex(i);
                     }}
@@ -437,6 +488,9 @@ export default function CompartmentView({
                     <img src={card.image_url} alt={card.name} />
                     {getFoilOverlayClass(card.printing) && <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '4.5px' }} />}
                     <PrintingBadge printing={card.printing} />
+                    {selectMode && (
+                      <div style={{ position: 'absolute', top: '4px', left: '4px', zIndex: 25, width: '20px', height: '20px', borderRadius: '50%', background: isSelected(card.entry_id) ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.7rem', fontWeight: 900 }}>{isSelected(card.entry_id) ? '✓' : ''}</div>
+                    )}
                     
                     {isTarget && (
                       <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'var(--accent-green)', color: '#000', width: '40px', height: '40px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '1.5rem', boxShadow: '0 4px 10px rgba(0,0,0,0.5)' }}>✓</div>
@@ -462,21 +516,21 @@ export default function CompartmentView({
             
             return (
               <div className="focused-card-info-panel" style={{ marginTop: '0.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', background: 'rgba(0,0,0,0.2)', padding: '0.4rem 0.6rem', borderRadius: 'var(--radius-sm)' }}>
-                  <div>
-                    <strong style={{ fontSize: '0.85rem' }}>#{activeCard.__slotNumber} | {activeCard.name}</strong>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
-                      {activeCard.set_name} • #{activeCard.number} • {activeCard.printing}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.7rem', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <strong style={{ fontSize: '0.85rem' }}>#{activeCard.__slotNumber} | {activeCard.name}</strong>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                        {activeCard.set_name} • #{activeCard.number}
+                      </div>
                     </div>
-                  </div>
 
-                  <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
                     {sortOrder === 'custom' && moveTargets.length > 1 && onMoveCard && (
                       <select
                         className="select-control"
                         value=""
                         onChange={(e) => { if (e.target.value) onMoveCard(activeCard.entry_id, parseInt(e.target.value, 10)); }}
-                        style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', width: '110px' }}
+                        style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', width: '110px', flexShrink: 0 }}
                       >
                         <option value="">Move to...</option>
                         {moveTargets.filter(t => t.id !== compartment.id).map(t => (
@@ -484,17 +538,32 @@ export default function CompartmentView({
                         ))}
                       </select>
                     )}
+                  </div>
 
-                    {onDeleteCard && (
-                      <button
-                        type="button"
-                        className="btn btn-danger"
-                        onClick={() => onDeleteCard(activeCard.entry_id)}
-                        style={{ fontSize: '0.65rem', padding: '0.2rem 0.45rem' }}
-                      >
-                        Remove Card
-                      </button>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
+                    {activeCard.rarity && (
+                      <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.03em', ...getRarityBadgeStyle(activeCard.rarity) }}>
+                        {getRarityBadgeLabel(activeCard.rarity)}
+                      </span>
                     )}
+                    {activeCard.printing && activeCard.printing !== 'Normal' && (
+                      <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', ...getPrintingBadgeStyle(activeCard.printing) }}>
+                        {getPrintingBadgeLabel(activeCard.printing)}
+                      </span>
+                    )}
+                    {activeCard.printing === 'Normal' && <span style={infoChipStyle}>Normal</span>}
+                    {activeCard.supertype && <span style={{ ...infoChipStyle, color: '#fff' }} title="Supertype">{activeCard.supertype}</span>}
+                    {(activeCard.types || []).length > 0 && <span style={infoChipStyle} title="Types">{activeCard.types.join(' / ')}</span>}
+                    {(activeCard.subtypes || []).length > 0 && <span style={infoChipStyle} title="Subtypes">{activeCard.subtypes.join(' / ')}</span>}
+                    {activeCard.condition && <span style={infoChipStyle}>{activeCard.condition}</span>}
+                    {activeCard.language && activeCard.language !== 'English' && <span style={infoChipStyle}>{activeCard.language}</span>}
+                    {activeCard.quantity > 1 && <span style={{ ...infoChipStyle, color: '#fff' }}>x{activeCard.quantity}</span>}
+                    {activeCard.price_trend > 0 && (
+                      <span style={{ ...infoChipStyle, color: 'var(--accent-yellow)', marginLeft: 'auto' }}>
+                        Value ${formatPrice(activeCard.price_trend)}
+                      </span>
+                    )}
+                    {activeCard.purchase_price > 0 && <span style={infoChipStyle}>Paid ${formatPrice(activeCard.purchase_price)}</span>}
                   </div>
                 </div>
               </div>

@@ -109,13 +109,18 @@ export function sortCardsByOrder(cards, sortOrder, foilSorting, setsList = []) {
           cmp = (a.price_trend || 0) - (b.price_trend || 0);
           break;
         case 'set': {
+          // Set identity only. Ties (same set) fall through to the next
+          // criterion so schemes like Set > Color > CMC aren't pre-empted by
+          // card number. Add a separate 'number' rule to order within a set.
           const cmpChrono = setRank(a.set_name) - setRank(b.set_name);
           if (cmpChrono !== 0) { cmp = cmpChrono; break; }
-          const cmpSet = (a.set_name || '').localeCompare(b.set_name || '');
-          if (cmpSet !== 0) { cmp = cmpSet; break; }
-          const numA = parseInt(a.number || '0', 10) || 0;
-          const numB = parseInt(b.number || '0', 10) || 0;
-          if (numA !== numB) { cmp = numA - numB; break; }
+          cmp = (a.set_name || '').localeCompare(b.set_name || '');
+          break;
+        }
+        case 'number': {
+          const numA = parseInt(a.number || '0', 10);
+          const numB = parseInt(b.number || '0', 10);
+          if (!isNaN(numA) && !isNaN(numB) && numA !== numB) { cmp = numA - numB; break; }
           cmp = (a.number || '').localeCompare(b.number || '');
           break;
         }

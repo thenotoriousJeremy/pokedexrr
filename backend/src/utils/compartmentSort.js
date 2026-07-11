@@ -132,16 +132,20 @@ function sortCards(cards, sortOrder, foilSorting) {
           cmp = (a.price_trend || 0) - (b.price_trend || 0);
           break;
         case 'set': {
+          // Set identity only; ties fall through to the next criterion (so
+          // Set > Color > CMC isn't pre-empted by number). Use a separate
+          // 'number' rule to order within a set.
           const setAIndex = setsCache.findIndex(s => s.name === a.set_name);
           const setBIndex = setsCache.findIndex(s => s.name === b.set_name);
           const cmpSetChrono = (setAIndex >= 0 ? setAIndex : 999999) - (setBIndex >= 0 ? setBIndex : 999999);
           if (cmpSetChrono !== 0) { cmp = cmpSetChrono; break; }
-          const cmpSet = (a.set_name || '').localeCompare(b.set_name || '');
-          if (cmpSet !== 0) { cmp = cmpSet; break; }
-          
-          const numA = parseInt(a.number || '0', 10) || 0;
-          const numB = parseInt(b.number || '0', 10) || 0;
-          if (numA !== numB) { cmp = numA - numB; break; }
+          cmp = (a.set_name || '').localeCompare(b.set_name || '');
+          break;
+        }
+        case 'number': {
+          const nA = parseInt(a.number || '0', 10);
+          const nB = parseInt(b.number || '0', 10);
+          if (!isNaN(nA) && !isNaN(nB) && nA !== nB) { cmp = nA - nB; break; }
           cmp = (a.number || '').localeCompare(b.number || '');
           break;
         }

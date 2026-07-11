@@ -162,6 +162,8 @@ router.get('/collection', async (req, res) => {
         cc.supertype,
         cc.subtypes,
         cc.types,
+        cc.cmc,
+        cc.color_identity,
         cc.rarity,
         cc.set_id,
         cc.set_name,
@@ -193,6 +195,7 @@ router.get('/collection', async (req, res) => {
       price_trend: resolveCardPrice(row),
       subtypes: JSON.parse(row.subtypes || '[]'),
       types: JSON.parse(row.types || '[]'),
+      color_identity: JSON.parse(row.color_identity || '[]'),
       compartment_display_label: row.compartment_id
         ? compartmentLabel({ idx: row.compartment_idx, label: row.compartment_label }, row.location_type)
         : null,
@@ -543,7 +546,7 @@ router.get('/locations', async (req, res) => {
   }
 });
 
-const RULE_TYPES = ['any', 'alphabetical_range', 'specific_sets'];
+const RULE_TYPES = ['any', 'alphabetical_range', 'specific_sets', 'compound'];
 const GAME_RESTRICTIONS = ['any', 'pokemon', 'mtg'];
 
 // rule_config arrives as an object (structured editor) or an already-encoded

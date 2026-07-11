@@ -517,6 +517,17 @@ button, input, select, textarea {
   border-radius: var(--radius-sm);
 }
 
+/* Suppress the OS long-press callout/save-image popup on card art so
+   long-press-to-select works cleanly on touch (Collection + Storage). */
+.tcg-card-image,
+.collection-row-thumbnail,
+.binder-pocket img,
+.box-coverflow-card img {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .tcg-card-info {
   margin-top: 0.5rem;
   display: flex;
@@ -989,6 +1000,21 @@ button, input, select, textarea {
 }
 
 @media (max-width: 768px) {
+  /* Keep the whole scanner (preview + settings toggle + capture row) on one
+     phone screen. Cap the live preview by height so a portrait stream can't
+     shove the buttons off-screen; width follows the stream aspect-ratio (set
+     inline), so object-fit:fill still maps display->stream without distortion.
+     3/4 is a fallback until the real ratio loads. */
+  .scanner-container {
+    gap: 0.85rem;
+  }
+  .camera-preview-wrapper.camera-active {
+    height: min(58dvh, 480px);
+    width: auto;
+    max-width: 100%;
+    aspect-ratio: 3 / 4;
+  }
+
   .quick-add-grid {
     grid-template-columns: 1fr !important;
     gap: 0.5rem !important;
