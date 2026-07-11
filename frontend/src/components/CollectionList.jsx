@@ -30,6 +30,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
 
   // Search & Filter state
   const [searchFilter, setSearchFilter] = useState('');
+  const [gameFilter, setGameFilter] = useState(''); // '' | 'pokemon' | 'mtg'
   const [locationFilter, setLocationFilter] = useState('');
   const [rarityFilter, setRarityFilter] = useState('');
   const [conditionFilter, setConditionFilter] = useState('');
@@ -43,7 +44,12 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const [stackCards, setStackCards] = useState(false);
   const [stackByCondition, setStackByCondition] = useState(false);
   const [stackByPrinting, setStackByPrinting] = useState(false);
-  
+
+  // Multi-select / bulk actions
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkMoveTarget, setBulkMoveTarget] = useState('');
+
   useEffect(() => {
     fetchCollection();
     fetchLocations();
@@ -113,6 +119,42 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     setInspectorStartEdit(true);
   };
 
+  const toggleSelect = (entryId) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(entryId)) next.delete(entryId); else next.add(entryId);
+      return next;
+    });
+  };
+  const clearSelection = () => setSelectedIds(new Set());
+  const exitSelectMode = () => { setSelectMode(false); clearSelection(); setBulkMoveTarget(''); };
+
+  // Runs one bulk action against every selected entry via the bulk endpoint.
+  const runBulk = async (action, value, confirmMsg) => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) { showToast('No cards selected.'); return; }
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
+    try {
+      const res = await fetch('/api/collection/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entry_ids: ids, action, value })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        showToast(data.message || 'Done.');
+        clearSelection();
+        onUpdate();
+        fetchCollection();
+      } else {
+        showToast(data.error || 'Bulk action failed.');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error performing bulk action.');
+    }
+  };
+
   const handleViewStorage = (card) => {
     setInspectorCard(null);
     if (setSelectedLocationId) {
@@ -139,6 +181,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     const matchesLocation = locationFilter === '' ? true :
                             locationFilter === 'unassigned' ? !item.location_id :
                             item.location_id == locationFilter;
+    const matchesGame = gameFilter === '' ? true : (item.game || 'pokemon') === gameFilter;
     const matchesRarity = rarityFilter === '' ? true : item.rarity === rarityFilter;
     const matchesCondition = conditionFilter === '' ? true : item.condition === conditionFilter;
     const matchesPrinting = printingFilter === '' ? true : item.printing === printingFilter;
@@ -147,7 +190,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     const matchesMinPrice = minPriceFilter === '' ? true : price >= parseFloat(minPriceFilter);
     const matchesMaxPrice = maxPriceFilter === '' ? true : price <= parseFloat(maxPriceFilter);
 
-    return matchesSearch && matchesLocation && matchesRarity && matchesCondition && matchesPrinting && matchesMinPrice && matchesMaxPrice;
+    return matchesSearch && matchesGame && matchesLocation && matchesRarity && matchesCondition && matchesPrinting && matchesMinPrice && matchesMaxPrice;
   }).sort((a, b) => {
     if (sortBy === 'name-asc') {
       return a.name.localeCompare(b.name);
@@ -165,7 +208,7 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
       return new Date(b.added_at || 0) - new Date(a.added_at || 0);
     }
   });
-  }, [collection, searchFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, minPriceFilter, maxPriceFilter, sortBy]);
+  }, [collection, searchFilter, gameFilter, locationFilter, rarityFilter, conditionFilter, printingFilter, minPriceFilter, maxPriceFilter, sortBy]);
 
   // Group duplicate cards if stack option is active
   const processedCollection = useMemo(() => {
@@ -185,6 +228,10 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
     });
     return Object.values(groups);
   }, [filteredCollection, stackCards, stackByCondition, stackByPrinting]);
+
+  // In select mode, render the unstacked list so every entry is individually
+  // selectable and bulk actions hit real entry_ids (stacking merges rows).
+  const displayCards = selectMode ? filteredCollection : processedCollection;
 
   return (
     <div>
@@ -206,6 +253,15 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
             Wishlist
           </button>
         </div>
+
+        {/* Multi-select toggle */}
+        <button
+          className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+          style={{ fontSize: '0.8rem', padding: '0.4rem 0.9rem', marginRight: '0.5rem' }}
+        >
+          {selectMode ? 'Done' : 'Select'}
+        </button>
 
         {/* View Toggle */}
         <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
@@ -266,6 +322,15 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
 
               {/* Row 2: Selector Filters Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '0.75rem' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Game</label>
+                  <select className="select-control" value={gameFilter} onChange={(e) => setGameFilter(e.target.value)}>
+                    <option value="">All Games</option>
+                    <option value="pokemon">Pokémon</option>
+                    <option value="mtg">Magic: The Gathering</option>
+                  </select>
+                </div>
+
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)' }}>Location</label>
                   <select className="select-control" value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)}>
@@ -391,21 +456,45 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
           </div>
 
       {/* Database Listing Panel */}
+      {selectMode && (
+        <div className="glass-panel" style={{ marginBottom: '1rem', padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', position: 'sticky', top: '0.5rem', zIndex: 30 }}>
+          <span style={{ fontWeight: 800, color: '#fff', fontSize: '0.85rem' }}>{selectedIds.size} selected</span>
+          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={() => setSelectedIds(new Set(filteredCollection.map(i => i.entry_id)))}>Select all ({filteredCollection.length})</button>
+          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} onClick={clearSelection}>Clear</button>
+          <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+          <button className="btn btn-danger" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('delete', null, `Delete ${selectedIds.size} selected card(s)? This cannot be undone.`)}>Delete</button>
+          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('trade', null)}>Mark Trade</button>
+          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('untrade', null)}>Untrade</button>
+          <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!selectedIds.size} onClick={() => runBulk('list_type', subTab === 'wishlist' ? 'collection' : 'wishlist', null)}>{subTab === 'wishlist' ? 'Move to Collection' : 'Move to Wishlist'}</button>
+          <div style={{ width: '1px', height: '22px', background: 'var(--border-glass)' }} />
+          <select className="select-control" value={bulkMoveTarget} onChange={(e) => setBulkMoveTarget(e.target.value)} style={{ fontSize: '0.72rem', maxWidth: '170px', padding: '0.3rem 0.4rem' }}>
+            <option value="">Move to container…</option>
+            <option value="unassign">Unassigned Pile</option>
+            {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+          <button className="btn btn-primary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!bulkMoveTarget || !selectedIds.size} onClick={() => runBulk('move', bulkMoveTarget === 'unassign' ? null : bulkMoveTarget)}>Apply Move</button>
+        </div>
+      )}
+
       {loading ? (
         <div className="spinner"></div>
-      ) : processedCollection.length === 0 ? (
+      ) : displayCards.length === 0 ? (
         <div className="glass-panel" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '3rem 1.5rem' }}>
           <p>No cards matched your filters. Clear filters or add some cards!</p>
         </div>
       ) : viewMode === 'gallery' ? (
         /* Visual Cards Grid Gallery View */
         <div className="card-grid">
-          {processedCollection.map((item) => {
+          {displayCards.map((item) => {
             const rarityStyle = getCardRarityBorder(item.rarity);
+            const selected = selectedIds.has(item.entry_id);
 
             return (
-              <div key={item.entry_id} className="tcg-card tilt-card-wrapper" onClick={() => { setInspectorCard(item); setInspectorStartEdit(false); }}>
-                <div className="tcg-card-inner" style={rarityStyle}>
+              <div key={item.entry_id} className="tcg-card tilt-card-wrapper" style={selectMode ? { cursor: 'pointer' } : undefined} onClick={() => (selectMode ? toggleSelect(item.entry_id) : (setInspectorCard(item), setInspectorStartEdit(false)))}>
+                <div className="tcg-card-inner" style={{ ...rarityStyle, ...(selected ? { outline: '3px solid var(--accent-red)', outlineOffset: '2px' } : {}) }}>
+                  {selectMode && (
+                    <div style={{ position: 'absolute', top: '6px', right: '6px', zIndex: 20, width: '22px', height: '22px', borderRadius: '50%', background: selected ? 'var(--accent-red)' : 'rgba(0,0,0,0.6)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.8rem', fontWeight: 900 }}>{selected ? '✓' : ''}</div>
+                  )}
                   <img src={item.image_url} alt={item.name} className="tcg-card-image" loading="lazy" />
                   {getFoilOverlayClass(item.printing) && (
                     <div className={getFoilOverlayClass(item.printing)} style={{ borderRadius: 'var(--radius-sm)' }} />
@@ -495,10 +584,18 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
                 </tr>
               </thead>
               <tbody>
-                {processedCollection.map((item) => (
+                {displayCards.map((item) => (
                   <tr key={item.entry_id}>
                     <td>
                       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        {selectMode && (
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(item.entry_id)}
+                            onChange={() => toggleSelect(item.entry_id)}
+                            style={{ width: '18px', height: '18px', flexShrink: 0, cursor: 'pointer' }}
+                          />
+                        )}
                         <div style={{ position: 'relative', width: '36px', height: '50px', flexShrink: 0, overflow: 'hidden', borderRadius: '4px', ...getCardRarityBorder(item.rarity) }}>
                           <img src={item.image_url} alt={item.name} className="collection-row-thumbnail" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '4px' }} />
                           {getFoilOverlayClass(item.printing) && (

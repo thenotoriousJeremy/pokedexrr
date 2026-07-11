@@ -129,7 +129,7 @@ function Settings({ user, onUpdateUser, showToast }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `pokedexrr_collection.${format === 'json' ? 'json' : 'csv'}`;
+      a.download = `carddexrr_collection.${format === 'json' ? 'json' : 'csv'}`;
       document.body.appendChild(a);
       a.click();
       a.remove();

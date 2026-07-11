@@ -19,20 +19,48 @@ async function loadSetsCache(db) {
 
 
 function locationAcceptsCard(location, cardMetadata) {
+  // Game restriction is orthogonal to the alphabetical/set rules below and
+  // applies first: an MTG-only container never accepts a Pokémon card, etc.
+  if (location.game && location.game !== 'any') {
+    const cardGame = cardMetadata.game || 'pokemon';
+    if (cardGame !== location.game) return false;
+  }
+
   if (!location.rule_type || location.rule_type === 'any') return true;
-  
+
   try {
     const config = location.rule_config ? (typeof location.rule_config === 'string' ? JSON.parse(location.rule_config) : location.rule_config) : {};
-    if (location.rule_type === 'alphabetical_range') {
-      const start = (config.start || 'a').toLowerCase();
-      const end = (config.end || 'z').toLowerCase();
-      const firstLetter = (cardMetadata.name || '').charAt(0).toLowerCase();
-      if (!firstLetter) return false;
-      return firstLetter >= start && firstLetter <= end;
-    }
-    if (location.rule_type === 'specific_sets') {
-      const sets = config.sets || [];
-      return sets.includes(cardMetadata.set_name);
+    if (location.rule_type === 'compound') {
+      const rules = Array.isArray(config) ? config : (config.rules || []);
+      for (const rule of rules) {
+        let matches = false;
+        let cValue = cardMetadata[rule.field];
+        if (typeof cValue === 'string' && (cValue.startsWith('[') || cValue.startsWith('{'))) {
+          try { cValue = JSON.parse(cValue); } catch(e){}
+        }
+        
+        if (rule.operator === 'equals') {
+          if (Array.isArray(cValue)) matches = cValue.some(v => String(v).toLowerCase() === String(rule.value).toLowerCase());
+          else matches = String(cValue).toLowerCase() === String(rule.value).toLowerCase();
+        } else if (rule.operator === 'contains') {
+          if (Array.isArray(cValue)) matches = cValue.some(v => String(v).toLowerCase().includes(String(rule.value).toLowerCase()));
+          else matches = String(cValue || '').toLowerCase().includes(String(rule.value).toLowerCase());
+        } else if (rule.operator === '>') {
+          matches = parseFloat(cValue) > parseFloat(rule.value);
+        } else if (rule.operator === '<') {
+          matches = parseFloat(cValue) < parseFloat(rule.value);
+        } else if (rule.operator === '>=') {
+          matches = parseFloat(cValue) >= parseFloat(rule.value);
+        } else if (rule.operator === '<=') {
+          matches = parseFloat(cValue) <= parseFloat(rule.value);
+        } else if (rule.operator === 'exists') {
+          matches = cValue != null && cValue !== '';
+        }
+        
+        if (rule.action === 'exclude' && matches) return false;
+        if (rule.action === 'include' && !matches) return false;
+      }
+      return true;
     }
   } catch (e) {
     console.error('Failed to parse location rule_config', e);
@@ -43,10 +71,23 @@ function locationAcceptsCard(location, cardMetadata) {
 // Must stay aligned with POKEMON_TYPE_ORDER in frontend/src/utils/cardSort.js —
 // the frontend renders compartments in this order and the backend places cards
 // by it; a mismatch makes the REC SPOT ghost point at the wrong slot.
+// Pokémon energy types first, then MTG colors in WUBRG order, then Multicolor.
+// Both games share the one 'type-name' scheme so a mixed binder files each card
+// deterministically. Must stay aligned with TYPE_ORDER in
+// frontend/src/utils/cardSort.js so the REC SPOT ghost points at the right slot.
 const POKEMON_TYPE_ORDER = {
   'Grass': 1, 'Fire': 2, 'Water': 3, 'Lightning': 4, 'Psychic': 5,
-  'Fighting': 6, 'Darkness': 7, 'Metal': 8, 'Fairy': 9, 'Dragon': 10, 'Colorless': 11, 'Trainer': 12, 'Energy': 13
+  'Fighting': 6, 'Darkness': 7, 'Metal': 8, 'Fairy': 9, 'Dragon': 10, 'Colorless': 11, 'Trainer': 12, 'Energy': 13,
+  'White': 20, 'Blue': 21, 'Black': 22, 'Red': 23, 'Green': 24, 'Multicolor': 25
 };
+
+// Sort category for a card's types under the 'type-name' scheme: multi-color
+// MTG cards bucket together (after mono-color), no types = Colorless.
+function typeCategory(types) {
+  const t = Array.isArray(types) ? types : [];
+  if (t.length > 1) return 'Multicolor';
+  return t[0] || 'Colorless';
+}
 
 const PRINTING_ORDER_NORMALS_FIRST = { 'Normal': 1, 'Reverse Holofoil': 2, 'Holofoil': 3, '1st Edition': 4, 'Promo': 5 };
 const PRINTING_ORDER_FOILS_FIRST = { 'Reverse Holofoil': 1, 'Holofoil': 2, 'Normal': 3, '1st Edition': 4, 'Promo': 5 };
@@ -58,62 +99,85 @@ const PRINTING_ORDER_FOILS_FIRST = { 'Reverse Holofoil': 1, 'Holofoil': 2, 'Norm
 const LANGUAGE_ORDER = { 'English': 1, 'Japanese': 2, 'German': 3, 'French': 4, 'Spanish': 5, 'Italian': 6 };
 
 function sortCards(cards, sortOrder, foilSorting) {
-  const printingOrder = foilSorting === 'foils_first' ? PRINTING_ORDER_FOILS_FIRST : PRINTING_ORDER_NORMALS_FIRST;
-  const sorted = [...cards];
-  if (sortOrder === 'name-asc') {
-    sorted.sort((a, b) => a.name.localeCompare(b.name));
-  } else if (sortOrder === 'price-desc') {
-    sorted.sort((a, b) => (b.price_trend || 0) - (a.price_trend || 0));
-  } else if (sortOrder === 'set-number') {
-    sorted.sort((a, b) => {
-      const setAIndex = setsCache.findIndex(s => s.name === a.set_name);
-      const setBIndex = setsCache.findIndex(s => s.name === b.set_name);
-      const cmpSetChrono = (setAIndex >= 0 ? setAIndex : 999999) - (setBIndex >= 0 ? setBIndex : 999999);
-      if (cmpSetChrono !== 0) return cmpSetChrono;
-      
-      const cmpSet = (a.set_name || '').localeCompare(b.set_name || '');
-      if (cmpSet !== 0) return cmpSet;
-      const numA = parseInt(a.number || '0', 10) || 0;
-      const numB = parseInt(b.number || '0', 10) || 0;
-      if (numA !== numB) return numA - numB;
-      return (a.number || '').localeCompare(b.number || '');
-    });
-  } else if (sortOrder === 'set-number-printing') {
-    sorted.sort((a, b) => {
-      const setAIndex = setsCache.findIndex(s => s.name === a.set_name);
-      const setBIndex = setsCache.findIndex(s => s.name === b.set_name);
-      const cmpSetChrono = (setAIndex >= 0 ? setAIndex : 999999) - (setBIndex >= 0 ? setBIndex : 999999);
-      if (cmpSetChrono !== 0) return cmpSetChrono;
-
-      const cmpSet = (a.set_name || '').localeCompare(b.set_name || '');
-      if (cmpSet !== 0) return cmpSet;
-      const printA = printingOrder[a.printing] || 10;
-      const printB = printingOrder[b.printing] || 10;
-      if (printA !== printB) return printA - printB;
-      const numA = parseInt(a.number || '0', 10) || 0;
-      const numB = parseInt(b.number || '0', 10) || 0;
-      if (numA !== numB) return numA - numB;
-      const cmpNum = (a.number || '').localeCompare(b.number || '');
-      if (cmpNum !== 0) return cmpNum;
-      return a.name.localeCompare(b.name);
-    });
-  } else if (sortOrder === 'type-name') {
-    sorted.sort((a, b) => {
-      const typeA = (a.types && a.types[0]) || 'Unknown';
-      const typeB = (b.types && b.types[0]) || 'Unknown';
-      const orderA = POKEMON_TYPE_ORDER[typeA] || 50;
-      const orderB = POKEMON_TYPE_ORDER[typeB] || 50;
-      if (orderA !== orderB) return orderA - orderB;
-      return a.name.localeCompare(b.name);
-    });
-  } else if (sortOrder === 'language') {
-    sorted.sort((a, b) => {
-      const la = LANGUAGE_ORDER[a.language] || 99;
-      const lb = LANGUAGE_ORDER[b.language] || 99;
-      if (la !== lb) return la - lb;
-      return (a.name || '').localeCompare(b.name || '');
-    });
+  let criteria = [];
+  if (typeof sortOrder === 'string') {
+    if (sortOrder.startsWith('[')) {
+      try { criteria = JSON.parse(sortOrder); } catch(e){}
+    } else {
+      if (sortOrder === 'name-asc') criteria = [{by:'name', dir:'asc'}];
+      else if (sortOrder === 'price-desc') criteria = [{by:'price', dir:'desc'}];
+      else if (sortOrder === 'set-number') criteria = [{by:'set', dir:'asc'}];
+      else if (sortOrder === 'set-number-printing') criteria = [{by:'set', dir:'asc'}, {by:'printing', dir:'asc'}];
+      else if (sortOrder === 'type-name') criteria = [{by:'type', dir:'asc'}, {by:'name', dir:'asc'}];
+      else if (sortOrder === 'language') criteria = [{by:'language', dir:'asc'}, {by:'name', dir:'asc'}];
+    }
+  } else if (Array.isArray(sortOrder)) {
+    criteria = sortOrder;
   }
+
+  const printingOrder = foilSorting === 'foils_first' ? PRINTING_ORDER_FOILS_FIRST : PRINTING_ORDER_NORMALS_FIRST;
+  
+  if (!criteria || criteria.length === 0) return [...cards];
+
+  const sorted = [...cards];
+  sorted.sort((a, b) => {
+    for (const c of criteria) {
+      const dirMult = c.dir === 'desc' ? -1 : 1;
+      let cmp = 0;
+      switch (c.by) {
+        case 'name':
+          cmp = (a.name || '').localeCompare(b.name || '');
+          break;
+        case 'price':
+          cmp = (a.price_trend || 0) - (b.price_trend || 0);
+          break;
+        case 'set': {
+          const setAIndex = setsCache.findIndex(s => s.name === a.set_name);
+          const setBIndex = setsCache.findIndex(s => s.name === b.set_name);
+          const cmpSetChrono = (setAIndex >= 0 ? setAIndex : 999999) - (setBIndex >= 0 ? setBIndex : 999999);
+          if (cmpSetChrono !== 0) { cmp = cmpSetChrono; break; }
+          const cmpSet = (a.set_name || '').localeCompare(b.set_name || '');
+          if (cmpSet !== 0) { cmp = cmpSet; break; }
+          
+          const numA = parseInt(a.number || '0', 10) || 0;
+          const numB = parseInt(b.number || '0', 10) || 0;
+          if (numA !== numB) { cmp = numA - numB; break; }
+          cmp = (a.number || '').localeCompare(b.number || '');
+          break;
+        }
+        case 'printing':
+          cmp = (printingOrder[a.printing] || 10) - (printingOrder[b.printing] || 10);
+          break;
+        case 'type': {
+          const orderA = POKEMON_TYPE_ORDER[typeCategory(a.types)] || 50;
+          const orderB = POKEMON_TYPE_ORDER[typeCategory(b.types)] || 50;
+          cmp = orderA - orderB;
+          break;
+        }
+        case 'language': {
+          const la = LANGUAGE_ORDER[a.language] || 99;
+          const lb = LANGUAGE_ORDER[b.language] || 99;
+          cmp = la - lb;
+          break;
+        }
+        case 'cmc':
+          cmp = (a.cmc || 0) - (b.cmc || 0);
+          break;
+        case 'color_identity':
+        case 'color': {
+          const cA = Array.isArray(a.color_identity) && a.color_identity.length > 0 ? a.color_identity[0] : 'Colorless';
+          const cB = Array.isArray(b.color_identity) && b.color_identity.length > 0 ? b.color_identity[0] : 'Colorless';
+          cmp = cA.localeCompare(cB);
+          break;
+        }
+        case 'rarity':
+          cmp = (a.rarity || '').localeCompare(b.rarity || '');
+          break;
+      }
+      if (cmp !== 0) return cmp * dirMult;
+    }
+    return 0;
+  });
   return sorted;
 }
 
@@ -125,24 +189,37 @@ function compartmentLabel(compartment, locationType) {
 
 function getSortCategory(card, sortOrder) {
   if (!card || !sortOrder || sortOrder === 'custom') return null;
-  if (sortOrder.startsWith('name')) return card.name ? card.name.charAt(0).toUpperCase() : '?';
-  if (sortOrder.startsWith('set')) {
+  let criteria = [];
+  if (typeof sortOrder === 'string') {
+    if (sortOrder.startsWith('[')) {
+      try { criteria = JSON.parse(sortOrder); } catch(e){}
+    } else {
+      criteria = [{by: sortOrder.split('-')[0]}];
+    }
+  } else if (Array.isArray(sortOrder)) {
+    criteria = sortOrder;
+  }
+  if (!criteria || criteria.length === 0) return null;
+
+  const primary = criteria[0].by;
+
+  if (primary === 'name') return card.name ? card.name.charAt(0).toUpperCase() : '?';
+  if (primary === 'set') {
     if (!card.set_name) return 'Unknown Set';
     if (!setsCache || setsCache.length === 0) return card.set_name;
     const idx = setsCache.findIndex(s => s.name === card.set_name);
     return idx >= 0 ? `${idx + 1}. ${card.set_name}` : card.set_name;
   }
-  if (sortOrder.startsWith('type')) {
-    let typeStr = 'Colorless';
+  if (primary === 'type' || primary === 'color') {
+    let types = [];
     if (card.types) {
       try {
-        const t = typeof card.types === 'string' ? JSON.parse(card.types) : card.types;
-        if (t && t.length > 0) typeStr = t[0];
-      } catch (e) {}
+        types = typeof card.types === 'string' ? JSON.parse(card.types) : card.types;
+      } catch (e) { types = Array.isArray(card.types) ? card.types : []; }
     }
-    return typeStr;
+    return typeCategory(types);
   }
-  if (sortOrder.startsWith('price')) {
+  if (primary === 'price') {
     const p = card.price_trend || 0;
     if (p >= 100) return '$100+';
     if (p >= 50) return '$50+';
@@ -152,7 +229,10 @@ function getSortCategory(card, sortOrder) {
     if (p >= 1) return '$1+';
     return '< $1';
   }
-  if (sortOrder.startsWith('language')) return card.language || 'English';
+  if (primary === 'language') return card.language || 'English';
+  if (primary === 'cmc') return `CMC ${card.cmc != null ? card.cmc : '?'}`;
+  if (primary === 'rarity') return card.rarity || 'Common';
+  
   return null;
 }
 
@@ -225,7 +305,7 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
   // 1. Get all cards in this location to check which sets are currently in which compartments
   const allLocationCards = await db.all(`
     SELECT c.id as entry_id, c.compartment_id, c.printing, c.language, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
-           cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
+           cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
     FROM collection c
     JOIN card_cache cc ON c.card_id = cc.id
     WHERE c.user_id = ? AND c.location_id = ?
@@ -263,7 +343,7 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
   if (allCompartmentsFull) {
     // Look for other locations of the same user
     const otherLocations = await db.all(
-      `SELECT id, name, type, sort_order, foil_sorting, user_id FROM locations WHERE user_id = ? AND id != ? ORDER BY id ASC`,
+      `SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, user_id FROM locations WHERE user_id = ? AND id != ? ORDER BY id ASC`,
       [location.user_id, location.id]
     );
     for (const otherLoc of otherLocations) {
@@ -424,7 +504,9 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
     rarity: cardMetadata.rarity || '',
     set_name: cardMetadata.set_name || '',
     number: cardMetadata.number || '0',
-    price_trend: resolveCardPrice(cardMetadata)
+    price_trend: resolveCardPrice(cardMetadata),
+    cmc: cardMetadata.cmc !== undefined ? cardMetadata.cmc : null,
+    color_identity: cardMetadata.color_identity || null
   };
 
   const sorted = sortCards([...existingCardsInPool, newCard], location.sort_order, location.foil_sorting);
@@ -490,7 +572,7 @@ async function rebalanceCompartmentByScheme(db, compartmentId, userId, location)
   }
   const cards = await db.all(`
     SELECT c.id, c.printing, c.language, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
-           cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
+           cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
     FROM collection c JOIN card_cache cc ON c.card_id = cc.id
     WHERE c.compartment_id = ? AND c.user_id = ?
   `, [compartmentId, userId]);

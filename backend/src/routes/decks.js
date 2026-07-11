@@ -15,6 +15,7 @@ router.get('/', async (req, res) => {
         d.id,
         d.name,
         d.description,
+        d.game,
         d.created_at,
         d.checked_out,
         d.checked_out_at,
@@ -36,15 +37,16 @@ router.get('/', async (req, res) => {
 
 // Create Deck
 router.post('/', async (req, res) => {
-  const { name, description = '' } = req.body;
+  const { name, description = '', game = 'pokemon' } = req.body;
   if (!name) {
     return res.status(400).json({ error: 'Deck name is required' });
   }
+  const deckGame = ['pokemon', 'mtg'].includes(game) ? game : 'pokemon';
 
   try {
     const result = await db.run(
-      `INSERT INTO decks (name, description, user_id) VALUES (?, ?, ?)`,
-      [name, description, req.user.id]
+      `INSERT INTO decks (name, description, game, user_id) VALUES (?, ?, ?, ?)`,
+      [name, description, deckGame, req.user.id]
     );
     res.status(201).json({ message: 'Deck created successfully', id: result.lastID });
   } catch (error) {

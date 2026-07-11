@@ -6,6 +6,7 @@ const helmet = require('helmet');
 const path = require('path');
 const db = require('./db');
 const tcgApi = require('./tcgApi');
+const scryfallApi = require('./scryfallApi');
 
 const authRoutes = require('./routes/auth');
 const sharedRoutes = require('./routes/shared');
@@ -47,7 +48,7 @@ app.use(helmet({
       scriptSrc: ["'self'", "'wasm-unsafe-eval'", 'blob:', 'https://cdn.jsdelivr.net', 'https://unpkg.com'],
       workerSrc: ["'self'", 'blob:'],
       connectSrc: ["'self'", 'https://cdn.jsdelivr.net', 'https://unpkg.com', 'https://tessdata.projectnaptha.com'],
-      imgSrc: ["'self'", 'data:', 'blob:', 'https://images.pokemontcg.io'],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https://images.pokemontcg.io', 'https://cards.scryfall.io', 'https://c1.scryfall.com', 'https://img.scryfall.com'],
       styleSrc: ["'self'", "'unsafe-inline'"],
       fontSrc: ["'self'", 'data:'],
       objectSrc: ["'none'"],
@@ -99,9 +100,10 @@ app.use(express.json({ limit: '15mb' }));
 db.initDb()
   .then(async () => {
     console.log('Database tables verified/created successfully.');
-    // Sync sets on startup
+    // Sync sets on startup (both games)
     await tcgApi.fetchAndCacheSets();
-    
+    await scryfallApi.fetchAndCacheSets();
+
     // Load sets into compartmentSort memory cache
     const { loadSetsCache } = require('./utils/compartmentSort');
     await loadSetsCache(db);
@@ -112,16 +114,19 @@ db.initDb()
     setInterval(async () => {
       try {
         await tcgApi.fetchAndCacheSets(true);
+        await scryfallApi.fetchAndCacheSets(true);
         await loadSetsCache(db);
       } catch (err) {
         console.error('Weekly sets refresh failed:', err);
       }
       tcgApi.updateCollectionPrices();
+      scryfallApi.updateCollectionPrices();
     }, 1000 * 60 * 60 * 24 * 7);
 
     // Run a price update in the background shortly after startup (after 30 seconds to not bog down init)
     setTimeout(() => {
       tcgApi.updateCollectionPrices();
+      scryfallApi.updateCollectionPrices();
     }, 30000);
 
     // Periodically purge expired sessions so the table doesn't grow unbounded
@@ -139,6 +144,7 @@ db.initDb()
 // Unauthenticated; pings the DB so a wedged database reads as unhealthy.
 // Declared before the /api collection mount so nothing shadows it.
 app.get('/api/health', async (req, res) => {
+  res.setHeader('X-App-Name', 'CardDexrr');
   try {
     await db.get('SELECT 1');
     res.json({ status: 'ok' });
@@ -183,7 +189,7 @@ app.use((err, req, res, next) => {
 // Start Express Server
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`=========================================`);
-  console.log(`Pokedexrr Server running on port ${PORT}`);
+  console.log(`CardDexrr Server running on port ${PORT}`);
   console.log(`Access local: http://localhost:${PORT}`);
   console.log(`=========================================`);
 });

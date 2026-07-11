@@ -142,8 +142,8 @@ async function cacheCards(cards) {
 
     await db.run(
       `INSERT OR REPLACE INTO card_cache
-       (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend, price_normal, price_holofoil, price_reverse_holofoil, price_avg1, price_avg7, price_avg30, last_updated)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+       (id, name, supertype, subtypes, types, rarity, set_id, set_name, number, image_url, price_trend, price_normal, price_holofoil, price_reverse_holofoil, price_avg1, price_avg7, price_avg30, cmc, color_identity, last_updated)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
       [
         card.id,
         card.name,
@@ -161,7 +161,9 @@ async function cacheCards(cards) {
         detailed.reverseHolofoil,
         detailed.avg1,
         detailed.avg7,
-        detailed.avg30
+        detailed.avg30,
+        null,
+        null
       ]
     );
   }
@@ -232,10 +234,10 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
   if (scope === 'collection') {
     if (!userId) return [];
     let collSql = `
-      SELECT cc.*, SUM(c.quantity) AS owned_qty 
+      SELECT cc.*, SUM(c.quantity) AS owned_qty
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
-      WHERE c.user_id = ? AND c.list_type = 'collection'
+      WHERE c.user_id = ? AND c.list_type = 'collection' AND cc.game = 'pokemon'
     `;
     const collParams = [userId];
 
@@ -269,7 +271,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
   // 2. Try local search first (if not forcing internet)
   let localResults = [];
   if (scope !== 'internet') {
-    let localSql = `SELECT * FROM card_cache WHERE 1=1`;
+    let localSql = `SELECT * FROM card_cache WHERE game = 'pokemon'`;
     const localParams = [];
 
     if (cleanName) {
@@ -442,7 +444,16 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
 // Fetch single card by ID (with caching)
 async function getCardById(id, apiKey = '') {
   const cached = await db.get(`SELECT * FROM card_cache WHERE id = ?`, [id]);
-  
+
+  // MTG cards live under the "mtg-" prefix and are served by Scryfall, not the
+  // Pokémon TCG API — never query pokemontcg.io for them (it would 404). Return
+  // whatever is cached (Scryfall refreshes MTG prices on search).
+  if (id && id.startsWith('mtg-')) {
+    return cached
+      ? { ...cached, subtypes: JSON.parse(cached.subtypes || '[]'), types: JSON.parse(cached.types || '[]') }
+      : null;
+  }
+
   // If cached and fresh (e.g. within 3 days), return it
   const cacheAgeLimit = 1000 * 60 * 60 * 24 * 3; // 3 days
   if (cached && (new Date() - new Date(cached.last_updated) < cacheAgeLimit)) {
@@ -558,11 +569,15 @@ async function updateCollectionPrices() {
   }
 
   try {
-    // Select unique card IDs from both collections (owned and wishlist) and decks
+    // Select unique Pokémon card IDs from both collections (owned and wishlist)
+    // and decks. MTG cards are excluded — they refresh via Scryfall on search,
+    // and hitting the Pokémon API for an "mtg-" id would just 404.
     const cardsInUse = await db.all(`
-      SELECT DISTINCT card_id FROM collection
+      SELECT DISTINCT c.card_id FROM collection c
+      JOIN card_cache cc ON c.card_id = cc.id WHERE cc.game = 'pokemon'
       UNION
-      SELECT DISTINCT card_id FROM deck_cards
+      SELECT DISTINCT d.card_id FROM deck_cards d
+      JOIN card_cache cc ON d.card_id = cc.id WHERE cc.game = 'pokemon'
     `);
     
     console.log(`Starting background price update for ${cardsInUse.length} unique cards...`);

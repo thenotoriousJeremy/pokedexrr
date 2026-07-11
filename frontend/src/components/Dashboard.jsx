@@ -30,6 +30,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [timePeriod, setTimePeriod] = useState('30d');
+  const [gameFilter, setGameFilter] = useState(''); // '' | 'pokemon' | 'mtg'
   
   // Timeline Chart State
   const [historyData, setHistoryData] = useState([]);
@@ -40,7 +41,8 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
 
   useEffect(() => {
     fetchStats();
-  }, [statsTrigger]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statsTrigger, gameFilter]);
 
   useEffect(() => {
     if (stats && stats.summary.totalCards > 0) {
@@ -52,7 +54,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
   const fetchStats = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/stats');
+      const response = await fetch(`/api/stats${gameFilter ? `?game=${gameFilter}` : ''}`);
       if (!response.ok) {
         throw new Error('Failed to load stats');
       }
@@ -98,7 +100,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
     return (
       <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem 1.5rem', color: 'var(--text-secondary)' }}>
         <TrendingUp size={48} style={{ color: 'var(--accent-red)', marginBottom: '1.5rem', opacity: 0.8 }} />
-        <h2 style={{ color: '#fff', marginBottom: '0.5rem' }}>Welcome to Pokedexrr!</h2>
+        <h2 style={{ color: '#fff', marginBottom: '0.5rem' }}>Welcome to CardDexrr!</h2>
         <p style={{ maxWidth: '400px', margin: '0 auto 1.5rem auto' }}>
           Your collection database is currently empty. Start scanning cards with your phone camera or search cards manually to build your binder!
         </p>
@@ -122,6 +124,23 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
 
   return (
     <div>
+      {/* Game filter: scopes every metric below to one game (or all). */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+        <div className="sub-nav-tabs" style={{ margin: 0 }}>
+          {[['', 'All'], ['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([val, label]) => (
+            <button
+              key={val || 'all'}
+              type="button"
+              className={`sub-nav-tab ${gameFilter === val ? 'active' : ''}`}
+              style={{ padding: '0.35rem 0.85rem', fontSize: '0.75rem' }}
+              onClick={() => setGameFilter(val)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Metrics Summary Grid */}
       <div className="metrics-grid">
         {/* Net Worth Card with historical switcher */}

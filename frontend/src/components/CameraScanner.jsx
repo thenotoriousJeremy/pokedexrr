@@ -17,6 +17,24 @@ function searchFailureMessage(status) {
   return 'Search failed. Server error.';
 }
 
+// Modern MTG cards print the set code and collector number in the bottom-left
+// corner (e.g. "0171/280 R" over "ELD • EN"). OCR there is noisy and the two
+// tokens may land on separate lines, so pull the set code (3-5 char token) and
+// the collector number independently rather than requiring one rigid pattern.
+function parseMtgSetNumber(text) {
+  const up = (text || '').toUpperCase();
+  const combined = up.match(/\b([A-Z0-9]{3,5})[\s/]+([0-9A-Z★]+)\b/);
+  if (combined && /\d/.test(combined[2])) {
+    return { set: combined[1], number: combined[2] };
+  }
+  const numMatch = up.match(/(\d{1,4})\s*\/\s*\d{1,4}/) || up.match(/\b(\d{1,4})[A-Z★]?\b/);
+  const setMatch = up.match(/\b([A-Z]{3}[A-Z0-9]{0,2})\b/); // 3-5 char, letter-led
+  const number = numMatch ? numMatch[1] : '';
+  const set = setMatch ? setMatch[1] : '';
+  if (!set && !number) return null;
+  return { set, number };
+}
+
 function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
   const [stream, setStream] = useState(null);
@@ -39,8 +57,19 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [guideOffsetY, setGuideOffsetY] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [videoRatio, setVideoRatio] = useState(null);
+  // Focus control
+  const [focusSupported, setFocusSupported] = useState(false);
+  const [focusMode, setFocusMode] = useState('continuous'); // 'continuous' | 'manual'
+  const [focusDistance, setFocusDistance] = useState(0);
+  const [focusRange, setFocusRange] = useState({ min: 0, max: 1, step: 0.1 });
   const [cardLayout, setCardLayout] = useState('modern');
-  
+  // Which game the current layout belongs to. 'mtg' is its own layout; every
+  // other layout value is a Pokémon sub-layout.
+  const scanGame = cardLayout === 'mtg' ? 'mtg' : 'pokemon';
+  // Manual MTG set code — persisted so a scanning session keeps using the same set.
+  const [mtgSetCode, setMtgSetCodeState] = useState(() => localStorage.getItem('scanner_mtg_set') || '');
+  const setMtgSetCode = (v) => { const upper = (v || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5); setMtgSetCodeState(upper); localStorage.setItem('scanner_mtg_set', upper); };
+
   // Scanned card text review overrides
   const [, setScannedName] = useState('');
   const [, setScannedNumber] = useState('');
@@ -283,6 +312,23 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
       setStream(mediaStream);
       setCameraActive(true);
+
+      // Detect focus capabilities
+      try {
+        const track = mediaStream.getVideoTracks()[0];
+        if (track && typeof track.getCapabilities === 'function') {
+          const caps = track.getCapabilities();
+          if (caps.focusMode && caps.focusMode.includes('manual') && caps.focusDistance) {
+            setFocusSupported(true);
+            setFocusRange({ min: caps.focusDistance.min, max: caps.focusDistance.max, step: caps.focusDistance.step || 0.01 });
+            setFocusDistance(caps.focusDistance.max * 0.3); // sensible default for cards
+          } else {
+            setFocusSupported(false);
+          }
+        }
+      } catch (e) {
+        console.warn('Focus detection failed:', e);
+      }
     } catch (err) {
       console.error('Error opening camera:', err);
       setHasCameraError(true);
@@ -638,8 +684,21 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       // 4. Query local database & API
       setScanStatus(`Searching database for: ${detectedName} ${detectedNumber}...`);
       const params = new URLSearchParams();
-      if (detectedName) params.append('name', detectedName);
-      if (detectedNumber) params.append('number', detectedNumber);
+      if (cardLayout === 'mtg') {
+        // MTG lookups are keyed off set code + collector number (exact match on
+        // Scryfall); the card name is a fallback if the corner didn't read.
+        params.append('game', 'mtg');
+        const parsed = parseMtgSetNumber(`${numLeftRaw} ${numRightRaw}`);
+        // Use OCR-detected set, fall back to manual set code input.
+        const effectiveSet = parsed?.set || mtgSetCode;
+        if (effectiveSet) params.append('set', effectiveSet);
+        if (parsed?.number) params.append('number', parsed.number);
+        else if (detectedNumber) params.append('number', detectedNumber);
+        if (detectedName) params.append('name', detectedName);
+      } else {
+        if (detectedName) params.append('name', detectedName);
+        if (detectedNumber) params.append('number', detectedNumber);
+      }
 
       const searchResponse = await fetch(`/api/search?${params.toString()}`);
       if (scanId !== currentScanId.current) return;
@@ -656,8 +715,10 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           setScanFlash('success');
           setTimeout(() => setScanFlash(null), 1500);
           
-          // Auto-open drawer if exactly one perfect match is found, or auto-add in bulk mode
-          if (matches.length === 1) {
+          // Auto-open drawer if exactly one perfect match is found, or auto-add in bulk mode.
+          // MTG scans skip auto-add — name-only fallback returns multiple printings
+          // and the user must pick the correct one from the list.
+          if (matches.length === 1 && scanGame !== 'mtg') {
             if (autoScan) {
               setAutoAddTargetCard(matches[0]);
               setAutoAddCountdown(2);
@@ -856,20 +917,26 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 }}
               >
                 {/* Name Guide: shift lower and widen if trainer layout */}
-                <div 
-                  className="scan-region-title" 
+                <div
+                  className="scan-region-title"
                   style={
                     cardLayout === 'trainer' ? { top: '11%', height: '7%', width: '75%' } :
                     cardLayout === 'vintage' ? { top: '8%', height: '6.5%' } :
                     {}
                   }
                 />
-                
-                {/* Left Number Guide: show for Modern, Trainer, Japanese (custom left positioning for Japanese) */}
-                {(cardLayout === 'modern' || cardLayout === 'trainer' || cardLayout === 'japanese') && (
-                  <div 
-                    className="scan-region-number-left" 
-                    style={cardLayout === 'japanese' ? { left: '4%', bottom: '5%' } : {}}
+
+                {/* Left Number Guide: show for Modern, Trainer, Japanese, MTG. MTG
+                    puts the set code + collector number in the bottom-left corner,
+                    so the box sits low-left and is taller to catch its two lines. */}
+                {(cardLayout === 'modern' || cardLayout === 'trainer' || cardLayout === 'japanese' || cardLayout === 'mtg') && (
+                  <div
+                    className="scan-region-number-left"
+                    style={
+                      cardLayout === 'japanese' ? { left: '4%', bottom: '5%' } :
+                      cardLayout === 'mtg' ? { left: '4%', bottom: '4%', width: '45%', height: '11%' } :
+                      {}
+                    }
                   />
                 )}
                 
@@ -964,19 +1031,113 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 <button type="button" className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0.2rem', marginTop: '0.25rem' }} onClick={() => { setGuideScale(0.70); setGuideRotation(0); setGuideOffsetX(0); setGuideOffsetY(0); }}>Reset Overlay</button>
               </div>
 
-              {/* Card Layout Selection */}
-              <div className="sub-nav-tabs" style={{ marginBottom: 0, marginTop: '0.5rem' }}>
-                {['modern', 'vintage', 'trainer', 'japanese'].map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={`sub-nav-tab ${cardLayout === mode ? 'active' : ''}`}
-                    style={{ padding: '0.5rem', fontSize: '0.75rem', textTransform: 'capitalize' }}
-                    onClick={() => setCardLayout(mode)}
-                  >
-                    {mode}
-                  </button>
-                ))}
+              {/* Focus Control */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', background: 'rgba(0,0,0,0.15)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Focus</span>
+                  {focusSupported ? (
+                    <button
+                      type="button"
+                      className={`btn ${focusMode === 'manual' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
+                      onClick={() => {
+                        const next = focusMode === 'continuous' ? 'manual' : 'continuous';
+                        setFocusMode(next);
+                        try {
+                          const track = stream?.getVideoTracks()[0];
+                          if (track) {
+                            if (next === 'manual') {
+                              track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: focusDistance }] });
+                            } else {
+                              track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+                            }
+                          }
+                        } catch (e) { console.warn('Focus toggle failed:', e); }
+                      }}
+                    >
+                      {focusMode === 'manual' ? 'Manual' : 'Auto'}
+                    </button>
+                  ) : (
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Not supported</span>
+                  )}
+                </div>
+                {focusSupported && focusMode === 'manual' && (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Near</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-primary)' }}>{focusDistance.toFixed(2)}</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Far</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={focusRange.min}
+                      max={focusRange.max}
+                      step={focusRange.step}
+                      value={focusDistance}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        setFocusDistance(val);
+                        try {
+                          const track = stream?.getVideoTracks()[0];
+                          if (track) track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: val }] });
+                        } catch (err) { console.warn('Focus adjust failed:', err); }
+                      }}
+                      style={{ width: '100%', cursor: 'pointer' }}
+                    />
+                  </>
+                )}
+              </div>
+
+              {/* Game selection first, then that game's layouts. */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
+                <div className="sub-nav-tabs" style={{ marginBottom: 0 }}>
+                  {[['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([g, label]) => (
+                    <button
+                      key={g}
+                      type="button"
+                      className={`sub-nav-tab ${scanGame === g ? 'active' : ''}`}
+                      style={{ padding: '0.5rem', fontSize: '0.8rem', fontWeight: 700 }}
+                      onClick={() => setCardLayout(g === 'mtg' ? 'mtg' : 'modern')}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {scanGame === 'pokemon' ? (
+                  <div className="sub-nav-tabs" style={{ marginBottom: 0 }}>
+                    {['modern', 'vintage', 'trainer', 'japanese'].map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`sub-nav-tab ${cardLayout === mode ? 'active' : ''}`}
+                        style={{ padding: '0.5rem', fontSize: '0.75rem', textTransform: 'capitalize' }}
+                        onClick={() => setCardLayout(mode)}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', margin: 0, textAlign: 'center' }}>
+                      Aim the guide box at the bottom-left set code + collector number.
+                    </p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Set Code</label>
+                      <input
+                        type="text"
+                        value={mtgSetCode}
+                        onChange={(e) => setMtgSetCode(e.target.value)}
+                        placeholder="e.g. FDN, ELD, M21"
+                        style={{ flex: 1, padding: '0.3rem 0.5rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: '#fff', textTransform: 'uppercase', letterSpacing: '0.05em' }}
+                      />
+                      {mtgSetCode && (
+                        <button type="button" className="btn btn-secondary" style={{ fontSize: '0.6rem', padding: '0.2rem 0.4rem' }} onClick={() => setMtgSetCode('')}>Clear</button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

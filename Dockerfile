@@ -1,4 +1,5 @@
 # =========================================
+# CardDexrr Dockerfile
 # Stage 1: Build Frontend Assets
 # =========================================
 FROM node:20-alpine AS frontend-builder

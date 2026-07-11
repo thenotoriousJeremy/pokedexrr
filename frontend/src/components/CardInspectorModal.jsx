@@ -5,6 +5,14 @@ import { formatPrice } from '../utils/formatPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 import PriceHistoryChart from './PriceHistoryChart';
 
+// MTG color identity pip colors (WUBRG), approximating the printed mana colors.
+const MTG_COLOR_BG = {
+  White: '#f8f6d8', Blue: '#0e68ab', Black: '#2b2422', Red: '#d3202a', Green: '#00733e'
+};
+const MTG_COLOR_FG = {
+  White: '#3a3520', Blue: '#fff', Black: '#fff', Red: '#fff', Green: '#fff'
+};
+
 // Shared card detail popup used by Dashboard, CollectionList and LocationManager.
 // Self-contained: owns its edit form (PUT) and delete (DELETE) so every screen
 // gets the same rich view + edit without duplicating the form. onUpdate() lets
@@ -213,6 +221,27 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
               {getCardDisplayName(card.name, card.language)}
             </h3>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 500 }}>{card.set_name} • Card #{card.number}</p>
+
+            {/* MTG cards: show color pips + type line (Pokémon energy types are
+                already conveyed via the type-glow styling elsewhere). */}
+            {card.supertype === 'MTG' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                {(Array.isArray(card.types) ? card.types : []).map(color => (
+                  <span key={color} className={`mtg-color-pip mtg-color-${color.toLowerCase()}`} style={{
+                    fontSize: '0.6rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em',
+                    padding: '0.15rem 0.45rem', borderRadius: '999px',
+                    background: MTG_COLOR_BG[color] || 'rgba(255,255,255,0.1)',
+                    color: MTG_COLOR_FG[color] || '#fff', border: '1px solid rgba(0,0,0,0.2)'
+                  }}>{color}</span>
+                ))}
+                {(!card.types || card.types.length === 0) && (
+                  <span style={{ fontSize: '0.6rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.15rem 0.45rem', borderRadius: '999px', background: 'rgba(180,180,180,0.25)', color: '#eee' }}>Colorless</span>
+                )}
+                {Array.isArray(card.subtypes) && card.subtypes.length > 0 && (
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{card.subtypes.join(' ')}</span>
+                )}
+              </div>
+            )}
           </div>
 
           {mode === 'edit' ? (

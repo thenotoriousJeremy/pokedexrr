@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const tcgApi = require('../tcgApi');
+const scryfallApi = require('../scryfallApi');
 const { authenticateToken, searchLimiter, importLimiter } = require('../middleware/auth');
 const {
   resolveCardPrice,
@@ -60,10 +61,10 @@ async function resolveCompartmentAndPosition({ locationId, compartmentId, positi
     return { compartment_id: null, position: position !== undefined ? position : 0 };
   }
 
-  const location = await db.get(`SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, user_id FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
+  const location = await db.get(`SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, user_id FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
   if (!location) return { compartment_id: null, position: 0 };
 
-  const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity FROM card_cache WHERE id = ?`, [cardId]);
+  const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity, game, cmc, color_identity FROM card_cache WHERE id = ?`, [cardId]);
   if (!cardMetadata) return { compartment_id: null, position: 0 };
   cardMetadata.printing = printing || 'Normal';
   cardMetadata.language = language || 'English';
@@ -103,11 +104,14 @@ const router = express.Router();
 
 router.use(authenticateToken);
 
-// 1. Search Pokémon TCG cards (proxies to Pokemon TCG API and database cache)
+// 1. Search cards (proxies to Pokémon TCG or Scryfall + database cache). The
+// `game` param routes to the right provider; both return the same card shape.
 router.get('/search', searchLimiter, async (req, res) => {
-  const { name, number, set, scope = 'database' } = req.query;
+  const { name, number, set, scope = 'database', game = 'pokemon', lang } = req.query;
   try {
-    const results = await tcgApi.searchCards(name, number, set, req.user.tcg_api_key, scope, req.user.id);
+    const results = game === 'mtg'
+      ? await scryfallApi.searchCards(name, number, set, scope, req.user.id, lang)
+      : await tcgApi.searchCards(name, number, set, req.user.tcg_api_key, scope, req.user.id);
     res.json(results);
   } catch (error) {
     console.error(error);
@@ -167,6 +171,7 @@ router.get('/collection', async (req, res) => {
         cc.price_normal,
         cc.price_holofoil,
         cc.price_reverse_holofoil,
+        cc.game,
         l.id as location_id,
         l.name as location_name,
         l.type as location_type,
@@ -260,7 +265,12 @@ router.post('/collection', async (req, res) => {
       : null;
 
     // No stacking logic here anymore
-    
+
+    // The card's game is derived from its cached metadata, not the client, so a
+    // Scryfall-sourced card is always tagged 'mtg' in the collection.
+    const cardMeta = await db.get(`SELECT game FROM card_cache WHERE id = ?`, [card_id]);
+    const cardGame = (cardMeta && cardMeta.game) ? cardMeta.game : 'pokemon';
+
     // If the frontend passed quantity > 1, we insert them as separate unstacked rows
     const numToInsert = quantity ? parseInt(quantity, 10) : 1;
     let lastInsertedId;
@@ -268,8 +278,8 @@ router.post('/collection', async (req, res) => {
     for (let i = 0; i < numToInsert; i++) {
       const result = await db.run(`
         INSERT INTO collection
-        (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, user_id, list_type, is_trade, position)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (card_id, quantity, condition, printing, language, purchase_price, location_id, compartment_id, user_id, list_type, is_trade, position, game)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         card_id,
         1, // ALWAYS 1, never stacked
@@ -282,7 +292,8 @@ router.post('/collection', async (req, res) => {
         req.user.id,
         list_type,
         is_trade ? 1 : 0,
-        resolved.position
+        resolved.position,
+        cardGame
       ]);
       lastInsertedId = result.lastID;
 
@@ -300,7 +311,7 @@ router.post('/collection', async (req, res) => {
       await db.run(`INSERT OR IGNORE INTO price_history (card_id, price) VALUES (?, ?)`, [card_id, cacheCard.price_trend]);
     }
 
-    res.status(201).json({
+    res.status(200).json({
       message: 'Card added to collection',
       id: lastInsertedId,
       // Where the card physically landed, so the scanner can tell the user
@@ -447,6 +458,73 @@ router.delete('/collection/:id', async (req, res) => {
   }
 });
 
+// 5b. Bulk actions on selected collection entries (multi-select).
+// Every action is scoped to the caller's own rows.
+const BULK_ACTIONS = ['delete', 'move', 'trade', 'untrade', 'list_type'];
+router.post('/collection/bulk', async (req, res) => {
+  const { entry_ids = [], action, value } = req.body;
+  if (!Array.isArray(entry_ids) || entry_ids.length === 0) {
+    return res.status(400).json({ error: 'entry_ids is required' });
+  }
+  if (!BULK_ACTIONS.includes(action)) {
+    return res.status(400).json({ error: 'Invalid action' });
+  }
+  const ids = entry_ids.map(n => parseInt(n, 10)).filter(Number.isInteger);
+  if (ids.length === 0) return res.status(400).json({ error: 'No valid entry_ids' });
+  const placeholders = ids.map(() => '?').join(',');
+
+  try {
+    if (action === 'delete') {
+      const result = await db.run(`DELETE FROM collection WHERE id IN (${placeholders}) AND user_id = ?`, [...ids, req.user.id]);
+      return res.json({ message: `Deleted ${result.changes} card(s)`, affected: result.changes });
+    }
+
+    if (action === 'trade' || action === 'untrade') {
+      const result = await db.run(`UPDATE collection SET is_trade = ? WHERE id IN (${placeholders}) AND user_id = ?`, [action === 'trade' ? 1 : 0, ...ids, req.user.id]);
+      return res.json({ message: `Updated ${result.changes} card(s)`, affected: result.changes });
+    }
+
+    if (action === 'list_type') {
+      if (!['collection', 'wishlist'].includes(value)) return res.status(400).json({ error: 'Invalid list_type' });
+      const result = await db.run(`UPDATE collection SET list_type = ? WHERE id IN (${placeholders}) AND user_id = ?`, [value, ...ids, req.user.id]);
+      return res.json({ message: `Moved ${result.changes} card(s) to ${value}`, affected: result.changes });
+    }
+
+    // action === 'move': value = target location id, or null/'' to unassign.
+    const locationId = value ? parseInt(value, 10) : null;
+    if (locationId) {
+      const loc = await db.get(`SELECT id FROM locations WHERE id = ? AND user_id = ?`, [locationId, req.user.id]);
+      if (!loc) return res.status(400).json({ error: 'Invalid location ID' });
+    }
+    let moved = 0;
+    const touched = new Map(); // compartment_id -> location_id, rebalanced once at the end
+    for (const id of ids) {
+      const entry = await db.get(`SELECT * FROM collection WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+      if (!entry) continue;
+      if (!locationId) {
+        await db.run(`UPDATE collection SET location_id = NULL, compartment_id = NULL, position = 0 WHERE id = ? AND user_id = ?`, [id, req.user.id]);
+        moved++;
+        continue;
+      }
+      const resolved = await resolveCompartmentAndPosition({
+        locationId, userId: req.user.id, cardId: entry.card_id, printing: entry.printing, language: entry.language
+      });
+      const finalLoc = resolved.compartment_id ? (resolved.location_id ?? locationId) : null;
+      await db.run(`UPDATE collection SET location_id = ?, compartment_id = ?, position = ? WHERE id = ? AND user_id = ?`, [finalLoc, resolved.compartment_id, resolved.position, id, req.user.id]);
+      if (resolved.compartment_id) touched.set(resolved.compartment_id, finalLoc);
+      moved++;
+    }
+    for (const [compId, locId] of touched) {
+      const rbLoc = await db.get(`SELECT sort_order, foil_sorting FROM locations WHERE id = ? AND user_id = ?`, [locId, req.user.id]);
+      await rebalanceCompartmentByScheme(db, compId, req.user.id, rbLoc);
+    }
+    return res.json({ message: `Moved ${moved} card(s)`, affected: moved });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Bulk action failed' });
+  }
+});
+
 // 6. Manage Locations (Physical Storage)
 router.get('/locations', async (req, res) => {
   try {
@@ -466,6 +544,7 @@ router.get('/locations', async (req, res) => {
 });
 
 const RULE_TYPES = ['any', 'alphabetical_range', 'specific_sets'];
+const GAME_RESTRICTIONS = ['any', 'pokemon', 'mtg'];
 
 // rule_config arrives as an object (structured editor) or an already-encoded
 // JSON string; store canonical JSON text either way. Double-stringifying a
@@ -478,13 +557,16 @@ function normalizeRuleConfig(rule_config) {
 }
 
 router.post('/locations', async (req, res) => {
-  const { name, type, sort_order = 'name-asc', foil_sorting = 'normals_first', rule_type = 'any', rule_config, compartmentPlan } = req.body;
+  const { name, type, sort_order = 'name-asc', foil_sorting = 'normals_first', rule_type = 'any', rule_config, compartmentPlan, game = 'any' } = req.body;
 
   if (!name || !type) {
     return res.status(400).json({ error: 'name and type are required' });
   }
   if (!RULE_TYPES.includes(rule_type)) {
     return res.status(400).json({ error: 'Invalid rule_type' });
+  }
+  if (!GAME_RESTRICTIONS.includes(game)) {
+    return res.status(400).json({ error: 'Invalid game restriction' });
   }
   let ruleConfigJson;
   try {
@@ -499,14 +581,14 @@ router.post('/locations', async (req, res) => {
     }
 
     const result = await db.run(`
-      INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, rule_config, user_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [name, type, sort_order, foil_sorting || 'normals_first', rule_type, ruleConfigJson, req.user.id]);
+      INSERT INTO locations (name, type, sort_order, foil_sorting, rule_type, rule_config, game, user_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [name, type, sort_order, foil_sorting || 'normals_first', rule_type, ruleConfigJson, game, req.user.id]);
 
     const plan = compartmentPlan || defaultCompartmentPlan(type);
     await db.createCompartments(result.lastID, Math.max(1, parseInt(plan.count, 10) || 1), Math.max(1, parseInt(plan.capacity, 10) || 40));
 
-    res.status(201).json({ message: 'Location created', id: result.lastID });
+    res.status(200).json({ message: 'Location created', id: result.lastID });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to create location' });
@@ -527,9 +609,12 @@ router.get('/locations/:id', async (req, res) => {
 
 router.put('/locations/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, type, sort_order, foil_sorting, rule_type, rule_config } = req.body;
+  const { name, type, sort_order, foil_sorting, rule_type, rule_config, game } = req.body;
   if (rule_type !== undefined && !RULE_TYPES.includes(rule_type)) {
     return res.status(400).json({ error: 'Invalid rule_type' });
+  }
+  if (game !== undefined && !GAME_RESTRICTIONS.includes(game)) {
+    return res.status(400).json({ error: 'Invalid game restriction' });
   }
   let ruleConfigJson;
   try {
@@ -558,9 +643,10 @@ router.put('/locations/:id', async (req, res) => {
         sort_order = COALESCE(?, sort_order),
         foil_sorting = COALESCE(?, foil_sorting),
         rule_type = COALESCE(?, rule_type),
-        rule_config = COALESCE(?, rule_config)
+        rule_config = COALESCE(?, rule_config),
+        game = COALESCE(?, game)
       WHERE id = ? AND user_id = ?
-    `, [name, type, sort_order, foil_sorting, rule_type, ruleConfigJson, id, req.user.id]);
+    `, [name, type, sort_order, foil_sorting, rule_type, ruleConfigJson, game, id, req.user.id]);
     res.json({ message: 'Location updated' });
   } catch (error) {
     console.error(error);
@@ -790,7 +876,7 @@ router.get('/locations/:id/recommend', async (req, res) => {
     const location = await db.get(`SELECT * FROM locations WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (!location) return res.status(404).json({ error: 'Location not found' });
 
-    const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity FROM card_cache WHERE id = ?`, [card_id]);
+    const cardMetadata = await db.get(`SELECT name, set_name, number, types, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity, game, cmc, color_identity FROM card_cache WHERE id = ?`, [card_id]);
     if (!cardMetadata) return res.status(404).json({ error: 'Card not found in cache' });
     cardMetadata.printing = printing || 'Normal';
     cardMetadata.language = language || 'English';
@@ -829,7 +915,7 @@ router.post('/smart-recommend-batch', async (req, res) => {
 
     for (const entryId of entry_ids) {
       const entry = await db.get(`
-        SELECT c.id as entry_id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url
+        SELECT c.id as entry_id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url, cc.game
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
         WHERE c.id = ? AND c.user_id = ?
@@ -910,7 +996,7 @@ router.post('/locations/:id/recommend-batch', async (req, res) => {
 
     for (const entryId of entry_ids) {
       const entry = await db.get(`
-        SELECT c.id as entry_id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url
+        SELECT c.id as entry_id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.image_url, cc.game
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
         WHERE c.id = ? AND c.user_id = ?
@@ -982,7 +1068,7 @@ router.post('/locations/:id/apply-all', async (req, res) => {
 
     for (const entryId of entry_ids) {
       const entry = await db.get(`
-        SELECT c.id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity
+        SELECT c.id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.game
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
         WHERE c.id = ? AND c.user_id = ?
@@ -1023,7 +1109,7 @@ router.post('/locations/:id/resort', async (req, res) => {
 
     const cards = await db.all(`
       SELECT c.id as entry_id, c.card_id, c.printing, c.language, c.quantity,
-             cc.name, cc.set_name, cc.number, cc.types, cc.rarity, cc.supertype, cc.image_url,
+             cc.name, cc.set_name, cc.number, cc.types, cc.rarity, cc.supertype, cc.image_url, cc.game,
              cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
@@ -1077,6 +1163,11 @@ router.post('/locations/:id/resort', async (req, res) => {
 // 7. Get Collection Statistics & Analytics
 router.get('/stats', async (req, res) => {
   try {
+    // Optional per-game view (e.g. only Pokémon or only MTG). Absent = all games.
+    const { game } = req.query;
+    const gameFilter = game ? ` AND cc.game = ?` : '';
+    const statsParams = game ? [req.user.id, game] : [req.user.id];
+
     // Retrieve all collection items to compute statistics
     const query = `
       SELECT
@@ -1087,9 +1178,9 @@ router.get('/stats', async (req, res) => {
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       LEFT JOIN locations l ON c.location_id = l.id
-      WHERE c.user_id = ?
+      WHERE c.user_id = ?${gameFilter}
     `;
-    const rows = await db.all(query, [req.user.id]);
+    const rows = await db.all(query, statsParams);
 
     let totalCards = 0;
     let uniqueCards = rows.length;
@@ -1185,7 +1276,7 @@ router.get('/stats', async (req, res) => {
         cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
-      WHERE c.user_id = ?
+      WHERE c.user_id = ?${gameFilter}
       ORDER BY CASE
         WHEN c.printing = 'Holofoil' AND cc.price_holofoil IS NOT NULL AND cc.price_holofoil > 0 THEN cc.price_holofoil
         WHEN c.printing = 'Reverse Holofoil' AND cc.price_reverse_holofoil IS NOT NULL AND cc.price_reverse_holofoil > 0 THEN cc.price_reverse_holofoil
@@ -1194,7 +1285,7 @@ router.get('/stats', async (req, res) => {
       END DESC
       LIMIT 6
     `;
-    const topValuableRows = await db.all(topValuableQuery, [req.user.id]);
+    const topValuableRows = await db.all(topValuableQuery, statsParams);
     const topValuable = topValuableRows.map(row => ({
       ...row,
       price_trend: resolveCardPrice(row)
@@ -1251,10 +1342,10 @@ router.get('/stats', async (req, res) => {
              cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
-      WHERE c.user_id = ?
+      WHERE c.user_id = ?${gameFilter}
       ORDER BY c.added_at DESC
       LIMIT 6
-    `, [req.user.id]);
+    `, statsParams);
     const recentAdditions = recentRows.map(row => ({ ...row, price_trend: resolveCardPrice(row) }));
 
     const gainAbs = totalValue - totalSpent;
@@ -1462,13 +1553,13 @@ router.get('/export', async (req, res) => {
 
     if (format.toLowerCase() === 'json') {
       res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', 'attachment; filename=pokedexrr_collection.json');
+      res.setHeader('Content-Disposition', 'attachment; filename=carddexrr_collection.json');
       return res.json(rows);
     }
 
     // Default to CSV
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename=pokedexrr_collection.csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=carddexrr_collection.csv');
 
     // Headers
     const headers = [

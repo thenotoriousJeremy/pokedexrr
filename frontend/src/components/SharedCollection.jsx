@@ -93,7 +93,7 @@ function SharedCollection({ shareToken }) {
             borderRadius: 'var(--radius-sm)',
             boxShadow: 'var(--shadow-accent)'
           }}>
-            Go to Pokedexrr
+            Go to CardDexrr
           </a>
         </div>
       </div>

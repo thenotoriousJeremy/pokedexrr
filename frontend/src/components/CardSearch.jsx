@@ -11,6 +11,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   const [query, setQuery] = useState('');
   const [numberQuery, setNumberQuery] = useState('');
   const [setCodeQuery, setSetCodeQuery] = useState('');
+  const [game, setGame] = useState('pokemon'); // 'pokemon' | 'mtg'
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -69,11 +70,13 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
     setSortBy('relevance');
     try {
       const params = new URLSearchParams();
-      const finalQuery = query ? (translateJapaneseName(query) || query) : '';
+      // Japanese-name translation is a Pokémon-only helper; MTG names go through as typed.
+      const finalQuery = query ? (game === 'mtg' ? query : (translateJapaneseName(query) || query)) : '';
       if (finalQuery) params.append('name', finalQuery);
       if (numberQuery) params.append('number', numberQuery);
       if (setCodeQuery) params.append('set', setCodeQuery);
       params.append('scope', 'internet');
+      params.append('game', game);
 
       const response = await fetch(`/api/search?${params.toString()}`);
       if (response.ok) {
@@ -235,7 +238,22 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
     <div>
       {/* Search Header Panel */}
       <div className="glass-panel" style={{ marginBottom: '2rem' }}>
-        <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem', color: '#fff' }}>Search Pokemon Cards</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
+          <h2 style={{ fontSize: '1.25rem', margin: 0, color: '#fff' }}>Search {game === 'mtg' ? 'Magic: The Gathering' : 'Pokémon'} Cards</h2>
+          <div className="sub-nav-tabs" style={{ margin: 0 }}>
+            {[['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([val, label]) => (
+              <button
+                key={val}
+                type="button"
+                className={`sub-nav-tab ${game === val ? 'active' : ''}`}
+                style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}
+                onClick={() => setGame(val)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         <form onSubmit={handleSearch} style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.75rem' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
@@ -244,7 +262,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
                 <input 
                   type="text" 
                   className="input-control" 
-                  placeholder="e.g. Charizard, Pikachu, Mewtwo..." 
+                  placeholder={game === 'mtg' ? 'e.g. Black Lotus, Lightning Bolt...' : 'e.g. Charizard, Pikachu, Mewtwo...'}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   style={{ width: '100%', paddingLeft: '2.5rem' }}
@@ -270,7 +288,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
               <input 
                 type="text" 
                 className="input-control" 
-                placeholder="e.g. Base, Jungle, sv3pt5" 
+                placeholder={game === 'mtg' ? 'e.g. eld, m10, Throne of Eldraine' : 'e.g. Base, Jungle, sv3pt5'}
                 value={setCodeQuery}
                 onChange={(e) => setSetCodeQuery(e.target.value)}
               />

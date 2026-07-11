@@ -55,7 +55,7 @@ window.fetch = function (input, options = {}) {
   const url = typeof input === 'string' ? input : (input && input.url) || '';
   const isPublicOrAuthRoute = url.includes('/api/shared/') || url.includes('/api/auth/login') || url.includes('/api/auth/register');
 
-  const token = localStorage.getItem('pokedexrr_token');
+  const token = localStorage.getItem('carddexrr_token');
   const finalOptions = { ...options };
   if (token && url.startsWith('/api/') && !isPublicOrAuthRoute) {
     finalOptions.headers = {
@@ -66,17 +66,17 @@ window.fetch = function (input, options = {}) {
   return originalFetch(input, finalOptions).then(response => {
     if (response.status === 401 && !isPublicOrAuthRoute) {
       // Dispatch custom event to trigger logout without page refresh
-      window.dispatchEvent(new Event('pokedexrr_logout'));
+      window.dispatchEvent(new Event('carddexrr_logout'));
     }
     return response;
   });
 };
 
 function App() {
-  const [token, setToken] = useState(localStorage.getItem('pokedexrr_token'));
+  const [token, setToken] = useState(localStorage.getItem('carddexrr_token'));
   const [user, setUser] = useState(() => {
     try {
-      const u = localStorage.getItem('pokedexrr_user');
+      const u = localStorage.getItem('carddexrr_user');
       return u ? JSON.parse(u) : null;
     } catch {
       return null;
@@ -114,19 +114,19 @@ function App() {
     const handleAutoLogout = () => {
       setToken(null);
       setUser(null);
-      localStorage.removeItem('pokedexrr_token');
-      localStorage.removeItem('pokedexrr_user');
+      localStorage.removeItem('carddexrr_token');
+      localStorage.removeItem('carddexrr_user');
       showToast('Session expired. Please log in again.');
     };
-    window.addEventListener('pokedexrr_logout', handleAutoLogout);
-    return () => window.removeEventListener('pokedexrr_logout', handleAutoLogout);
+    window.addEventListener('carddexrr_logout', handleAutoLogout);
+    return () => window.removeEventListener('carddexrr_logout', handleAutoLogout);
   }, []);
 
   const handleLoginSuccess = (newToken, newUser) => {
     setToken(newToken);
     setUser(newUser);
-    localStorage.setItem('pokedexrr_token', newToken);
-    localStorage.setItem('pokedexrr_user', JSON.stringify(newUser));
+    localStorage.setItem('carddexrr_token', newToken);
+    localStorage.setItem('carddexrr_user', JSON.stringify(newUser));
     showToast(`Welcome back, ${newUser.username}!`);
     setActiveTab('dashboard');
   };
@@ -137,14 +137,14 @@ function App() {
 
     setToken(null);
     setUser(null);
-    localStorage.removeItem('pokedexrr_token');
-    localStorage.removeItem('pokedexrr_user');
+    localStorage.removeItem('carddexrr_token');
+    localStorage.removeItem('carddexrr_user');
     showToast('Logged out successfully.');
   };
 
   const handleUpdateUser = (updatedUser) => {
     setUser(updatedUser);
-    localStorage.setItem('pokedexrr_user', JSON.stringify(updatedUser));
+    localStorage.setItem('carddexrr_user', JSON.stringify(updatedUser));
   };
 
   const triggerRefresh = () => {
@@ -215,7 +215,7 @@ function App() {
       <header className="app-header" style={{ position: 'relative' }}>
         <div className="logo-section">
           <div className="logo-icon"></div>
-          <h1 className="logo-text">Poke<span>dexrr</span></h1>
+          <h1 className="logo-text">Card<span>Dexrr</span></h1>
         </div>
 
         {/* Navigation Tabs (Nested inside header for unified layout) */}

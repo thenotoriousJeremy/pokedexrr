@@ -127,7 +127,7 @@ async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       type TEXT CHECK(type IN ('Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other')) NOT NULL,
-      sort_order TEXT DEFAULT 'name-asc',
+      sort_order TEXT DEFAULT '[{"by":"name","dir":"asc"}]',
       foil_sorting TEXT DEFAULT 'normals_first',
       rule_type TEXT DEFAULT 'any',
       rule_config TEXT,
@@ -191,6 +191,8 @@ async function initDb() {
       price_normal REAL,
       price_holofoil REAL,
       price_reverse_holofoil REAL,
+      cmc REAL,
+      color_identity TEXT, -- Store JSON string
       last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -267,6 +269,12 @@ async function initDb() {
     await run(`ALTER TABLE collection ADD COLUMN list_type TEXT DEFAULT 'collection'`);
   }
 
+  // Add game to collection table if missing (multi-game support: 'pokemon' | 'mtg')
+  if (!collectionCols.some(c => c.name === 'game')) {
+    console.log('Adding game column to collection table...');
+    await run(`ALTER TABLE collection ADD COLUMN game TEXT DEFAULT 'pokemon'`);
+  }
+
   // 2. Add user_id to locations table if missing
   const locationsCols = await all(`PRAGMA table_info(locations)`);
   if (!locationsCols.some(c => c.name === 'user_id')) {
@@ -275,7 +283,7 @@ async function initDb() {
   }
   if (!locationsCols.some(c => c.name === 'sort_order')) {
     console.log('Adding sort_order column to locations table...');
-    await run(`ALTER TABLE locations ADD COLUMN sort_order TEXT DEFAULT 'name-asc'`);
+    await run(`ALTER TABLE locations ADD COLUMN sort_order TEXT DEFAULT '[{"by":"name","dir":"asc"}]'`);
   }
   if (!locationsCols.some(c => c.name === 'foil_sorting')) {
     console.log('Adding foil_sorting column to locations table...');
@@ -288,6 +296,12 @@ async function initDb() {
   if (!locationsCols.some(c => c.name === 'rule_config')) {
     console.log('Adding rule_config column to locations table...');
     await run(`ALTER TABLE locations ADD COLUMN rule_config TEXT`);
+  }
+  // Restrict a container to one game's cards. 'any' accepts both; 'pokemon' /
+  // 'mtg' reject the other game during filing (keeps mixed collections apart).
+  if (!locationsCols.some(c => c.name === 'game')) {
+    console.log('Adding game column to locations table...');
+    await run(`ALTER TABLE locations ADD COLUMN game TEXT DEFAULT 'any'`);
   }
 
   // Add position column to collection table if missing (ordering within a
@@ -344,6 +358,31 @@ async function initDb() {
     console.log('Adding price_avg30 column to card_cache table...');
     await run(`ALTER TABLE card_cache ADD COLUMN price_avg30 REAL`);
   }
+  // Game tag so a single card_cache holds both Pokémon (tcgApi) and MTG
+  // (scryfallApi) cards. Search filters on it; collections derive their game
+  // from the cached card. Existing rows default to 'pokemon'.
+  if (!cardCacheCols.some(c => c.name === 'game')) {
+    console.log('Adding game column to card_cache table...');
+    await run(`ALTER TABLE card_cache ADD COLUMN game TEXT DEFAULT 'pokemon'`);
+  }
+
+  // Support MTG-specific sorting and filtering
+  if (!cardCacheCols.some(c => c.name === 'cmc')) {
+    console.log('Adding cmc column to card_cache table...');
+    await run(`ALTER TABLE card_cache ADD COLUMN cmc REAL`);
+  }
+  if (!cardCacheCols.some(c => c.name === 'color_identity')) {
+    console.log('Adding color_identity column to card_cache table...');
+    await run(`ALTER TABLE card_cache ADD COLUMN color_identity TEXT`);
+  }
+
+  // Game tag on cached sets so Pokémon (pokemontcg.io) and MTG (Scryfall) sets
+  // coexist; drives chronological set sorting and the rule-builder set picker.
+  const setsCols = await all(`PRAGMA table_info(sets)`);
+  if (!setsCols.some(c => c.name === 'game')) {
+    console.log('Adding game column to sets table...');
+    await run(`ALTER TABLE sets ADD COLUMN game TEXT DEFAULT 'pokemon'`);
+  }
 
   // 6. Add checked_out columns to decks table if missing
   const decksCols = await all(`PRAGMA table_info(decks)`);
@@ -354,6 +393,12 @@ async function initDb() {
   if (!decksCols.some(c => c.name === 'checked_out_at')) {
     console.log('Adding checked_out_at column to decks table...');
     await run(`ALTER TABLE decks ADD COLUMN checked_out_at DATETIME`);
+  }
+  // Which game a deck is for; drives the deck's card-search default. Existing
+  // decks default to pokemon.
+  if (!decksCols.some(c => c.name === 'game')) {
+    console.log('Adding game column to decks table...');
+    await run(`ALTER TABLE decks ADD COLUMN game TEXT DEFAULT 'pokemon'`);
   }
 
   // 7. One-time repair: the dev-only admin seed route used to build image_url

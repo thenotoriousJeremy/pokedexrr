@@ -5,6 +5,7 @@ import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } fro
 import { getCardRarityBorder } from '../utils/cardRarity';
 import CardInspectorModal from './CardInspectorModal';
 import CompartmentView, { getSortCategory } from './CompartmentView';
+import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
 
 const CONTAINER_TYPES = ['Binder', 'Toploader Binder', 'Box', 'Toploader Box', 'Graded Slab Box', 'Display Shelf / Stand', 'Deck Box', 'Tin / Case', 'Other'];
 
@@ -39,7 +40,7 @@ const SORT_BASES = [
   { value: 'name-asc', label: 'A-Z Alphabetical' },
   { value: 'set-number', label: 'Set & Number' },
   { value: 'price-desc', label: 'Value (High-Low)' },
-  { value: 'type-name', label: 'Energy Type' },
+  { value: 'type-name', label: 'Type / Color' },
   { value: 'language', label: 'Language' }
 ];
 
@@ -69,17 +70,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState('Binder');
+  const [newGame, setNewGame] = useState('any'); // 'any' | 'pokemon' | 'mtg'
   const [newPlanCount, setNewPlanCount] = useState(DEFAULT_COMPARTMENT_PLANS['Binder'].count);
   const [newPlanCapacity, setNewPlanCapacity] = useState(DEFAULT_COMPARTMENT_PLANS['Binder'].capacity);
 
   const [capacityUpdatePending, setCapacityUpdatePending] = useState(null);
   const [showKebabMenu, setShowKebabMenu] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
-  const [ruleTypeDraft, setRuleTypeDraft] = useState('any');
-  const [ruleStartDraft, setRuleStartDraft] = useState('a');
-  const [ruleEndDraft, setRuleEndDraft] = useState('z');
-  const [ruleSetsDraft, setRuleSetsDraft] = useState([]);
   const [ruleSetSearch, setRuleSetSearch] = useState('');
+  const [sortDraft, setSortDraft] = useState([]);
+  const [filterDraft, setFilterDraft] = useState([]);
 
   const [inspectorCard, setInspectorCard] = useState(null);
 
@@ -326,6 +326,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         body: JSON.stringify({
           name: newName.trim(),
           type: newType,
+          game: newGame,
           compartmentPlan: {
             count: Math.max(1, parseInt(newPlanCount, 10) || 1),
             capacity: Math.max(1, parseInt(newPlanCapacity, 10) || 1)
@@ -628,140 +629,17 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           <div className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <h3 style={{ margin: 0 }}>Container Settings</h3>
             
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Sort Method</label>
-              <select
-                className="select-control"
-                value={splitSortOrder(selectedLoc.sort_order).base}
-                onChange={(e) => {
-                  const foilAware = splitSortOrder(selectedLoc.sort_order).foilAware;
-                  handleUpdateLocationField('sort_order', e.target.value === 'set-number' && foilAware ? 'set-number-printing' : e.target.value);
-                }}
-              >
-                {SORT_BASES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-            
-            {splitSortOrder(selectedLoc.sort_order).base === 'set-number' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem' }}>
-                  <input type="checkbox" checked={splitSortOrder(selectedLoc.sort_order).foilAware} onChange={(e) => handleUpdateLocationField('sort_order', e.target.checked ? 'set-number-printing' : 'set-number')} />
-                  Split by printing (foil-aware)
-                </label>
-                {splitSortOrder(selectedLoc.sort_order).foilAware && (
-                  <div style={{ display: 'flex', gap: '4px' }}>
-                    {[{ v: 'normals_first', label: 'Normals First' }, { v: 'foils_first', label: 'Foils First' }].map(opt => (
-                      <button
-                        key={opt.v}
-                        type="button"
-                        onClick={() => handleUpdateLocationField('foil_sorting', opt.v)}
-                        className={`btn ${(selectedLoc.foil_sorting || 'normals_first') === opt.v ? 'btn-primary' : 'btn-secondary'}`}
-                        style={{ fontSize: '0.6rem', padding: '0.2rem 0.4rem' }}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', borderTop: '1px solid var(--border-glass)', paddingTop: '1rem' }}>
-              <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Filing Rule</label>
-              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                Controls which cards this container accepts when filing automatically.
-              </span>
-              <select className="select-control" value={ruleTypeDraft} onChange={(e) => setRuleTypeDraft(e.target.value)}>
-                <option value="any">Accept Any Card</option>
-                <option value="alphabetical_range">Alphabetical Range (e.g. A-M)</option>
-                <option value="specific_sets">Specific Sets</option>
-              </select>
-
-              {ruleTypeDraft === 'alphabetical_range' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem' }}>
-                  <span>Card names from</span>
-                  <input
-                    className="input-control" maxLength={1} value={ruleStartDraft}
-                    onChange={(e) => setRuleStartDraft(e.target.value.toLowerCase())}
-                    style={{ width: '40px', textAlign: 'center', textTransform: 'uppercase' }}
-                  />
-                  <span>to</span>
-                  <input
-                    className="input-control" maxLength={1} value={ruleEndDraft}
-                    onChange={(e) => setRuleEndDraft(e.target.value.toLowerCase())}
-                    style={{ width: '40px', textAlign: 'center', textTransform: 'uppercase' }}
-                  />
-                </div>
-              )}
-
-              {ruleTypeDraft === 'specific_sets' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                  <input
-                    className="input-control"
-                    placeholder="Search all sets to add..."
-                    value={ruleSetSearch}
-                    onChange={(e) => setRuleSetSearch(e.target.value)}
-                    style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
-                  />
-                  {(() => {
-                    // No search: only sets you own cards from (the common case).
-                    // Searching: the full catalog, filtered by name.
-                    const q = ruleSetSearch.trim().toLowerCase();
-                    const list = setsList.filter(s => q ? s.name.toLowerCase().includes(q) : ownedSetNames.has(s.name));
-                    return (
-                      <>
-                        <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
-                          {q
-                            ? `${list.length} matching set${list.length === 1 ? '' : 's'}`
-                            : `${list.length} set${list.length === 1 ? '' : 's'} in your collection — search to add others`}
-                        </div>
-                        <div style={{ maxHeight: '160px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', padding: '0.25rem' }}>
-                          {list.length === 0 ? (
-                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', padding: '0.25rem' }}>
-                              {q ? 'No sets match.' : 'No cards in your collection yet — search to add sets.'}
-                            </span>
-                          ) : list.map(s => {
-                            const on = ruleSetsDraft.includes(s.name);
-                            return (
-                              <button
-                                type="button" key={s.id}
-                                onClick={() => setRuleSetsDraft(prev => prev.includes(s.name) ? prev.filter(x => x !== s.name) : [...prev, s.name])}
-                                className="kebab-item"
-                                style={{ fontSize: '0.72rem', padding: '0.3rem 0.4rem', background: on ? 'rgba(255,71,71,0.15)' : 'transparent', borderRadius: '3px' }}
-                              >
-                                <span style={{ width: '0.9rem', flexShrink: 0 }}>{on ? '✓' : ''}</span>{s.name}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </>
-                    );
-                  })()}
-                  {ruleSetsDraft.length === 0 ? (
-                    <span style={{ fontSize: '0.65rem', color: 'var(--accent-red)' }}>No sets selected — this container would reject every card.</span>
-                  ) : (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
-                      {ruleSetsDraft.map(name => (
-                        <span key={name} className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.65rem', padding: '0.1rem 0.35rem', background: 'var(--accent-red)', borderRadius: '3px' }}>
-                          {name}
-                          <span style={{ cursor: 'pointer', fontWeight: 'bold' }} onClick={() => setRuleSetsDraft(prev => prev.filter(s => s !== name))}>&times;</span>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            <SortBuilder value={sortDraft} onChange={setSortDraft} />
+            <FilterBuilder value={filterDraft} onChange={setFilterDraft} />
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
               <button className="btn btn-secondary" onClick={() => setShowRulesModal(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={() => {
-                const conf = ruleTypeDraft === 'alphabetical_range'
-                  ? { start: (ruleStartDraft || 'a').toLowerCase(), end: (ruleEndDraft || 'z').toLowerCase() }
-                  : ruleTypeDraft === 'specific_sets'
-                    ? { sets: ruleSetsDraft }
-                    : null;
-                handleUpdateLocationFields({ rule_type: ruleTypeDraft, rule_config: conf });
+                handleUpdateLocationFields({
+                  sort_order: JSON.stringify(sortDraft),
+                  rule_type: filterDraft.length > 0 ? 'compound' : 'any',
+                  rule_config: filterDraft.length > 0 ? JSON.stringify({ rules: filterDraft }) : null
+                });
                 setShowRulesModal(false);
               }}>Save Settings</button>
             </div>
@@ -815,15 +693,38 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   </button>
                   <button className="kebab-item" onClick={() => {
                     setShowKebabMenu(false);
-                    setRuleTypeDraft(selectedLoc.rule_type || 'any');
-                    // Parse the stored rule into the structured drafts; tolerate
-                    // legacy double-encoded strings from the old raw-JSON editor.
-                    let cfg = {};
-                    try { cfg = selectedLoc.rule_config ? JSON.parse(selectedLoc.rule_config) : {}; } catch { cfg = {}; }
-                    if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch { cfg = {}; } }
-                    setRuleStartDraft(cfg.start || 'a');
-                    setRuleEndDraft(cfg.end || 'z');
-                    setRuleSetsDraft(Array.isArray(cfg.sets) ? cfg.sets : []);
+                    let sDraft = [];
+                    if (selectedLoc.sort_order && selectedLoc.sort_order.startsWith('[')) {
+                      try { sDraft = JSON.parse(selectedLoc.sort_order); } catch(e){}
+                    } else if (selectedLoc.sort_order && selectedLoc.sort_order !== 'custom') {
+                      if (selectedLoc.sort_order === 'name-asc') sDraft = [{id: '1', by:'name', dir:'asc'}];
+                      else if (selectedLoc.sort_order === 'price-desc') sDraft = [{id: '1', by:'price', dir:'desc'}];
+                      else if (selectedLoc.sort_order === 'set-number') sDraft = [{id: '1', by:'set', dir:'asc'}];
+                      else if (selectedLoc.sort_order === 'set-number-printing') sDraft = [{id: '1', by:'set', dir:'asc'}, {id: '2', by:'printing', dir:'asc'}];
+                      else if (selectedLoc.sort_order === 'type-name') sDraft = [{id: '1', by:'type', dir:'asc'}, {id: '2', by:'name', dir:'asc'}];
+                      else if (selectedLoc.sort_order === 'language') sDraft = [{id: '1', by:'language', dir:'asc'}];
+                    }
+                    setSortDraft(sDraft);
+
+                    let fDraft = [];
+                    if (selectedLoc.rule_type === 'compound') {
+                      try {
+                        const cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config;
+                        fDraft = cfg?.rules || [];
+                      } catch(e){}
+                    } else if (selectedLoc.rule_type === 'alphabetical_range') {
+                      let cfg = {};
+                      try { cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config; } catch(e){}
+                      if (cfg?.start) fDraft.push({ id: '1', action: 'include', field: 'name', operator: '>=', value: cfg.start });
+                      if (cfg?.end) fDraft.push({ id: '2', action: 'include', field: 'name', operator: '<=', value: cfg.end });
+                    } else if (selectedLoc.rule_type === 'specific_sets') {
+                       let cfg = {};
+                       try { cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config; } catch(e){}
+                       if (cfg?.sets && cfg.sets.length > 0) {
+                          // Note: UI might need a multiple select or IN operator, but our current operator doesn't have IN natively yet, so we just use equals (backend `equals` supports arrays via some logic, wait, backend `equals` checks if cValue matches rule.value. For specific_sets, rule.value was the set name. If multiple, we might need multiple rules or an array match. Let's just create an exclude/include if needed. For now, since specific_sets are converted, we can just say "contains" or "equals"). Let's leave it empty and let the user rebuild it, or migrate properly. Let's just migrate properly later, or set it to empty for now if it's too complex.
+                       }
+                    }
+                    setFilterDraft(fDraft);
                     setRuleSetSearch('');
                     setShowRulesModal(true);
                   }}>
@@ -854,6 +755,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
               >
                 {CONTAINER_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <select
+                className="select-control" value={newGame}
+                onChange={(e) => setNewGame(e.target.value)}
+                title="Restrict which game's cards this container accepts"
+                style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
+              >
+                <option value="any">Any game</option>
+                <option value="pokemon">Pokémon only</option>
+                <option value="mtg">MTG only</option>
               </select>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>

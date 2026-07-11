@@ -15,11 +15,13 @@ function DeckBuilder({ showToast }) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newDeckName, setNewDeckName] = useState('');
   const [newDeckDesc, setNewDeckDesc] = useState('');
+  const [newDeckGame, setNewDeckGame] = useState('pokemon'); // 'pokemon' | 'mtg'
   
   // Card Search States inside editor
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [deckSearchGame, setDeckSearchGame] = useState('pokemon'); // 'pokemon' | 'mtg'
 
   // Draw Simulator States
   const [showSimulator, setShowSimulator] = useState(false);
@@ -66,13 +68,14 @@ function DeckBuilder({ showToast }) {
       const response = await fetch('/api/decks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newDeckName, description: newDeckDesc })
+        body: JSON.stringify({ name: newDeckName, description: newDeckDesc, game: newDeckGame })
       });
 
       if (response.ok) {
         showToast('Deck created successfully!');
         setNewDeckName('');
         setNewDeckDesc('');
+        setNewDeckGame('pokemon');
         setShowCreateModal(false);
         fetchDecks();
       } else {
@@ -93,6 +96,8 @@ function DeckBuilder({ showToast }) {
         // Also get checkout status from deck list
         const deckMeta = decks.find(d => d.id === deckId);
         setActiveDeck({ ...data, checked_out: deckMeta?.checked_out || 0, checked_out_at: deckMeta?.checked_out_at || null });
+        // Default the card search to this deck's game.
+        setDeckSearchGame(data.game || 'pokemon');
         setViewMode('detail');
       }
     } catch (err) {
@@ -228,8 +233,8 @@ function DeckBuilder({ showToast }) {
 
     try {
       setSearching(true);
-      const finalQuery = translateJapaneseName(searchQuery) || searchQuery;
-      const response = await fetch(`/api/search?name=${encodeURIComponent(finalQuery)}&scope=collection`);
+      const finalQuery = deckSearchGame === 'mtg' ? searchQuery : (translateJapaneseName(searchQuery) || searchQuery);
+      const response = await fetch(`/api/search?name=${encodeURIComponent(finalQuery)}&scope=collection&game=${deckSearchGame}`);
       if (response.ok) {
         const data = await response.json();
         setSearchResults(data);
@@ -345,36 +350,66 @@ function DeckBuilder({ showToast }) {
     setHand([...hand, nextCard]);
   };
 
+  // The game the active deck is built for (legacy decks default to Pokémon).
+  const deckGame = activeDeck?.game || 'pokemon';
+
+  // MTG card-type buckets, read off the parsed type line stored in subtypes.
+  const MTG_MAIN_TYPES = ['Creature', 'Planeswalker', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Battle', 'Land'];
+  const mtgCardType = (card) => {
+    const subs = card.subtypes || [];
+    for (const t of MTG_MAIN_TYPES) if (subs.includes(t)) return t;
+    return 'Other';
+  };
+  // Cards exempt from the 4-copy deck rule: Pokémon basic Energy, MTG basic lands.
+  const isUncappedCard = (card) => {
+    if ((card.game || deckGame) === 'mtg') {
+      return (card.subtypes || []).some(s => s.toLowerCase() === 'basic');
+    }
+    return card.supertype === 'Energy' && (!card.subtypes || !card.subtypes.includes('Special'));
+  };
+  // Category groups shown in the deck composition list, by game.
+  const compositionGroups = deckGame === 'mtg'
+    ? ['Creature', 'Planeswalker', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Land', 'Other']
+    : ['Pokémon', 'Trainer', 'Energy'];
+  const cardGroup = (card) => {
+    if (deckGame === 'mtg') return mtgCardType(card);
+    let type = card.supertype || 'Pokémon';
+    if (type === 'Pokemon') type = 'Pokémon';
+    return ['Pokémon', 'Trainer', 'Energy'].includes(type) ? type : 'Pokémon';
+  };
+
   // --- CHART DATA GENERATION ---
   const getSupertypeChartData = () => {
     if (!activeDeck) return [];
-    const counts = { Pokémon: 0, Trainer: 0, Energy: 0 };
+    const counts = {};
     activeDeck.cards.forEach(c => {
-      let type = c.supertype || 'Pokémon';
-      if (type === 'Pokemon') type = 'Pokémon';
-      if (counts[type] !== undefined) {
-        counts[type] += c.quantity;
-      } else {
-        counts['Pokémon'] += c.quantity;
-      }
+      const g = cardGroup(c);
+      counts[g] = (counts[g] || 0) + c.quantity;
     });
     return Object.keys(counts).map(key => ({ name: key, value: counts[key] })).filter(d => d.value > 0);
   };
 
   const getEnergyChartData = () => {
     if (!activeDeck) return [];
-    const energyMap = {};
+    const map = {};
+    if (deckGame === 'mtg') {
+      // Color distribution (WUBRG); colorless / lands bucket together.
+      activeDeck.cards.forEach(c => {
+        const colors = c.types || [];
+        if (colors.length === 0) map['Colorless'] = (map['Colorless'] || 0) + c.quantity;
+        else colors.forEach(col => { map[col] = (map[col] || 0) + c.quantity; });
+      });
+      return Object.keys(map).map(key => ({ name: key, value: map[key] }));
+    }
     activeDeck.cards.forEach(c => {
       if (c.supertype === 'Energy') {
         const name = c.name.replace(/\s*Energy/i, '').trim() || 'Special';
-        energyMap[name] = (energyMap[name] || 0) + c.quantity;
+        map[name] = (map[name] || 0) + c.quantity;
       } else if (c.types && c.types.length > 0) {
-        c.types.forEach(t => {
-          energyMap[t] = (energyMap[t] || 0) + c.quantity;
-        });
+        c.types.forEach(t => { map[t] = (map[t] || 0) + c.quantity; });
       }
     });
-    return Object.keys(energyMap).map(key => ({ name: key, value: energyMap[key] }));
+    return Object.keys(map).map(key => ({ name: key, value: map[key] }));
   };
 
   const totalDeckCardsCount = activeDeck ? activeDeck.cards.reduce((sum, c) => sum + c.quantity, 0) : 0;
@@ -391,8 +426,8 @@ function DeckBuilder({ showToast }) {
         <>
           <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
             <div>
-              <h2 style={{ fontSize: '1.25rem', color: '#fff' }}>Pokémon TCG Deck Builder</h2>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Create, analyze, and simulate opening hands for custom 60-card decks.</p>
+              <h2 style={{ fontSize: '1.25rem', color: '#fff' }}>Deck Builder</h2>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Build, analyze, and simulate opening hands for Pokémon and Magic: The Gathering decks.</p>
             </div>
             <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
               <Plus size={16} /> Create Deck
@@ -438,7 +473,12 @@ function DeckBuilder({ showToast }) {
 
                   <div style={{ marginTop: deck.checked_out ? '28px' : 0 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <h3 style={{ color: '#fff', fontSize: '1.1rem', margin: 0 }}>{deck.name}</h3>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <h3 style={{ color: '#fff', fontSize: '1.1rem', margin: 0 }}>{deck.name}</h3>
+                        <span style={{ fontSize: '0.6rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em', padding: '0.1rem 0.4rem', borderRadius: '4px', background: deck.game === 'mtg' ? 'rgba(211,32,42,0.15)' : 'rgba(234,179,8,0.15)', color: deck.game === 'mtg' ? '#ff6b6b' : 'var(--accent-yellow)', border: '1px solid var(--border-glass)' }}>
+                          {deck.game === 'mtg' ? 'MTG' : 'Pokémon'}
+                        </span>
+                      </div>
                       <span style={{ 
                         fontSize: '0.75rem', 
                         fontWeight: 700, 
@@ -594,12 +634,27 @@ function DeckBuilder({ showToast }) {
                 
                 {/* Search & Quick Add to Deck */}
                 <div className="glass-panel">
-                  <h3 style={{ fontSize: '0.95rem', color: '#fff', marginBottom: '0.75rem' }}>Add Cards to Deck</h3>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <h3 style={{ fontSize: '0.95rem', color: '#fff', margin: 0 }}>Add Cards to Deck</h3>
+                    <div className="sub-nav-tabs" style={{ margin: 0 }}>
+                      {[['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([val, label]) => (
+                        <button
+                          key={val}
+                          type="button"
+                          className={`sub-nav-tab ${deckSearchGame === val ? 'active' : ''}`}
+                          style={{ padding: '0.3rem 0.7rem', fontSize: '0.75rem' }}
+                          onClick={() => setDeckSearchGame(val)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <form onSubmit={handleSearchCards} style={{ display: 'flex', gap: '0.5rem' }}>
-                    <input 
-                      type="text" 
-                      className="input-control" 
-                      placeholder="Search card name (e.g. Pikachu, Cynthia)..."
+                    <input
+                      type="text"
+                      className="input-control"
+                      placeholder={deckSearchGame === 'mtg' ? 'Search card name (e.g. Llanowar Elves)...' : 'Search card name (e.g. Pikachu, Cynthia)...'}
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       style={{ flex: 1 }}
@@ -806,12 +861,20 @@ function DeckBuilder({ showToast }) {
               </div>
 
               <div className="form-group">
+                <label>Game</label>
+                <select className="select-control" value={newDeckGame} onChange={(e) => setNewDeckGame(e.target.value)}>
+                  <option value="pokemon">Pokémon</option>
+                  <option value="mtg">Magic: The Gathering</option>
+                </select>
+              </div>
+
+              <div className="form-group">
                 <label>Description</label>
-                <textarea 
-                  className="input-control" 
+                <textarea
+                  className="input-control"
                   style={{ minHeight: '80px', resize: 'vertical' }}
-                  placeholder="e.g. Standard 60-card tournament deck focused on fire energy accelerations..." 
-                  value={newDeckDesc} 
+                  placeholder="e.g. Standard 60-card tournament deck focused on fire energy accelerations..."
+                  value={newDeckDesc}
                   onChange={(e) => setNewDeckDesc(e.target.value)}
                 />
               </div>

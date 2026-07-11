@@ -1,6 +1,6 @@
-# Pokedexrr 🎴
+# CardDexrr 🎴
 
-Pokedexrr is a self-hostable, mobile-friendly full-stack web application designed for Pokémon card collectors. It allows you to scan your physical cards using your phone's camera, track real-time market valuations, organize card placements in physical binders and boxes, view rich analytics, and export your database for external trackers.
+CardDexrr is a self-hostable, mobile-friendly full-stack web application designed for Pokémon card collectors. It allows you to scan your physical cards using your phone's camera, track real-time market valuations, organize card placements in physical binders and boxes, view rich analytics, and export your database for external trackers.
 
 ---
 
@@ -68,7 +68,7 @@ If you prefer not to use self-signed HTTPS in development:
 
 ## 🔑 First-Time Sign In
 
-On its **first startup**, Pokedexrr creates a default administrator account and prints the credentials to the server console (the terminal running `npm run dev` / `npm start`, or `docker-compose logs`).
+On its **first startup**, CardDexrr creates a default administrator account and prints the credentials to the server console (the terminal running `npm run dev` / `npm start`, or `docker-compose logs`).
 
 Look for these lines in the startup logs:
 ```text
@@ -92,7 +92,7 @@ After logging in, open **Settings** and change the password. Additional users ca
 
 ## 🐳 Docker Deployment (Production)
 
-Pokedexrr is packaged as a single-container multi-stage Docker build, serving the compiled frontend directly from the Node server.
+CardDexrr is packaged as a single-container multi-stage Docker build, serving the compiled frontend directly from the Node server.
 
 ### Run with Docker Compose
 1. Ensure Docker is running.
@@ -100,13 +100,13 @@ Pokedexrr is packaged as a single-container multi-stage Docker build, serving th
    ```bash
    docker-compose up -d
    ```
-3. Open `http://localhost:3001` in your browser. All database files are persisted in the `pokedexrr-data` Docker volume.
+3. Open `http://localhost:3001` in your browser. All database files are persisted in the `carddexrr-data` Docker volume.
 
 ### Environment variables (`.env`)
-You can configure Pokedexrr by passing these environment variables in your container configuration:
+You can configure CardDexrr by passing these environment variables in your container configuration:
 - `PORT` (Default: `3001`) - The port the server runs on.
 - `DB_PATH` (Default: `/app/database/pokemon_cards.db`) - Location of the SQLite database.
-- `POKEMON_TCG_API_KEY` (Optional) - Your API key from [pokemontcg.io](https://pokemontcg.io). While Pokedexrr works without one, adding a free key increases TCG API rate limits (from 20k to 50k requests/day).
+- `POKEMON_TCG_API_KEY` (Optional) - Your API key from [pokemontcg.io](https://pokemontcg.io). While CardDexrr works without one, adding a free key increases TCG API rate limits (from 20k to 50k requests/day).
 - `DEFAULT_ADMIN_PASSWORD` (Optional) - Sets a known password for the auto-created `admin` account on first startup. If unset, a random password is generated and printed once to the server logs (see [First-Time Sign In](#-first-time-sign-in)).
 - `CORS_ORIGIN` (Optional) - Comma-separated list of origins allowed to call the API. Defaults to the Vite dev server + same-origin. Set to your real domain when deploying.
 - `ALLOW_REGISTRATION` (Optional) - Set to `true` to allow open self-registration from the login screen. Default (unset) is **invite-only**: only an admin creates accounts via the Admin panel, and the Sign Up option is hidden.
@@ -119,8 +119,8 @@ The server exposes `GET /api/health` (no auth). It returns `200 {"status":"ok"}`
 
 ## 💾 Backup, Restore & Recovery
 
-**Backup.** All state lives in the single SQLite file (the `pokedexrr-data` volume in Docker, or `DB_PATH` locally). Two options:
-- **File-level:** copy the DB file while the container is stopped, e.g. `docker run --rm -v pokedexrr-data:/data -v "$PWD":/backup alpine cp /data/pokemon_cards.db /backup/`. (The app runs in WAL mode; stop the container first so the `-wal`/`-shm` files are checkpointed.)
+**Backup.** All state lives in the single SQLite file (the `carddexrr-data` volume in Docker, or `DB_PATH` locally). Two options:
+- **File-level:** copy the DB file while the container is stopped, e.g. `docker run --rm -v carddexrr-data:/data -v "$PWD":/backup alpine cp /data/pokemon_cards.db /backup/`. (The app runs in WAL mode; stop the container first so the `-wal`/`-shm` files are checkpointed.)
 - **Per-user data:** each user can also export their own collection from the app as CSV or JSON (Collection → Export). This is portable to other trackers but does not include other users or app settings.
 
 **Restore.** Stop the container, drop the backed-up `pokemon_cards.db` into the volume, start again. Or use the in-app Import (CSV/JSON) to restore a single user's collection.
@@ -132,7 +132,7 @@ The server exposes `GET /api/health` (no auth). It returns `200 {"status":"ok"}`
 ## 📂 Project Structure
 
 ```text
-/pokedexrr
+/carddexrr
   ├── backend/
   │     ├── src/
   │     │     ├── db.js              # SQLite schema, migrations & DB connection
