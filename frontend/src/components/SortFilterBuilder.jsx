@@ -64,7 +64,7 @@ export function SortBuilder({ value, onChange }) {
   };
 
   const addCriteria = () => {
-    onChange([...items, { id: Date.now().toString(), by: 'name', dir: 'asc' }]);
+    onChange([...items, { id: Date.now().toString(), by: 'name', dir: 'asc', divider: true }]);
   };
 
   const updateCriteria = (id, updates) => {
@@ -100,6 +100,18 @@ export function SortBuilder({ value, onChange }) {
                 <option value="asc">Asc</option>
                 <option value="desc">Desc</option>
               </select>
+              <label
+                title="Show a labeled divider between groups for this rule"
+                style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', cursor: 'pointer' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={item.divider !== false}
+                  onChange={(e) => updateCriteria(item.id, { divider: e.target.checked })}
+                  style={{ width: '14px', height: '14px', cursor: 'pointer' }}
+                />
+                Divider
+              </label>
               <button
                 type="button"
                 className="btn btn-secondary"

@@ -10,37 +10,84 @@ function pocketColumns(capacity) {
   return Math.max(1, Math.round(Math.sqrt(capacity || 1)));
 }
 
+// The label a card falls under for a given divider field.
+function categoryForField(card, field, setsList = []) {
+  switch (field) {
+    case 'name':
+      return card.name ? card.name.charAt(0).toUpperCase() : '?';
+    case 'set': {
+      if (!card.set_name) return 'Unknown Set';
+      if (!setsList || setsList.length === 0) return card.set_name;
+      const idx = setsList.findIndex(s => s.name === card.set_name);
+      return idx >= 0 ? `${idx + 1}. ${card.set_name}` : card.set_name;
+    }
+    case 'type': {
+      let typeStr = 'Colorless';
+      if (card.types) {
+        try {
+          const t = typeof card.types === 'string' ? JSON.parse(card.types) : card.types;
+          if (t && t.length > 0) typeStr = t[0];
+        } catch (e) { /* no-op */ }
+      }
+      return typeStr;
+    }
+    case 'color':
+    case 'color_identity': {
+      let ci = card.color_identity;
+      if (typeof ci === 'string') { try { ci = JSON.parse(ci); } catch (e) { ci = []; } }
+      return Array.isArray(ci) && ci.length > 0 ? ci.join('') : 'Colorless';
+    }
+    case 'cmc':
+      return (card.cmc != null && card.cmc !== '') ? `Mana Value ${card.cmc}` : 'Mana Value ?';
+    case 'rarity':
+      return card.rarity || 'Unknown Rarity';
+    case 'printing':
+      return card.printing || 'Normal';
+    case 'language':
+      return card.language || 'English';
+    case 'price': {
+      const p = card.price_trend || 0;
+      if (p >= 100) return '$100+';
+      if (p >= 50) return '$50+';
+      if (p >= 20) return '$20+';
+      if (p >= 10) return '$10+';
+      if (p >= 5) return '$5+';
+      if (p >= 1) return '$1+';
+      return '< $1';
+    }
+    default:
+      return null; // added_at, entry_id, number: too granular to divide on
+  }
+}
+
+// Divider label for a card under the container's sort scheme. For the dynamic
+// (JSON array) scheme, dividers come from the first rule with divider:true.
+// Legacy string schemes divide on their primary field (prior behavior).
 export function getSortCategory(card, sortOrder, setsList = []) {
   if (!card || !sortOrder || sortOrder === 'custom') return null;
-  if (sortOrder.startsWith('name')) return card.name ? card.name.charAt(0).toUpperCase() : '?';
-  if (sortOrder.startsWith('set')) {
-    if (!card.set_name) return 'Unknown Set';
-    if (!setsList || setsList.length === 0) return card.set_name;
-    const idx = setsList.findIndex(s => s.name === card.set_name);
-    return idx >= 0 ? `${idx + 1}. ${card.set_name}` : card.set_name;
+
+  // A rule divides unless divider is explicitly false, so existing containers
+  // (whose stored rules predate this flag) show dividers again by default.
+  let dividerField = null;
+  if (Array.isArray(sortOrder)) {
+    const rule = sortOrder.find(r => r && r.divider !== false);
+    dividerField = rule ? rule.by : null;
+  } else if (typeof sortOrder === 'string' && sortOrder.startsWith('[')) {
+    try {
+      const arr = JSON.parse(sortOrder);
+      const rule = Array.isArray(arr) ? arr.find(r => r && r.divider !== false) : null;
+      dividerField = rule ? rule.by : null;
+    } catch (e) { dividerField = null; }
+  } else if (typeof sortOrder === 'string') {
+    if (sortOrder.startsWith('name')) dividerField = 'name';
+    else if (sortOrder.startsWith('set')) dividerField = 'set';
+    else if (sortOrder.startsWith('type')) dividerField = 'type';
+    else if (sortOrder.startsWith('price')) dividerField = 'price';
+    else if (sortOrder.startsWith('language')) dividerField = 'language';
   }
-  if (sortOrder.startsWith('type')) {
-    let typeStr = 'Colorless';
-    if (card.types) {
-      try {
-        const t = typeof card.types === 'string' ? JSON.parse(card.types) : card.types;
-        if (t && t.length > 0) typeStr = t[0];
-      } catch (e) { /* no-op */ }
-    }
-    return typeStr;
-  }
-  if (sortOrder.startsWith('price')) {
-    const p = card.price_trend || 0;
-    if (p >= 100) return '$100+';
-    if (p >= 50) return '$50+';
-    if (p >= 20) return '$20+';
-    if (p >= 10) return '$10+';
-    if (p >= 5) return '$5+';
-    if (p >= 1) return '$1+';
-    return '< $1';
-  }
-  if (sortOrder.startsWith('language')) return card.language || 'English';
-  return null;
+
+  if (!dividerField) return null;
+  return categoryForField(card, dividerField, setsList);
 }
 
 function PrintingBadge({ printing }) {
