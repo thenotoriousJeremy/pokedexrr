@@ -1,12 +1,13 @@
 # CardDexrr 🎴
 
-CardDexrr is a self-hostable, mobile-friendly full-stack web application designed for Pokémon card collectors. It allows you to scan your physical cards using your phone's camera, track real-time market valuations, organize card placements in physical binders and boxes, view rich analytics, and export your database for external trackers.
+CardDexrr is a self-hostable, mobile-friendly full-stack web application for **Pokémon** and **Magic: The Gathering** card collectors. It allows you to identify your physical cards using your phone's camera, track real-time market valuations, organize card placements in physical binders and boxes, view rich analytics, and export your database for external trackers.
 
 ---
 
 ## ✨ Features
 
-- **📱 Phone-to-Camera OCR Scanning**: Uses client-side video cropping and **Tesseract.js** to scan card Names and Collector Numbers (e.g. `58/102`) directly from your phone's browser—no heavy server-side AI required. Supports **English**, **Japanese**, and **Vintage** card layouts with automatic name translation.
+- **📱 Phone-Camera Image Identification**: Point your phone at a card and the server identifies it from the image — no typing. The pipeline auto-crops/deskews the card (OpenCV), recalls candidates with **CLIP** image embeddings, and confirms the exact card with **ORB** feature matching + RANSAC homography verification. Enter the **MTG set code** you're feeding and matching is scoped to that set (~300 cards) for exact-printing accuracy at one-tap speed. Works for both **Magic** (Scryfall) and **Pokémon** (Pokémon TCG API), with automatic game detection.
+- **🔤 OCR Fallback**: When no confident image match is found (or for Japanese cards, which aren't in the image DB), it falls back to **Tesseract.js** OCR of the card name + collector number with fuzzy database lookup. Supports English, Japanese, and Vintage layouts with automatic name translation.
 - **📊 Interactive Dashboard & Metrics**: Track total collection value, net worth trends (24H / 7D / 30D), average card value, holo print rates, energy type distributions (pie chart), rarity distributions, and set completion milestones.
 - **🗺️ Real-world Location Coordinator**: Assign physical coordinate mappings to your cards so you can locate them instantly:
   - **Binders**: Maps by Binder Name, Page Number, and Slot (1-9). Features a double-page book view with 3D page-flip animations and multi-card slot stacking.
@@ -21,8 +22,10 @@ CardDexrr is a self-hostable, mobile-friendly full-stack web application designe
 
 ## 🛠️ Tech Stack
 
-- **Frontend**: React, Vite, Recharts, Lucide React, Tesseract.js, Canvas Confetti
+- **Frontend**: React, Vite, Recharts, Lucide React, Tesseract.js (OCR fallback), Canvas Confetti
 - **Backend**: Node.js, Express, SQLite (`sqlite3` module), Axios, Helmet, express-rate-limit
+- **Card image ID**: `@huggingface/transformers` (CLIP embeddings via ONNX), `opencv-wasm` (ORB + homography), `sharp` (image processing)
+- **Card data**: Pokémon TCG API (Pokémon), Scryfall (Magic)
 - **Deployment**: Docker, Docker Compose, GitHub Actions
 
 ---
@@ -117,6 +120,31 @@ The server exposes `GET /api/health` (no auth). It returns `200 {"status":"ok"}`
 
 ---
 
+## 🔍 Card Scanning & Match Data
+
+Image identification matches your photo against precomputed reference features stored in `backend/data/` (gitignored — large and regenerable; not shipped in the repo). There are two tiers:
+
+**Set-scoped MTG (recommended, no pre-build).** Enter the set code of the box you're scanning. The first scan of a new set builds that set's ORB index on demand from Scryfall (~1 min, cached under `backend/data/sets/`); every subsequent scan matches within just that set for exact-printing accuracy. Nothing to run ahead of time.
+
+**Global / code-free matching (optional, heavy pre-build).** To identify cards without giving a set code (and to power game auto-detection), precompute the full CLIP embedding + ORB databases:
+
+```bash
+cd backend
+# CLIP embeddings (recall) — per game
+node --max-old-space-size=2048 scripts/build-card-embeddings.mjs --game mtg
+node --max-old-space-size=2048 scripts/build-card-embeddings.mjs --game pokemon
+# ORB features (geometric verification) — per game
+node scripts/build-card-orb.mjs --game mtg
+node scripts/build-card-orb.mjs --game pokemon
+```
+
+These download every card image and are **heavy**: several hours of CPU + downloads and ~1.6 GB on disk. Both scripts checkpoint and support `--resume`. A `POKEMON_TCG_API_KEY` (see below) is recommended for the Pokémon build. Without any of this data, the scanner still works via the OCR fallback.
+
+> [!NOTE]
+> The endpoints backing this are `POST /api/scan-match` (identify an uploaded card image) and `POST /api/prepare-set` (build/verify a set's index). The backend has no auto-reload — restart it after changing backend code so new routes/data load.
+
+---
+
 ## 💾 Backup, Restore & Recovery
 
 **Backup.** All state lives in the single SQLite file (the `carddexrr-data` volume in Docker, or `DB_PATH` locally). Two options:
@@ -138,10 +166,16 @@ The server exposes `GET /api/health` (no auth). It returns `200 {"status":"ok"}`
   │     │     ├── db.js              # SQLite schema, migrations & DB connection
   │     │     ├── server.js          # Express app: middleware, routes, /api/health
   │     │     ├── tcgApi.js          # Pokémon TCG API proxy, cache & price updates
+  │     │     ├── scryfallApi.js     # Scryfall (Magic) proxy, cache & price updates
+  │     │     ├── embedMatch.js      # CLIP embedding recall (image -> candidate cards)
+  │     │     ├── scanMatch.js       # Auto-crop/deskew + CLIP recall + ORB verify orchestration
+  │     │     ├── setIndex.js        # Lazy per-set ORB index for set-scoped matching
   │     │     ├── middleware/
   │     │     │     └── auth.js       # Session-token auth, admin guard, rate limiters
-  │     │     ├── routes/            # auth, admin, collection, sets, decks, shared
+  │     │     ├── routes/            # auth, admin, collection (+scan-match/prepare-set), sets, decks, shared
   │     │     └── utils/             # compartmentSort (filing engine), priceHelpers, authHelpers
+  │     ├── scripts/                 # build-card-embeddings.mjs, build-card-orb.mjs, cardSources.js
+  │     ├── data/                    # Precomputed embeddings/ORB/per-set indexes (gitignored)
   │     ├── test/                    # Framework-free smoke tests (npm test)
   │     └── package.json
   ├── frontend/
