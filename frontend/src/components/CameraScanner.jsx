@@ -909,8 +909,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
             />
             
             {/* Torch Toggle Overlay Button */}
-            {torchSupported && (
-              <button
+            <button
                 type="button"
                 className={`btn ${isTorchOn ? 'btn-primary' : 'btn-secondary'}`}
                 style={{
@@ -941,7 +940,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
               >
                 {isTorchOn ? <Zap size={18} /> : <ZapOff size={18} />}
               </button>
-            )}
             
             {/* Outline Box Guides */}
             <div className="camera-overlay">
