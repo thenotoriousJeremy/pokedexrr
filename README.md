@@ -22,7 +22,7 @@ Identify physical cards with your phone's camera, track real-time market valuati
 ## Table of Contents
 
 - [Features](#features)
-- [️ Tech Stack](#tech-stack)
+- [ Tech Stack](#tech-stack)
 - [ Run with Docker (fastest)](#docker-deployment-production)
 - [ Quick Start (Development)](#quick-start-development)
 - [ First-Time Sign In](#first-time-sign-in)
@@ -39,7 +39,7 @@ Identify physical cards with your phone's camera, track real-time market valuati
 - **Phone-Camera Image Identification**: Point your phone at a card and the server identifies it from the image — no typing. The pipeline auto-crops/deskews the card (OpenCV), recalls candidates with **CLIP** image embeddings, and confirms the exact card with **ORB** feature matching + RANSAC homography verification. Enter the **MTG set code** you're feeding and matching is scoped to that set (~300 cards) for exact-printing accuracy at one-tap speed. Works for both **Magic** (Scryfall) and **Pokémon** (Pokémon TCG API), with automatic game detection.
 - **Confidence Gating & Manual Pick**: Every scan is gated on match confidence — ORB inlier count when geometric verification ran, otherwise CLIP cosine similarity. Above the gate the card auto-fills; below it the top candidates are shown for a one-tap manual pick.
 - **Interactive Dashboard & Metrics**: Track total collection value, net worth trends (24H / 7D / 30D), average card value, holo print rates, energy type distributions (pie chart), rarity distributions, and set completion milestones.
-- **️ Real-world Location Coordinator**: Assign physical coordinate mappings to your cards so you can locate them instantly:
+- ** Real-world Location Coordinator**: Assign physical coordinate mappings to your cards so you can locate them instantly:
   - **Binders**: Maps by Binder Name, Page Number, and Slot (1-9). Features a double-page book view with 3D page-flip animations and multi-card slot stacking.
   - **Storage Boxes**: Maps by Box Name, Row ID/Letter, and Divider Section.
 - **Deck Checkout & Check-In**: Reserve the physical cards for a deck and find them fast. Checking a deck out "for play" opens a locator that groups every card by **container → page → slot** and highlights each one in its compartment grid; while checked out, those cards are greyed and badged **In Play** in Storage. Checking the deck back in reverses the flow, guiding each card back to its slot. Select-all by page, container, or the whole deck.
@@ -51,7 +51,7 @@ Identify physical cards with your phone's camera, track real-time market valuati
 
 ---
 
-## ️ Tech Stack
+##  Tech Stack
 
 - **Frontend**: React, Vite, Recharts, Lucide React, Canvas Confetti
 - **Backend**: Node.js, Express, SQLite (`sqlite3` module), Axios, Helmet, express-rate-limit
