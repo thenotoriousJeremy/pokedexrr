@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Layers } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
 import { getPrintingBadgeStyle, getPrintingBadgeLabel, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { formatPrice } from '../utils/formatPrice';
@@ -26,7 +25,7 @@ function categoryForField(card, field, setsList = []) {
     case 'color': {
       let ci = 'Colorless';
       if (typeof card.color_identity === 'string') {
-        try { const p = JSON.parse(card.color_identity); if (p.length > 0) ci = p[0]; } catch(e){}
+        try { const p = JSON.parse(card.color_identity); if (p.length > 0) ci = p[0]; } catch { /* ignore */ }
       } else if (Array.isArray(card.color_identity) && card.color_identity.length > 0) {
         ci = card.color_identity[0];
       }
@@ -73,6 +72,7 @@ function dividerFieldsOf(arr) {
   return [{ field: arr[0].by, color: '#6b7280' }];
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function getSortCategories(card, sortOrder, setsList = []) {
   if (!card || !sortOrder || sortOrder === 'custom') return [];
 
@@ -100,6 +100,7 @@ export function getSortCategories(card, sortOrder, setsList = []) {
 // Category the container FILES by — the primary (first) sort field, matching
 // the backend's placement engine. Used by the Category-to-Page map, which must
 // track filing, not the (independent) visual divider choice.
+// eslint-disable-next-line react-refresh/only-export-components
 export function getPrimaryCategory(card, sortOrder, setsList = []) {
   if (!card || !sortOrder || sortOrder === 'custom') return null;
   let field = null;

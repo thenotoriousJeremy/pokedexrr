@@ -90,7 +90,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     return () => {
       streamRef.current?.getTracks().forEach(track => track.stop());
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // When an MTG set code is set, build/verify that set's index on the server so

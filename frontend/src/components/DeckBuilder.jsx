@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, X, ChevronLeft, Play, BarChart2, Search, LogOut, PackageCheck } from 'lucide-react';
+import { Plus, Trash2, X, ChevronLeft, Play, BarChart2, Search, LogOut, PackageCheck } from 'lucide-react';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { shuffleArray } from '../utils/shuffle';
 import { translateJapaneseName } from '../utils/pokemonTranslation';
@@ -372,17 +372,6 @@ function DeckBuilder({ showToast }) {
     for (const t of MTG_MAIN_TYPES) if (subs.includes(t)) return t;
     return 'Other';
   };
-  // Cards exempt from the 4-copy deck rule: Pokémon basic Energy, MTG basic lands.
-  const isUncappedCard = (card) => {
-    if ((card.game || deckGame) === 'mtg') {
-      return (card.subtypes || []).some(s => s.toLowerCase() === 'basic');
-    }
-    return card.supertype === 'Energy' && (!card.subtypes || !card.subtypes.includes('Special'));
-  };
-  // Category groups shown in the deck composition list, by game.
-  const compositionGroups = deckGame === 'mtg'
-    ? ['Creature', 'Planeswalker', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Land', 'Other']
-    : ['Pokémon', 'Trainer', 'Energy'];
   const cardGroup = (card) => {
     if (deckGame === 'mtg') return mtgCardType(card);
     let type = card.supertype || 'Pokémon';

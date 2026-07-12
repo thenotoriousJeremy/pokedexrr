@@ -34,7 +34,7 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
   const [printing, setPrinting] = useState('Normal');
   const [language, setLanguage] = useState('English');
   const [purchasePrice, setPurchasePrice] = useState(0);
-  const [locationId, setLocationId] = useState('');
+  const [, setLocationId] = useState('');
 
   // Fetch physical locations on mount for the form dropdown
   useEffect(() => {

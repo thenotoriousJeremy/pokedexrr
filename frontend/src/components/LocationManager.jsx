@@ -1,32 +1,12 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Plus, Trash2, X, MoreVertical, Settings, LayoutList, RefreshCw } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
-import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
+import { getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder } from '../utils/cardRarity';
 import CardInspectorModal from './CardInspectorModal';
 import CompartmentView, { getPrimaryCategory, FocusedCardInfo } from './CompartmentView';
 import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
 import CreateContainerModal from './CreateContainerModal';
-
-// Base sort schemes a container can use. 'set-number' has a foil-aware
-// sub-option (stored as the separate 'set-number-printing' scheme
-// server-side) rather than existing as its own top-level entry — from the
-// user's perspective it's one scheme with a toggle, not two schemes.
-const SORT_BASES = [
-  { value: 'custom', label: 'Custom (manual order, next empty slot)' },
-  { value: 'name-asc', label: 'A-Z Alphabetical' },
-  { value: 'set-number', label: 'Set & Number' },
-  { value: 'price-desc', label: 'Value (High-Low)' },
-  { value: 'type-name', label: 'Type / Color' },
-  { value: 'language', label: 'Language' }
-];
-
-// Given a stored sort_order value, splits it into the base scheme shown in
-// the main dropdown plus whether the foil-aware sub-option is active.
-function splitSortOrder(sortOrder) {
-  if (sortOrder === 'set-number-printing') return { base: 'set-number', foilAware: true };
-  return { base: sortOrder || 'custom', foilAware: false };
-}
 
 function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId }) {
   const [locations, setLocations] = useState([]);
@@ -50,7 +30,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [showKebabMenu, setShowKebabMenu] = useState(false);
   const [showCategoryMap, setShowCategoryMap] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
-  const [ruleSetSearch, setRuleSetSearch] = useState('');
+  const [, setRuleSetSearch] = useState('');
   const [sortDraft, setSortDraft] = useState([]);
   const [filterDraft, setFilterDraft] = useState([]);
 
@@ -128,7 +108,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   const [activeCompartmentId, setActiveCompartmentId] = useState(null);
   const [coverflowActiveIndex, setCoverflowActiveIndex] = useState(0);
-  const [showRowSets, setShowRowSets] = useState(false);
 
   const handleTouchStart = (e) => {
     touchStartRef.current = e.changedTouches[0].clientX;
@@ -141,23 +120,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       setActivePageIndex(prev => Math.min(compartments.length - 1, prev + 1));
     } else if (diffX < -50) {
       setActivePageIndex(prev => Math.max(0, prev - 1));
-    }
-  };
-
-  const coverflowTouchStartRef = useRef(0);
-
-  const handleCoverflowTouchStart = (e) => {
-    coverflowTouchStartRef.current = e.changedTouches[0].clientX;
-  };
-
-  const handleCoverflowTouchEnd = (e, totalCards) => {
-    const endX = e.changedTouches[0].clientX;
-    const diffX = coverflowTouchStartRef.current - endX;
-    const threshold = 40;
-    if (diffX > threshold) {
-      setCoverflowActiveIndex(prev => Math.min(totalCards - 1, prev + 1));
-    } else if (diffX < -threshold) {
-      setCoverflowActiveIndex(prev => Math.max(0, prev - 1));
     }
   };
 
@@ -175,6 +137,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     setCoverflowActiveIndex(0);
     setStorageSelectMode(false);
     setStorageSelectedIds(new Set());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLocationId]);
 
   useEffect(() => {
@@ -273,14 +236,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     });
     return Array.from(cats).sort();
   }, [allCards, selectedLoc?.sort_order, setsList]);
-
-  // Set names the user actually owns cards from — the default choices in the
-  // specific-sets filter picker so it isn't the entire set catalog by default.
-  const ownedSetNames = useMemo(() => {
-    const s = new Set();
-    allCards.forEach(c => { if (c.set_name) s.add(c.set_name); });
-    return s;
-  }, [allCards]);
 
   // Distinct values per filterable field from the cards actually owned, so the
   // FilterBuilder value box suggests real options (e.g. subtypes like "Basic")
@@ -383,7 +338,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       showToast('Error updating container.');
     }
   };
-  const handleUpdateLocationField = (field, value) => handleUpdateLocationFields({ [field]: value });
 
   const handleAddCompartment = async () => {
     if (!selectedLoc) return;
@@ -472,20 +426,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         showToast(errData.error || 'Failed to move card.');
       }
     } catch (err) { console.error(err); showToast('Error moving card.'); }
-  };
-
-  const handleRemoveFromContainer = async (entryId) => {
-    try {
-      const res = await fetch(`/api/collection/${entryId}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ location_id: null, compartment_id: null })
-      });
-      if (res.ok) { showToast('Card removed from container.'); await refreshAll(); }
-      else {
-        const errData = await res.json().catch(()=>({}));
-        showToast(errData.error || 'Failed to remove card from container.');
-      }
-    } catch (err) { console.error(err); showToast('Error updating card.'); }
   };
 
   const handleDeleteCard = async (entryId) => {
@@ -809,7 +749,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     setShowKebabMenu(false);
                     let sDraft = [];
                     if (selectedLoc.sort_order && selectedLoc.sort_order.startsWith('[')) {
-                      try { sDraft = JSON.parse(selectedLoc.sort_order); } catch(e){}
+                      try { sDraft = JSON.parse(selectedLoc.sort_order); } catch { /* ignore */ }
                     } else if (selectedLoc.sort_order && selectedLoc.sort_order !== 'custom') {
                       if (selectedLoc.sort_order === 'name-asc') sDraft = [{id: '1', by:'name', dir:'asc'}];
                       else if (selectedLoc.sort_order === 'price-desc') sDraft = [{id: '1', by:'price', dir:'desc'}];
@@ -825,15 +765,15 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       try {
                         const cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config;
                         fDraft = cfg?.rules || [];
-                      } catch(e){}
+                      } catch { /* ignore */ }
                     } else if (selectedLoc.rule_type === 'alphabetical_range') {
                       let cfg = {};
-                      try { cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config; } catch(e){}
+                      try { cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config; } catch { /* ignore */ }
                       if (cfg?.start) fDraft.push({ id: '1', action: 'include', field: 'name', operator: '>=', value: cfg.start });
                       if (cfg?.end) fDraft.push({ id: '2', action: 'include', field: 'name', operator: '<=', value: cfg.end });
                     } else if (selectedLoc.rule_type === 'specific_sets') {
                        let cfg = {};
-                       try { cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config; } catch(e){}
+                       try { cfg = typeof selectedLoc.rule_config === 'string' ? JSON.parse(selectedLoc.rule_config) : selectedLoc.rule_config; } catch { /* ignore */ }
                        if (cfg?.sets && cfg.sets.length > 0) {
                           // Note: UI might need a multiple select or IN operator, but our current operator doesn't have IN natively yet, so we just use equals (backend `equals` supports arrays via some logic, wait, backend `equals` checks if cValue matches rule.value. For specific_sets, rule.value was the set name. If multiple, we might need multiple rules or an array match. Let's just create an exclude/include if needed. For now, since specific_sets are converted, we can just say "contains" or "equals"). Let's leave it empty and let the user rebuild it, or migrate properly. Let's just migrate properly later, or set it to empty for now if it's too complex.
                        }

@@ -73,7 +73,7 @@ export function sortCardsByOrder(cards, sortOrder, foilSorting, setsList = []) {
   let criteria = [];
   if (typeof sortOrder === 'string') {
     if (sortOrder.startsWith('[')) {
-      try { criteria = JSON.parse(sortOrder); } catch(e){}
+      try { criteria = JSON.parse(sortOrder); } catch { /* ignore malformed sortOrder */ }
     } else {
       if (sortOrder === 'scanned-desc') criteria = [{by:'added_at', dir:'desc'}, {by:'entry_id', dir:'desc'}];
       else if (sortOrder === 'scanned-asc') criteria = [{by:'added_at', dir:'asc'}, {by:'entry_id', dir:'asc'}];
@@ -151,13 +151,13 @@ export function sortCardsByOrder(cards, sortOrder, foilSorting, setsList = []) {
         case 'color': {
           let cA = 'Colorless';
           if (typeof a.color_identity === 'string') {
-            try { const p = JSON.parse(a.color_identity); if (p.length > 0) cA = p[0]; } catch(e){}
+            try { const p = JSON.parse(a.color_identity); if (p.length > 0) cA = p[0]; } catch { /* ignore */ }
           } else if (Array.isArray(a.color_identity) && a.color_identity.length > 0) {
             cA = a.color_identity[0];
           }
           let cB = 'Colorless';
           if (typeof b.color_identity === 'string') {
-            try { const p = JSON.parse(b.color_identity); if (p.length > 0) cB = p[0]; } catch(e){}
+            try { const p = JSON.parse(b.color_identity); if (p.length > 0) cB = p[0]; } catch { /* ignore */ }
           } else if (Array.isArray(b.color_identity) && b.color_identity.length > 0) {
             cB = b.color_identity[0];
           }
