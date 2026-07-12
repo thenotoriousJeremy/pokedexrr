@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   bindarr:
     build:
@@ -10,17 +8,15 @@ services:
     ports:
       - "3001:3001"
     environment:
-      - PORT=3001
-      - DB_PATH=/app/database/pokemon_cards.db
-      - POKEMON_TCG_API_KEY= # Optional: Add your Pokemon TCG API Key here to increase rate limits
-      - CORS_ORIGIN=http://localhost:3001 # Update if serving the frontend from a different origin
-      - PUBLIC_BASE_URL= # Optional: set the externally-reachable URL for share links when behind a reverse proxy, e.g. https://cards.example.com (also editable from the Admin Panel)
-      - DEFAULT_ADMIN_PASSWORD= # Optional: pin the initial admin password instead of using the auto-generated one (see startup logs)
-      - ALLOW_REGISTRATION= # Optional: "true" enables open self-registration. Default (unset) = invite-only; admin creates accounts.
-      - TRUST_PROXY= # Set to "1" (proxy hop count) when running behind a TLS-terminating reverse proxy so rate limiting sees the real client IP. Leave unset if directly exposed.
+      # All optional. Uncomment and set as needed.
+      # - POKEMON_TCG_API_KEY=          # Pokemon TCG API key to raise rate limits
+      # - CORS_ORIGIN=                  # Frontend origin(s), comma-separated. Unset = localhost + private-LAN allowed
+      # - PUBLIC_BASE_URL=              # Externally-reachable URL for share links behind a proxy, e.g. https://cards.example.com
+      # - DEFAULT_ADMIN_PASSWORD=       # Pin the initial admin password instead of the auto-generated one (see startup logs)
+      # - ALLOW_REGISTRATION=           # "true" = open self-registration. Unset = invite-only
+      # - TRUST_PROXY=                  # "1" behind a TLS-terminating reverse proxy so rate limiting sees the real client IP
     volumes:
       - bindarr-data:/app/database
 
 volumes:
   bindarr-data:
-    driver: local
