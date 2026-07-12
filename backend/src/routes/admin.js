@@ -8,10 +8,9 @@ const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
+router.use(authenticateToken, requireAdmin);
+
 router.post('/seed-cards', async (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(403).json({ error: 'Not available in production' });
-  }
   try {
     let binder = await db.get(`SELECT id FROM locations WHERE user_id = ? AND type = 'Binder' LIMIT 1`, [req.user.id]);
     if (!binder) {
@@ -141,8 +140,6 @@ router.post('/seed-cards', async (req, res) => {
     res.status(500).json({ error: 'Failed to seed test cards' });
   }
 });
-
-router.use(authenticateToken, requireAdmin);
 
 // Get all users with their statistics
 router.get('/users', async (req, res) => {
