@@ -1,6 +1,6 @@
 <div align="center">
 
-# Bindarr 🎴
+# Bindarr
 
 **Scan, value, organize, and locate your Pokémon & Magic: The Gathering cards — self-hosted.**
 
@@ -13,45 +13,45 @@ Identify physical cards with your phone's camera, track real-time market valuati
 [![Issues](https://img.shields.io/github/issues/thenotoriousJeremy/bindarr)](https://github.com/thenotoriousJeremy/bindarr/issues)
 [![Last commit](https://img.shields.io/github/last-commit/thenotoriousJeremy/bindarr)](https://github.com/thenotoriousJeremy/bindarr/commits/main)
 
-[Quick Start](#-quick-start-development) · [Run with Docker](#-docker-deployment-production) · [Features](#-features) · [How Scanning Works](#-card-scanning--match-data) · [Report a Bug](https://github.com/thenotoriousJeremy/bindarr/issues/new)
+[Quick Start](#quick-start-development) · [Run with Docker](#docker-deployment-production) · [Features](#features) · [How Scanning Works](#card-scanning--match-data) · [Report a Bug](https://github.com/thenotoriousJeremy/bindarr/issues/new)
 
 </div>
 
 ---
 
-## 📖 Table of Contents
+## Table of Contents
 
-- [✨ Features](#-features)
-- [🛠️ Tech Stack](#-tech-stack)
-- [🐳 Run with Docker (fastest)](#-docker-deployment-production)
-- [🚀 Quick Start (Development)](#-quick-start-development)
-- [🔑 First-Time Sign In](#-first-time-sign-in)
-- [🎮 Deck Checkout & Check-In](#-deck-checkout--check-in)
-- [🔍 Card Scanning & Match Data](#-card-scanning--match-data)
-- [💾 Backup, Restore & Recovery](#-backup-restore--recovery)
-- [📂 Project Structure](#-project-structure)
-- [📄 License](#-license)
+- [Features](#features)
+- [️ Tech Stack](#tech-stack)
+- [ Run with Docker (fastest)](#docker-deployment-production)
+- [ Quick Start (Development)](#quick-start-development)
+- [ First-Time Sign In](#first-time-sign-in)
+- [ Deck Checkout & Check-In](#deck-checkout--check-in)
+- [ Card Scanning & Match Data](#card-scanning--match-data)
+- [ Backup, Restore & Recovery](#backup-restore--recovery)
+- [ Project Structure](#project-structure)
+- [ License](#license)
 
 ---
 
-## ✨ Features
+## Features
 
-- **📱 Phone-Camera Image Identification**: Point your phone at a card and the server identifies it from the image — no typing. The pipeline auto-crops/deskews the card (OpenCV), recalls candidates with **CLIP** image embeddings, and confirms the exact card with **ORB** feature matching + RANSAC homography verification. Enter the **MTG set code** you're feeding and matching is scoped to that set (~300 cards) for exact-printing accuracy at one-tap speed. Works for both **Magic** (Scryfall) and **Pokémon** (Pokémon TCG API), with automatic game detection.
-- **🔎 Confidence Gating & Manual Pick**: Every scan is gated on match confidence — ORB inlier count when geometric verification ran, otherwise CLIP cosine similarity. Above the gate the card auto-fills; below it the top candidates are shown for a one-tap manual pick.
-- **📊 Interactive Dashboard & Metrics**: Track total collection value, net worth trends (24H / 7D / 30D), average card value, holo print rates, energy type distributions (pie chart), rarity distributions, and set completion milestones.
-- **🗺️ Real-world Location Coordinator**: Assign physical coordinate mappings to your cards so you can locate them instantly:
+- **Phone-Camera Image Identification**: Point your phone at a card and the server identifies it from the image — no typing. The pipeline auto-crops/deskews the card (OpenCV), recalls candidates with **CLIP** image embeddings, and confirms the exact card with **ORB** feature matching + RANSAC homography verification. Enter the **MTG set code** you're feeding and matching is scoped to that set (~300 cards) for exact-printing accuracy at one-tap speed. Works for both **Magic** (Scryfall) and **Pokémon** (Pokémon TCG API), with automatic game detection.
+- **Confidence Gating & Manual Pick**: Every scan is gated on match confidence — ORB inlier count when geometric verification ran, otherwise CLIP cosine similarity. Above the gate the card auto-fills; below it the top candidates are shown for a one-tap manual pick.
+- **Interactive Dashboard & Metrics**: Track total collection value, net worth trends (24H / 7D / 30D), average card value, holo print rates, energy type distributions (pie chart), rarity distributions, and set completion milestones.
+- **️ Real-world Location Coordinator**: Assign physical coordinate mappings to your cards so you can locate them instantly:
   - **Binders**: Maps by Binder Name, Page Number, and Slot (1-9). Features a double-page book view with 3D page-flip animations and multi-card slot stacking.
   - **Storage Boxes**: Maps by Box Name, Row ID/Letter, and Divider Section.
-- **🎮 Deck Checkout & Check-In**: Reserve the physical cards for a deck and find them fast. Checking a deck out "for play" opens a locator that groups every card by **container → page → slot** and highlights each one in its compartment grid; while checked out, those cards are greyed and badged **In Play** in Storage. Checking the deck back in reverses the flow, guiding each card back to its slot. Select-all by page, container, or the whole deck.
-- **🇯🇵 Japanese Card Support**: Stores and displays cards under their native Japanese names (hiragana, katakana, kanji) and auto-translates them to English for API lookups.
-- **💾 Universal Database Exports**: One-click downloads of your complete database in CSV (TCGplayer format compatible) or JSON.
-- **🔐 Multi-User Auth**: Session-token authentication (opaque random tokens stored in a server-side `sessions` table, sent as a `Bearer` header) with admin controls for managing users and roles.
-- **🐳 100% Self-Hostable & Portable**: Single-container Docker build with a local SQLite database that mounts to a persistent volume.
-- **⚡ CI/CD Automation**: GitHub Actions workflow to auto-build and publish the container image to GitHub Container Registry (GHCR).
+- **Deck Checkout & Check-In**: Reserve the physical cards for a deck and find them fast. Checking a deck out "for play" opens a locator that groups every card by **container → page → slot** and highlights each one in its compartment grid; while checked out, those cards are greyed and badged **In Play** in Storage. Checking the deck back in reverses the flow, guiding each card back to its slot. Select-all by page, container, or the whole deck.
+- **Japanese Card Support**: Stores and displays cards under their native Japanese names (hiragana, katakana, kanji) and auto-translates them to English for API lookups.
+- **Universal Database Exports**: One-click downloads of your complete database in CSV (TCGplayer format compatible) or JSON.
+- **Multi-User Auth**: Session-token authentication (opaque random tokens stored in a server-side `sessions` table, sent as a `Bearer` header) with admin controls for managing users and roles.
+- **100% Self-Hostable & Portable**: Single-container Docker build with a local SQLite database that mounts to a persistent volume.
+- **CI/CD Automation**: GitHub Actions workflow to auto-build and publish the container image to GitHub Container Registry (GHCR).
 
 ---
 
-## 🛠️ Tech Stack
+## ️ Tech Stack
 
 - **Frontend**: React, Vite, Recharts, Lucide React, Canvas Confetti
 - **Backend**: Node.js, Express, SQLite (`sqlite3` module), Axios, Helmet, express-rate-limit
@@ -61,7 +61,7 @@ Identify physical cards with your phone's camera, track real-time market valuati
 
 ---
 
-## 🚀 Quick Start (Development)
+## Quick Start (Development)
 
 ### Prerequisites
 - Node.js (v18+)
@@ -100,7 +100,7 @@ If you prefer not to use self-signed HTTPS in development:
 
 ---
 
-## 🔑 First-Time Sign In
+## First-Time Sign In
 
 On its **first startup**, Bindarr creates a default administrator account and prints the credentials to the server console (the terminal running `npm run dev` / `npm start`, or `docker-compose logs`).
 
@@ -124,7 +124,7 @@ After logging in, open **Settings** and change the password. Additional users ca
 
 ---
 
-## 🎮 Deck Checkout & Check-In
+## Deck Checkout & Check-In
 
 Decks let you reserve the physical cards you need for a game and locate them fast. Checkout and check-in **never move your cards** in the database — a card's stored slot is both where you grab it and where it returns. The only thing that changes is the deck's checked-out status, which drives the greying in Storage.
 
@@ -145,7 +145,7 @@ While a deck is checked out, its cards show **greyed with an "In Play" badge** i
 
 ---
 
-## 🐳 Docker Deployment (Production)
+## Docker Deployment (Production)
 
 Bindarr ships as a single container (multi-stage build, serves the compiled frontend from the Node server) published to GitHub Container Registry. **No clone or build needed** — copy the compose file below and run.
 
@@ -179,7 +179,7 @@ Bindarr ships as a single container (multi-stage build, serves the compiled fron
    docker compose up -d
    ```
 
-3. Open `http://localhost:3001`. Grab the auto-generated admin password from the logs (`docker compose logs | grep password`) — see [First-Time Sign In](#-first-time-sign-in). All data persists in the `bindarr-data` volume.
+3. Open `http://localhost:3001`. Grab the auto-generated admin password from the logs (`docker compose logs | grep password`) — see [First-Time Sign In](#first-time-sign-in). All data persists in the `bindarr-data` volume.
 
 > [!TIP]
 > Update to the newest image any time with `docker compose pull && docker compose up -d`. Your data in the volume is untouched.
@@ -193,7 +193,7 @@ You can configure Bindarr by passing these environment variables in your contain
 - `PORT` (Default: `3001`) - The port the server runs on.
 - `DB_PATH` (Default: `/app/database/pokemon_cards.db`) - Location of the SQLite database.
 - `POKEMON_TCG_API_KEY` (Optional) - Your API key from [pokemontcg.io](https://pokemontcg.io). While Bindarr works without one, adding a free key increases TCG API rate limits (from 20k to 50k requests/day).
-- `DEFAULT_ADMIN_PASSWORD` (Optional) - Sets a known password for the auto-created `admin` account on first startup. If unset, a random password is generated and printed once to the server logs (see [First-Time Sign In](#-first-time-sign-in)).
+- `DEFAULT_ADMIN_PASSWORD` (Optional) - Sets a known password for the auto-created `admin` account on first startup. If unset, a random password is generated and printed once to the server logs (see [First-Time Sign In](#first-time-sign-in)).
 - `PUBLIC_BASE_URL` (Optional) - Externally-reachable URL when running behind a reverse proxy, e.g. `https://cards.example.com`. Used to build collection share links, and its origin is automatically added to the CORS allow-list, so setting this alone is enough for logins through the proxy. Also editable from the Admin panel. (`localhost` and private-LAN origins are always allowed regardless. To whitelist *additional* public origins, set `CORS_ORIGIN` to a comma-separated list.)
 - `ALLOW_REGISTRATION` (Optional) - Set to `true` to allow open self-registration from the login screen. Default (unset) is **invite-only**: only an admin creates accounts via the Admin panel, and the Sign Up option is hidden.
 - `TRUST_PROXY` (Optional) - Set to the number of proxy hops (usually `1`) when running behind a reverse proxy that terminates TLS, so `req.ip` and the rate limiters use the real client IP from `X-Forwarded-For`. Leave unset when the app is directly exposed. Note: mobile camera access requires HTTPS, so a TLS-terminating proxy in front of the app is the expected production setup.
@@ -203,7 +203,7 @@ The server exposes `GET /api/health` (no auth). It returns `200 {"status":"ok"}`
 
 ---
 
-## 🔍 Card Scanning & Match Data
+## Card Scanning & Match Data
 
 Identification is **image-only** — your photo is matched against precomputed visual features, no OCR. Reference data lives in `backend/data/` (gitignored — large and regenerable; not shipped in the repo).
 
@@ -240,7 +240,7 @@ These download every card image and are **heavy**: several hours of CPU + downlo
 
 ---
 
-## 💾 Backup, Restore & Recovery
+## Backup, Restore & Recovery
 
 **Backup.** All state lives in the single SQLite file (the `bindarr-data` volume in Docker, or `DB_PATH` locally). Two options:
 - **File-level:** copy the DB file while the container is stopped, e.g. `docker run --rm -v bindarr-data:/data -v "$PWD":/backup alpine cp /data/pokemon_cards.db /backup/`. (The app runs in WAL mode; stop the container first so the `-wal`/`-shm` files are checkpointed.)
@@ -252,7 +252,7 @@ These download every card image and are **heavy**: several hours of CPU + downlo
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```text
 /bindarr
@@ -295,6 +295,6 @@ These download every card image and are **heavy**: several hours of CPU + downlo
 
 ---
 
-## 📄 License
+## License
 
 Released under the [MIT License](LICENSE).
