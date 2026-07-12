@@ -186,16 +186,25 @@ router.post('/seed-cards', async (req, res) => {
     // per set via getCardsBySet, cached like any real lookup.
     const SEED_SETS = ['base1', 'sv1', 'swsh1'];
     const MOCK_POOL = [];
+    // A transient API hiccup (rate limit, timeout) on one set shouldn't fail the
+    // whole seed — skip that set and keep going. The empty-pool guard below
+    // still catches the case where every set failed.
     for (const setId of SEED_SETS) {
-      const cards = await tcgApi.getCardsBySet(setId);
-      MOCK_POOL.push(...cards);
+      try {
+        MOCK_POOL.push(...await tcgApi.getCardsBySet(setId));
+      } catch (err) {
+        console.error(`Seed: skipping Pokémon set ${setId}:`, err.message);
+      }
     }
     // Also pull MTG sets (vintage + modern) via Scryfall so the seeded
     // collection spans both games, not just Pokémon.
     const MTG_SEED_SETS = ['lea', 'mh3'];
     for (const setCode of MTG_SEED_SETS) {
-      const cards = await scryfallApi.getCardsBySet(setCode);
-      MOCK_POOL.push(...cards);
+      try {
+        MOCK_POOL.push(...await scryfallApi.getCardsBySet(setCode));
+      } catch (err) {
+        console.error(`Seed: skipping MTG set ${setCode}:`, err.message);
+      }
     }
     if (MOCK_POOL.length === 0) {
       return res.status(502).json({ error: 'Could not fetch seed card data from the card APIs. Try again shortly.' });
