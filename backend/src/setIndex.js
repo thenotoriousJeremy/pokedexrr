@@ -13,7 +13,6 @@ const { cv } = require('opencv-wasm');
 
 const SETS_DIR = path.join(__dirname, '..', 'data', 'sets');
 const DESC_BYTES = 32, CAP = 500, REF_WIDTH = 500, RATIO = 0.75, RANSAC_PX = 5.0;
-const MATCH_N = 175; // descriptors used per side when matching (speed vs the full 500)
 
 const http = axios.create({ timeout: 30000, headers: { 'User-Agent': 'CardDexrr/1.0', 'Accept': 'application/json' } });
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -107,13 +106,10 @@ function isReady(game, set) { return !!loadSet(game, set); }
 // Inlier count between query features and a stored card's features.
 function inliers(bf, qDescFull, qKp, refDesc, refKp, count) {
   if (count < 4 || qDescFull.rows < 4) return 0;
-  // Cap both sides to MATCH_N descriptors to keep knnMatch fast over a whole set.
-  const nRef = Math.min(count, MATCH_N);
-  const qDesc = qDescFull.rows > MATCH_N ? qDescFull.rowRange(0, MATCH_N) : qDescFull;
-  const cand = new cv.Mat(nRef, DESC_BYTES, cv.CV_8U);
-  cand.data.set(refDesc.subarray(0, nRef * DESC_BYTES));
+  const cand = new cv.Mat(count, DESC_BYTES, cv.CV_8U);
+  cand.data.set(refDesc.subarray(0, count * DESC_BYTES));
   const knn = new cv.DMatchVectorVector();
-  bf.knnMatch(qDesc, cand, knn, 2);
+  bf.knnMatch(qDescFull, cand, knn, 2);
   const src = [], dst = [];
   for (let i = 0; i < knn.size(); i++) {
     const m = knn.get(i);

@@ -84,11 +84,22 @@ function parseRow(r) {
   };
 }
 
-async function fetchFromScryfall(q, lang) {
+async function fetchFromScryfall(q, lang, retries = 3) {
   let url = `/cards/search?q=${encodeURIComponent(q)}`;
   if (lang) url += `&lang=${lang.toLowerCase() === 'ja' ? 'ja' : encodeURIComponent(lang)}`;
-  const resp = await client.get(url);
-  return (resp.data && resp.data.data) || [];
+  
+  for (let i = 0; i < retries; i++) {
+    try {
+      const resp = await client.get(url);
+      return (resp.data && resp.data.data) || [];
+    } catch (error) {
+      if (error.response && error.response.status === 429 && i < retries - 1) {
+        await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+        continue;
+      }
+      throw error;
+    }
+  }
 }
 
 // Search MTG cards: local card_cache first (game='mtg'), then Scryfall. Mirrors
@@ -292,7 +303,7 @@ async function updateCollectionPrices() {
       } catch (e) {
         console.error(`Failed to update MTG price for ${row.card_id}:`, e.message);
       }
-      await new Promise(r => setTimeout(r, 120));
+      await new Promise(r => setTimeout(r, 200));
     }
     console.log('MTG price update complete.');
   } catch (err) {

@@ -1,48 +1,18 @@
 import { useState, useEffect, useRef } from 'react';
-import { Camera, RefreshCw, AlertTriangle, X, Settings, Library, MapPin, Zap, ZapOff } from 'lucide-react';
-import Tesseract from 'tesseract.js';
+import { Camera, RefreshCw, AlertTriangle, X, Settings, Library, Zap, ZapOff } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
-import { translateJapaneseName } from '../utils/pokemonTranslation';
 import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
 // Fixed centered guide box (normalized 0..1). Center the card in it; the crop
-// inside is sent to the server embedding matcher. OCR sub-region boxes (fallback)
-// are positioned as percentages of it.
+// inside is sent to the server embedding matcher.
 const DEFAULT_RECT = { x: 0.17, y: 0.06, w: 0.66, h: 0.88 };
 // Confidence gates for the server match. When ORB geometric verification ran
 // (verified=true), gate on inlier count; otherwise on CLIP cosine similarity.
-// Below the gate the scan falls back to OCR. Tunable once tested on real photos.
+// Below the gate the scan shows the candidates for manual selection.
 const SCAN_MATCH_MIN_SCORE = 0.55;
 const SCAN_MATCH_MIN_INLIERS = 12;
-
-// Turn a failed /api/search response into a user-facing message. 429 (rate
-// limit) and 403 (bad API key) are called out distinctly so the user knows to
-// back off vs. fix their key, instead of seeing a generic "server error".
-function searchFailureMessage(status) {
-  if (status === 429) return 'Rate limit reached. Auto-scan paused — wait a moment before scanning again.';
-  if (status === 403) return 'Pokémon TCG API key was rejected. Check it in Settings.';
-  return 'Search failed. Server error.';
-}
-
-// Modern MTG cards print the set code and collector number in the bottom-left
-// corner (e.g. "0171/280 R" over "ELD • EN"). OCR there is noisy and the two
-// tokens may land on separate lines, so pull the set code (3-5 char token) and
-// the collector number independently rather than requiring one rigid pattern.
-function parseMtgSetNumber(text) {
-  const up = (text || '').toUpperCase();
-  const combined = up.match(/\b([A-Z0-9]{3,5})[\s/]+([0-9A-Z★]+)\b/);
-  if (combined && /\d/.test(combined[2])) {
-    return { set: combined[1], number: combined[2] };
-  }
-  const numMatch = up.match(/(\d{1,4})\s*\/\s*\d{1,4}/) || up.match(/\b(\d{1,4})[A-Z★]?\b/);
-  const setMatch = up.match(/\b([A-Z]{3}[A-Z0-9]{0,2})\b/); // 3-5 char, letter-led
-  const number = numMatch ? numMatch[1] : '';
-  const set = setMatch ? setMatch[1] : '';
-  if (!set && !number) return null;
-  return { set, number };
-}
 
 function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
@@ -59,7 +29,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [cameraActive, setCameraActive] = useState(false);
   const [hasCameraError, setHasCameraError] = useState(false);
   const [autoScan, setAutoScan] = useState(false);
-  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkMode, setBulkMode] = useState(() => localStorage.getItem('scanner_auto_confirm') === '1');
   const [showSettings, setShowSettings] = useState(false);
   const [videoRatio, setVideoRatio] = useState(null);
   // Focus control
@@ -68,32 +38,20 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [focusDistance, setFocusDistance] = useState(0);
   const [focusRange, setFocusRange] = useState({ min: 0, max: 1, step: 0.1 });
   // Torch/Flashlight control
-  const [torchSupported, setTorchSupported] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
-  const [cardLayout, setCardLayout] = useState('modern');
+  const [cardLayout, setCardLayout] = useState(() => localStorage.getItem('default_game') === 'mtg' ? 'mtg' : 'modern');
   // Per-set index prep state for MTG set-scoped matching: 'idle'|'building'|'ready'.
   const [setPrep, setSetPrep] = useState('idle');
   // Which game the current layout belongs to. 'mtg' is its own layout; every
   // other layout value is a Pokémon sub-layout.
   const scanGame = cardLayout === 'mtg' ? 'mtg' : 'pokemon';
-  // Manual MTG set code — persisted so a scanning session keeps using the same set.
   const [mtgSetCode, setMtgSetCodeState] = useState(() => localStorage.getItem('scanner_mtg_set') || '');
   const setMtgSetCode = (v) => { const upper = (v || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5); setMtgSetCodeState(upper); localStorage.setItem('scanner_mtg_set', upper); };
 
-  // Scanned card text review overrides
-  const [, setScannedName] = useState('');
-  const [, setScannedNumber] = useState('');
-  
-  // OCR Binarization debug images
-  const [debugNameImg, setDebugNameImg] = useState('');
-  const [debugNumLeftImg, setDebugNumLeftImg] = useState('');
-  const [debugNumRightImg, setDebugNumRightImg] = useState('');
-  // Hash-match diagnostics: the exact crop that gets hashed + the ranked
-  // candidates (name/set/number + Hamming distance) so matching is not a black box.
   const [debugHashImg, setDebugHashImg] = useState('');
   const [debugCandidates, setDebugCandidates] = useState([]);
   const [debugScoped, setDebugScoped] = useState(null); // set code if set-scoped, false if global, null if n/a
-  
+
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const currentScanId = useRef(0);
@@ -110,7 +68,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   // Drawer states
   const [selectedCard, setSelectedCard] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [locations, setLocations] = useState([]);
   const [autoAddCountdown, setAutoAddCountdown] = useState(null);
   const [autoAddTargetCard, setAutoAddTargetCard] = useState(null);
   
@@ -120,13 +77,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const [printing, setPrinting] = useState('Normal');
   const [language, setLanguage] = useState('English');
   const [purchasePrice, setPurchasePrice] = useState(0);
-  // Target container for scanned cards — persisted so a bulk scanning session
-  // keeps filing into the same box/binder across visits.
-  const [locationId, setLocationIdState] = useState(() => localStorage.getItem('scanner_target_location') || '');
-  const setLocationId = (value) => {
-    setLocationIdState(value);
-    localStorage.setItem('scanner_target_location', value);
-  };
 
   // Keep a ref mirroring the latest stream so the unmount cleanup below (whose
   // closure is fixed from the first render) can always stop the live tracks.
@@ -171,13 +121,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     try {
       const response = await fetch('/api/locations');
       if (response.ok) {
-        const data = await response.json();
-        setLocations(data);
-        // Drop a persisted target that no longer exists (container was deleted).
-        const stored = localStorage.getItem('scanner_target_location');
-        if (stored && !data.some(l => String(l.id) === stored)) {
-          setLocationId('');
-        }
+        // We no longer use locations internally here, but keep fetch alive if needed by external logic.
       }
     } catch (err) {
       console.error('Error fetching locations:', err);
@@ -279,14 +223,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setHasCameraError(false);
     setScanMatches([]);
     setScanStatus('');
-    setScannedName('');
-    setScannedNumber('');
-    setDebugNameImg('');
     setDebugHashImg('');
     setDebugCandidates([]);
     setDebugScoped(null);
-    setDebugNumLeftImg('');
-    setDebugNumRightImg('');
     setShowSettings(false);
     setVideoRatio(null);
     try {
@@ -312,13 +251,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
             setFocusSupported(true);
             setFocusRange({ min: caps.focusDistance.min, max: caps.focusDistance.max, step: caps.focusDistance.step || 0.01 });
             setFocusDistance(caps.focusDistance.max * 0.3); // sensible default for cards
-          } else {
-            setFocusSupported(false);
-          }
-          if (caps.torch) {
-            setTorchSupported(true);
-          } else {
-            setTorchSupported(false);
           }
         }
       } catch (e) {
@@ -343,14 +275,9 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setCameraActive(false);
     setAutoScan(false); // Reset autoScan on camera stop
     setIsTorchOn(false);
-    setScannedName('');
-    setScannedNumber('');
-    setDebugNameImg('');
     setDebugHashImg('');
     setDebugCandidates([]);
     setDebugScoped(null);
-    setDebugNumLeftImg('');
-    setDebugNumRightImg('');
     setShowSettings(false);
     setVideoRatio(null);
   };
@@ -448,60 +375,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     return canvas;
   };
 
-  // Preprocess cropped canvas for higher OCR accuracy (Binarization / Thresholding)
-  // Bypasses browser-incompatible canvas context filters to run natively on mobile devices.
-  const getProcessedDataUrl = (sourceCanvas, cx, cy, w, h, rotationDeg) => {
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = w * 4; // Upscale by 4x for high-res OCR on small text
-    tempCanvas.height = h * 4;
-    const tempCtx = tempCanvas.getContext('2d');
-    
-    // Enable high-quality image smoothing for clean bicubic interpolation
-    tempCtx.imageSmoothingEnabled = true;
-    tempCtx.imageSmoothingQuality = 'high';
-    
-    // Extract rotated crop by inverse rotating the canvas context
-    tempCtx.translate(tempCanvas.width / 2, tempCanvas.height / 2);
-    tempCtx.rotate(-rotationDeg * (Math.PI / 180));
-    tempCtx.scale(4, 4); // Apply the 4x upscale
-    tempCtx.drawImage(sourceCanvas, -cx, -cy);
-    
-    // Reset transform before pixel manipulation (not strictly necessary but safe)
-    tempCtx.setTransform(1, 0, 0, 1, 0, 0);
-    
-    // Apply pixel-level high-contrast grayscale enhancement
-    // (Grayscale with linear contrast stretching is superior to harsh binarization for anti-aliased fonts)
-    try {
-      const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-      const data = imageData.data;
-      const len = data.length;
-      
-      for (let i = 0; i < len; i += 4) {
-        const r = data[i];
-        const g = data[i+1];
-        const b = data[i+2];
-        
-        // Calculate standard luminance
-        const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-        
-        // Boost contrast (stretch scale centered around 128)
-        const contrastFactor = 2.0; 
-        let value = contrastFactor * (luma - 128) + 128;
-        value = Math.max(0, Math.min(255, value)); // Clamp
-        
-        data[i] = value;
-        data[i+1] = value;
-        data[i+2] = value;
-      }
-      
-      tempCtx.putImageData(imageData, 0, 0);
-    } catch (e) {
-      console.error('Manual pixel thresholding failed, using raw crop:', e);
-    }
-    
-    return tempCanvas.toDataURL('image/jpeg', 0.95);
-  };
-
   // Present search results the same way whether they came from image match or OCR:
   // show the picker, and on a single result take the fast path (auto-add / quick-
   // add per mode). autoSingle lets the caller allow the fast path for a single MTG
@@ -543,7 +416,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setScanStatus('Initializing scanner...');
 
     const video = videoRef.current;
-    const videoRect = video.getBoundingClientRect();
     
     const guideElement = document.querySelector('.scan-card-guide');
     if (!guideElement) {
@@ -554,33 +426,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
     // 1. Capture and correctly orient the video frame onto a canvas
     const orientedCanvas = getOrientedVideoCanvas(video);
-    
-    // Scaling factors to translate actual screen bounds to oriented canvas bounds
-    const scaleX = orientedCanvas.width / videoRect.width;
-    const scaleY = orientedCanvas.height / videoRect.height;
-
-    // Extract crops directly from the visual overlay guides on screen, 
-    // ensuring perfect alignment even if the parent overlay is translated or rotated.
-    const titleGuide = document.querySelector('.scan-region-title');
-    const leftNumGuide = document.querySelector('.scan-region-number-left');
-    const rightNumGuide = document.querySelector('.scan-region-number-right');
-
-    const getCropParams = (guideNode) => {
-      if (!guideNode) return null;
-      const rect = guideNode.getBoundingClientRect();
-      const screenCX = rect.left + rect.width / 2;
-      const screenCY = rect.top + rect.height / 2;
-      return {
-        cx: (screenCX - videoRect.left) * scaleX,
-        cy: (screenCY - videoRect.top) * scaleY,
-        w: guideNode.offsetWidth * scaleX,
-        h: guideNode.offsetHeight * scaleY
-      };
-    };
-
-    const nameCrop = getCropParams(titleGuide);
-    const numLeftCrop = getCropParams(leftNumGuide);
-    const numRightCrop = getCropParams(rightNumGuide);
 
     try {
       // Identify by perceptual hash of the whole card first (MTG + Pokémon). This
@@ -617,209 +462,66 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
               setDebugCandidates((candidates || []).map(c => ({ ...c, verified })));
               const top = candidates && candidates[0];
               const confident = top && (verified ? top.inliers >= SCAN_MATCH_MIN_INLIERS : top.score >= SCAN_MATCH_MIN_SCORE);
-              if (confident) {
-                // Image ID gives the card reliably, but not the printing/set —
-                // reprints share art. If MTG and the user gave a set code, narrow
-                // to that set for an exact one-printing hit (zero extra taps).
-                // Uses the DETECTED game (auto-detect may override the UI mode).
-                const usedSet = matchGame === 'mtg' && mtgSetCode;
-                const buildParams = (withSet) => {
-                  const p = new URLSearchParams({ game: matchGame, prints: '1' });
-                  if (top.name) p.append('name', top.name);
-                  if (withSet) p.append('set', mtgSetCode);
-                  return p;
-                };
-                let searchResponse = await fetch(`/api/search?${buildParams(usedSet).toString()}`);
-                if (scanId !== currentScanId.current) return;
-                let matches = searchResponse.ok ? await searchResponse.json() : [];
-                // Set code didn't match this card (wrong box / card not in that
-                // set) — retry across all printings so the user can still pick.
-                if (usedSet && matches.length === 0) {
-                  searchResponse = await fetch(`/api/search?${buildParams(false).toString()}`);
+              if (candidates && candidates.length > 0) {
+                if (confident) {
+                  // Uses the DETECTED game (auto-detect may override the UI mode).
+                  const usedSet = matchGame === 'mtg' && mtgSetCode;
+                  const buildParams = (withSet) => {
+                    const p = new URLSearchParams({ game: matchGame, prints: '1' });
+                    if (top.name) p.append('name', top.name);
+                    if (withSet) p.append('set', mtgSetCode);
+                    return p;
+                  };
+                  let searchResponse = await fetch(`/api/search?${buildParams(usedSet).toString()}`);
                   if (scanId !== currentScanId.current) return;
-                  matches = searchResponse.ok ? await searchResponse.json() : [];
+                  let matches = searchResponse.ok ? await searchResponse.json() : [];
+                  // Set code didn't match this card (wrong box / card not in that
+                  // set) — retry across all printings so the user can still pick.
+                  if (usedSet && matches.length === 0) {
+                    searchResponse = await fetch(`/api/search?${buildParams(false).toString()}`);
+                    if (scanId !== currentScanId.current) return;
+                    matches = searchResponse.ok ? await searchResponse.json() : [];
+                  }
+                  // Confident image match: a single result is unambiguous (one
+                  // printing, or set code narrowed it), so take the fast path.
+                  if (matches.length) { await applyMatches(matches, '', true); return; }
                 }
-                // Confident image match: a single result is unambiguous (one
-                // printing, or set code narrowed it), so take the fast path.
-                if (matches.length) { await applyMatches(matches, '', true); return; }
+
+                // If not confident (or multiple printings), fetch full card info for candidates and show the picker.
+                setScanStatus('Fetching candidate cards...');
+                const fullCandidates = await Promise.all(
+                  candidates.slice(0, 8).map(async cand => {
+                    const p = new URLSearchParams({ game: matchGame });
+                    if (cand.set) p.append('set', cand.set);
+                    if (cand.number) p.append('number', cand.number);
+                    if (cand.name) p.append('name', cand.name);
+                    const res = await fetch(`/api/search?${p.toString()}`);
+                    if (res.ok) {
+                      const m = await res.json();
+                      return m[0]; // Take the closest printing
+                    }
+                    return null;
+                  })
+                );
+                
+                if (scanId !== currentScanId.current) return;
+                const validCandidates = fullCandidates.filter(c => c);
+                if (validCandidates.length > 0) {
+                  await applyMatches(validCandidates, '', false);
+                  return;
+                }
               }
             }
           } catch (e) { console.warn('scan-match request failed:', e); }
-          setScanStatus('No confident image match. Falling back to text scan...');
         }
       }
 
-      // 2. Process crop images using the oriented canvas
-      // We pass the center points, dimensions, and current rotation to inverse-rotate the crop perfectly!
-      const nameDataUrl = nameCrop ? getProcessedDataUrl(orientedCanvas, nameCrop.cx, nameCrop.cy, nameCrop.w, nameCrop.h, 0) : '';
-      setDebugNameImg(nameDataUrl);
-
-      let numLeftDataUrl = '';
-      if (numLeftCrop) {
-        numLeftDataUrl = getProcessedDataUrl(orientedCanvas, numLeftCrop.cx, numLeftCrop.cy, numLeftCrop.w, numLeftCrop.h, 0);
-        setDebugNumLeftImg(numLeftDataUrl);
-      } else {
-        setDebugNumLeftImg('');
-      }
-
-      let numRightDataUrl = '';
-      if (numRightCrop) {
-        numRightDataUrl = getProcessedDataUrl(orientedCanvas, numRightCrop.cx, numRightCrop.cy, numRightCrop.w, numRightCrop.h, 0);
-        setDebugNumRightImg(numRightDataUrl);
-      } else {
-        setDebugNumRightImg('');
-      }
-
-      // 3. Perform OCR on Card Name (PSM 7: Treat image as a single text line)
-      setScanStatus('Reading Card Name...');
-      const nameOcrLang = cardLayout === 'japanese' ? 'jpn' : 'eng';
-      const nameResult = await Tesseract.recognize(nameDataUrl, nameOcrLang, {
-        parameters: {
-          tessedit_pageseg_mode: '7'
-        }
-      });
-      if (scanId !== currentScanId.current) return;
-      const nameRaw = nameResult.data.text.trim();
-      
-      let detectedName = '';
-      if (cardLayout === 'japanese') {
-        const cleanedJpName = nameRaw.replace(/\s+/g, '').replace(/[^\p{L}\d]/gu, '').trim();
-        detectedName = translateJapaneseName(cleanedJpName) || cleanedJpName;
-        console.log(`Japanese OCR Read: "${nameRaw}" -> Cleaned: "${cleanedJpName}" -> English: "${detectedName}"`);
-      } else {
-        // Clean name (strip extra characters and common template tags like 'HP' or 'Stage')
-        const cleanNameParts = nameRaw.replace(/[^a-zA-Z0-9\s-]/g, ' ').replace(/\s+/g, ' ').trim().split(' ');
-        const stopwords = ['HP', 'STAGE', 'BASIC', 'EVOLVES', 'FROM', 'LV', 'LEVEL', 'NO', 'PROMO', 'TRAINER', 'ENERGY', 'ITEM', 'STADIUM', 'SUPPORTER', 'POKEMON', 'POKÉMON', 'STAGE1', 'STAGE2', 'MEGA', 'VMAX', 'VSTAR'];
-        const filteredNameParts = cleanNameParts.filter(w => {
-          const upper = w.toUpperCase();
-          if (stopwords.includes(upper)) return false;
-          if (/^\d+$/.test(w)) return false; // skip pure numbers like HP values (e.g. 120)
-          if (w.length === 1 && upper !== 'V') return false;
-          return true;
-        });
-        detectedName = filteredNameParts.slice(0, 3).join(' ').trim();
-      }
-
-      // 4. Perform OCR on Card Numbers in parallel depending on layout (forcing PSM 7 text line)
-      setScanStatus('Reading Card Number...');
-      const ocrPromises = [];
-      if (numLeftDataUrl) {
-        ocrPromises.push(
-          Tesseract.recognize(numLeftDataUrl, 'eng', {
-            parameters: {
-              tessedit_pageseg_mode: '7'
-            }
-          }).then(res => ({ side: 'left', text: res.data.text.trim() }))
-        );
-      }
-      if (numRightDataUrl) {
-        ocrPromises.push(
-          Tesseract.recognize(numRightDataUrl, 'eng', {
-            parameters: {
-              tessedit_pageseg_mode: '7'
-            }
-          }).then(res => ({ side: 'right', text: res.data.text.trim() }))
-        );
-      }
-
-      const ocrResults = await Promise.all(ocrPromises);
-      if (scanId !== currentScanId.current) return;
-      let numLeftRaw = '';
-      let numRightRaw = '';
-      for (const res of ocrResults) {
-        if (res.side === 'left') numLeftRaw = res.text;
-        if (res.side === 'right') numRightRaw = res.text;
-      }
-      
-      // Helper to extract numerator (card number) and map common character recognition failures
-      const extractNumber = (raw) => {
-        // Map common OCR letter confusions to numbers
-        const mapped = raw
-          .replace(/[Oo]/g, '0')
-          .replace(/[Ii|l]/g, '1')
-          .replace(/[Zz]/g, '2')
-          .replace(/[Ss]/g, '5')
-          .replace(/[Bb]/g, '8');
-
-        const slashMatch = mapped.match(/([0-9]+)\s*\/\s*([0-9]+)/);
-        if (slashMatch) return slashMatch[1].trim();
-        
-        const standAloneMatch = mapped.match(/([0-9]+)/);
-        if (standAloneMatch) return standAloneMatch[0].trim();
-        
-        return '';
-      };
-
-      let detectedNumberLeft = extractNumber(numLeftRaw);
-      let detectedNumberRight = extractNumber(numRightRaw);
-
-      // Discard long garbage blocks
-      if (detectedNumberLeft.length > 8) detectedNumberLeft = '';
-      if (detectedNumberRight.length > 8) detectedNumberRight = '';
-
-      // Determine best match: Prioritize the box containing actual digits, falling back to either non-empty read
-      let detectedNumber = '';
-      if (/\d+/.test(detectedNumberRight)) {
-        detectedNumber = detectedNumberRight;
-      } else if (/\d+/.test(detectedNumberLeft)) {
-        detectedNumber = detectedNumberLeft;
-      } else {
-        detectedNumber = detectedNumberRight || detectedNumberLeft;
-      }
-
-      console.log(`OCR Raw Name Text: "${nameRaw}"`);
-      console.log(`OCR Cleaned Name: "${detectedName}"`);
-      console.log(`OCR Left Number Read: "${detectedNumberLeft}" (raw: "${numLeftRaw}")`);
-      console.log(`OCR Right Number Read: "${detectedNumberRight}" (raw: "${numRightRaw}")`);
-      console.log(`OCR Selected Number: "${detectedNumber}"`);
-
-      // Update input preview values for manual correction overrides
-      setScannedName(detectedName);
-      setScannedNumber(detectedNumber);
-
-      if (!detectedName && !detectedNumber) {
-        setScanStatus('OCR failed. Could not read card. Please align card clearly in the guide boxes.');
-        setScanFlash('error');
-        setTimeout(() => setScanFlash(null), 1500);
-        setLoading(false);
-        return;
-      }
-
-      // 4. Query local database & API
-      setScanStatus(`Searching database for: ${detectedName} ${detectedNumber}...`);
-      const params = new URLSearchParams();
-      if (cardLayout === 'mtg') {
-        // MTG lookups are keyed off set code + collector number (exact match on
-        // Scryfall); the card name is a fallback if the corner didn't read.
-        params.append('game', 'mtg');
-        const parsed = parseMtgSetNumber(`${numLeftRaw} ${numRightRaw}`);
-        // The user-declared set code is authoritative (they know which box they're
-        // feeding); only fall back to the flaky OCR-read set if none was given.
-        // This keeps the OCR fallback inside the chosen set, never cross-set.
-        const effectiveSet = mtgSetCode || parsed?.set;
-        if (effectiveSet) params.append('set', effectiveSet);
-        if (parsed?.number) params.append('number', parsed.number);
-        else if (detectedNumber) params.append('number', detectedNumber);
-        if (detectedName) params.append('name', detectedName);
-      } else {
-        if (detectedName) params.append('name', detectedName);
-        if (detectedNumber) params.append('number', detectedNumber);
-      }
-
-      const searchResponse = await fetch(`/api/search?${params.toString()}`);
-      if (scanId !== currentScanId.current) return;
-      if (searchResponse.ok) {
-        const matches = await searchResponse.json();
-        await applyMatches(matches, `Could not find cards matching "${detectedName}" (${detectedNumber}). Try again or search manually.`);
-      } else {
-        if (searchResponse.status === 429) setAutoScan(false); // stop the loop from hammering the API
-        setScanStatus(searchFailureMessage(searchResponse.status));
-        setScanFlash('error');
-        setTimeout(() => setScanFlash(null), 1500);
-      }
+      setScanStatus('No confident match. Try again or search manually.');
+      setScanFlash('error');
+      setTimeout(() => setScanFlash(null), 1500);
     } catch (err) {
-      console.error('OCR Process failed:', err);
-      if (scanId === currentScanId.current) setScanStatus('OCR processing failed. Please search manually.');
+      console.error('Scan match failed:', err);
+      if (scanId === currentScanId.current) setScanStatus('Scan failed. Please search manually.');
     } finally {
       if (scanId === currentScanId.current) setLoading(false);
     }
@@ -1229,7 +931,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
           {/* OCR Crop Results — only render when we actually have crop feeds,
               so an empty dashed box doesn't eat vertical space on phone. */}
-          {cameraActive && (debugHashImg || debugCandidates.length > 0 || debugNameImg || debugNumLeftImg || debugNumRightImg) && (
+          {cameraActive && (debugHashImg || debugCandidates.length > 0) && (
             <div className="glass-panel" style={{ width: '100%', padding: '0.75rem 1rem', background: 'rgba(0,0,0,0.3)', border: '1px dashed var(--border-glass-hover)', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.25rem' }}>
               {/* Hash-match diagnostics: what was cropped + the ranked candidates. */}
               {(debugHashImg || debugCandidates.length > 0) && (
@@ -1260,29 +962,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                       );
                     })}
                   </div>
-                </div>
-              )}
-              {/* Show cropped OCR feeds for alignment debugging */}
-              {(debugNameImg || debugNumLeftImg || debugNumRightImg) && (
-                <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>
-                  {debugNameImg && (
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Name Crop Feed</span>
-                      <img src={debugNameImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Name Crop" />
-                    </div>
-                  )}
-                  {debugNumLeftImg && (
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Modern No. Crop</span>
-                      <img src={debugNumLeftImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Modern Number Crop" />
-                    </div>
-                  )}
-                  {debugNumRightImg && (
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
-                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Vintage No. Crop</span>
-                      <img src={debugNumRightImg} style={{ width: '100%', height: '28px', objectFit: 'contain', background: '#fff', borderRadius: '2px', border: '1px solid var(--border-glass-hover)' }} alt="Vintage Number Crop" />
-                    </div>
-                  )}
                 </div>
               )}
             </div>
@@ -1423,9 +1102,52 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
               </button>
             </div>
 
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0 }}>
-              Select the correct card to add to your collection, or click <strong>Rescan</strong> to try capturing again.
-            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: 0 }}>
+                Select the correct card to add to your collection.
+              </p>
+              
+              {/* Manual search fallback within the modal */}
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input 
+                  type="text" 
+                  placeholder="Manual search (e.g. FDN 540 or Pikachu)" 
+                  className="input-control"
+                  style={{ flex: 1, padding: '0.4rem 0.5rem', fontSize: '0.8rem' }}
+                  onKeyDown={async (e) => {
+                    if (e.key === 'Enter' && e.target.value.trim()) {
+                      const q = e.target.value.trim();
+                      const p = new URLSearchParams({ game: scanGame });
+                      
+                      if (scanGame === 'mtg') {
+                        // Very simple fallback: try to parse set code and number if format looks like "SET 123"
+                        const match = q.match(/^([A-Z0-9]{3,5})\s+(\d+[A-Z★]?)$/i);
+                        if (match) {
+                          p.append('set', match[1]);
+                          p.append('number', match[2]);
+                        } else {
+                          p.append('name', q);
+                        }
+                      } else {
+                         // Pokemon: just try name or number
+                         if (/^\d+$/.test(q)) p.append('number', q);
+                         else p.append('name', q);
+                      }
+                      
+                      const searchResponse = await fetch(`/api/search?${p.toString()}`);
+                      if (searchResponse.ok) {
+                        const m = await searchResponse.json();
+                        if (m.length) {
+                          setScanMatches(m);
+                        } else {
+                          showToast('No cards found for manual search.');
+                        }
+                      }
+                    }
+                  }}
+                />
+              </div>
+            </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '1rem', maxHeight: '350px', overflowY: 'auto', padding: '0.25rem' }}>
               {scanMatches.map(card => (
