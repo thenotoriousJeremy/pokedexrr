@@ -87,7 +87,7 @@ export function SortBuilder({ value, onChange }) {
     const nextState = !isDividerOn(items[idx], idx);
     onChange(items.map((i, iIdx) => {
       if (i.id === id) {
-        return { ...i, divider: nextState, dividerColor: i.dividerColor || '#ff4747' };
+        return { ...i, divider: nextState, dividerColor: i.dividerColor || '#6b7280' };
       }
       if (!anyExplicit) {
         return { ...i, divider: iIdx === 0 && iIdx !== idx };
@@ -145,7 +145,7 @@ export function SortBuilder({ value, onChange }) {
               {isDividerOn(item, idx) && (
                 <input 
                   type="color" 
-                  value={item.dividerColor || '#ff4747'}
+                  value={item.dividerColor || '#6b7280'}
                   onChange={(e) => updateDividerColor(item.id, e.target.value)}
                   title="Divider Color"
                   style={{ width: '24px', height: '24px', padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}

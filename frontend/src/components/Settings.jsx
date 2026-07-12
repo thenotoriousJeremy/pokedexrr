@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff } from 'lucide-react';
+import { ShieldAlert, Share2, Clipboard, RefreshCw, KeyRound, Check, Database, Download, Upload, Eye, EyeOff, SlidersHorizontal } from 'lucide-react';
 
 function Settings({ user, onUpdateUser, showToast }) {
   const [showApiKey, setShowApiKey] = useState(false);
@@ -15,6 +15,9 @@ function Settings({ user, onUpdateUser, showToast }) {
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
 
   const [publicBaseUrl, setPublicBaseUrl] = useState('');
+
+  const [defaultGame, setDefaultGame] = useState(() => localStorage.getItem('default_game') || 'pokemon');
+  const [autoConfirm, setAutoConfirm] = useState(() => localStorage.getItem('scanner_auto_confirm') === '1');
 
   useEffect(() => {
     fetch('/api/settings')
@@ -523,12 +526,80 @@ function Settings({ user, onUpdateUser, showToast }) {
             >
               <Upload size={14} />
               <span>Import Backup</span>
-              <input 
-                type="file" 
-                accept=".json,.csv" 
+              <input
+                type="file"
+                accept=".json,.csv"
                 onChange={handleImportFile}
                 style={{ display: 'none' }}
               />
+            </label>
+          </div>
+        </div>
+
+        {/* Preferences Panel */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.75rem' }}>
+            <SlidersHorizontal size={20} style={{ color: 'var(--accent-yellow)' }} />
+            <h3 style={{ color: '#fff', fontSize: '1.1rem' }}>Preferences</h3>
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label htmlFor="settings-default-game">Default Game</label>
+            <select
+              id="settings-default-game"
+              className="select-control"
+              value={defaultGame}
+              onChange={(e) => {
+                const val = e.target.value;
+                setDefaultGame(val);
+                localStorage.setItem('default_game', val);
+                showToast(`Default game set to ${val === 'mtg' ? 'Magic: The Gathering' : 'Pokémon'}.`);
+              }}
+            >
+              <option value="pokemon">Pokémon</option>
+              <option value="mtg">Magic: The Gathering</option>
+            </select>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>
+              The scanner and collection open scoped to this game.
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+            <div>
+              <div style={{ fontWeight: 700, color: '#fff', fontSize: '0.95rem' }}>Scanner Auto-Confirm</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Add high-confidence single matches automatically, skipping the confirm dialog.</div>
+            </div>
+            <label className="switch-control" style={{ position: 'relative', display: 'inline-block', width: '46px', height: '24px', flexShrink: 0 }}>
+              <input
+                type="checkbox"
+                checked={autoConfirm}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setAutoConfirm(checked);
+                  localStorage.setItem('scanner_auto_confirm', checked ? '1' : '0');
+                  showToast(checked ? 'Scanner auto-confirm enabled.' : 'Scanner auto-confirm disabled.');
+                }}
+                style={{ opacity: 0, width: 0, height: 0 }}
+              />
+              <span className={`switch-slider ${autoConfirm ? 'active' : ''}`} style={{
+                position: 'absolute',
+                cursor: 'pointer',
+                top: 0, left: 0, right: 0, bottom: 0,
+                backgroundColor: autoConfirm ? 'var(--type-grass)' : '#334155',
+                transition: '0.3s',
+                borderRadius: '24px'
+              }}>
+                <span style={{
+                  position: 'absolute',
+                  height: '18px', width: '18px',
+                  left: autoConfirm ? '24px' : '4px',
+                  bottom: '3px',
+                  backgroundColor: '#fff',
+                  transition: '0.3s',
+                  borderRadius: '50%',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
+                }}></span>
+              </span>
             </label>
           </div>
         </div>

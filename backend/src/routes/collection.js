@@ -1152,7 +1152,7 @@ router.post('/locations/:id/apply-all', async (req, res) => {
 
     for (const entryId of entry_ids) {
       const entry = await db.get(`
-        SELECT c.id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.game
+        SELECT c.id, c.card_id, c.printing, c.language, cc.name, cc.set_name, cc.number, cc.types, cc.subtypes, cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.supertype, cc.rarity, cc.game, cc.cmc, cc.color_identity
         FROM collection c
         JOIN card_cache cc ON c.card_id = cc.id
         WHERE c.id = ? AND c.user_id = ?
@@ -1194,7 +1194,7 @@ router.post('/locations/:id/resort', async (req, res) => {
     const cards = await db.all(`
       SELECT c.id as entry_id, c.card_id, c.printing, c.language, c.quantity,
              cc.name, cc.set_name, cc.number, cc.types, cc.rarity, cc.supertype, cc.image_url, cc.game,
-             cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
+             cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
       FROM collection c
       JOIN card_cache cc ON c.card_id = cc.id
       WHERE c.location_id = ? AND c.user_id = ?
@@ -1209,11 +1209,10 @@ router.post('/locations/:id/resort', async (req, res) => {
     const ordered = sortCards(cards, location.sort_order, location.foil_sorting);
 
     let workingCompartments = await loadCompartments(db, id, req.user.id);
-    const mockCards = [];
     const results = [];
 
     for (const entry of ordered) {
-      const recommended = await recommendSlot(db, location, entry, workingCompartments, mockCards);
+      const recommended = await recommendSlot(db, location, entry, workingCompartments, []);
       if (!recommended) { results.push({ entry, recommended: null }); continue; }
 
       const finalLoc = recommended.location_id || Number(id);
@@ -1228,12 +1227,6 @@ router.post('/locations/:id/resort', async (req, res) => {
         workingCompartments = workingCompartments.map(c =>
           c.id === recommended.compartment_id ? { ...c, count: c.count + 1, free: c.free - 1 } : c
         );
-        mockCards.push({
-          entry_id: entry.entry_id, compartment_id: recommended.compartment_id, printing: entry.printing, language: entry.language,
-          name: entry.name, supertype: entry.supertype, types: JSON.stringify(entry.types), rarity: entry.rarity,
-          set_name: entry.set_name, number: entry.number, price_trend: entry.price_trend,
-          price_normal: entry.price_normal, price_holofoil: entry.price_holofoil, price_reverse_holofoil: entry.price_reverse_holofoil
-        });
       }
     }
 
@@ -1355,6 +1348,7 @@ router.get('/stats', async (req, res) => {
     const topValuableQuery = `
       SELECT
         c.id AS entry_id, c.location_id, (SELECT name FROM locations WHERE id = c.location_id) AS location_name,
+        (SELECT type FROM locations WHERE id = c.location_id) AS location_type,
         c.quantity, c.condition, c.printing, c.language, c.purchase_price,
         cc.id as card_id, cc.name, cc.rarity, cc.set_name, cc.image_url, cc.price_trend,
         cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
@@ -1421,6 +1415,7 @@ router.get('/stats', async (req, res) => {
     // Recently added cards (most useful "what did I just add" glance)
     const recentRows = await db.all(`
       SELECT c.id AS entry_id, c.location_id, (SELECT name FROM locations WHERE id = c.location_id) AS location_name,
+             (SELECT type FROM locations WHERE id = c.location_id) AS location_type,
              c.quantity, c.condition, c.printing, c.language, c.added_at,
              cc.id as card_id, cc.name, cc.rarity, cc.set_name, cc.number, cc.image_url,
              cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil

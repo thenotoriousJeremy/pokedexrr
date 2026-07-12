@@ -27,7 +27,7 @@ export const POKEMON_TYPE_ORDER = {
 };
 
 // Mirrors typeCategory in the backend: multi-color MTG cards bucket together.
-function typeCategory(types) {
+export function typeCategory(types) {
   const t = Array.isArray(types) ? types : [];
   if (t.length > 1) return 'Multicolor';
   return t[0] || 'Colorless';
@@ -161,7 +161,9 @@ export function sortCardsByOrder(cards, sortOrder, foilSorting, setsList = []) {
           } else if (Array.isArray(b.color_identity) && b.color_identity.length > 0) {
             cB = b.color_identity[0];
           }
-          cmp = cA.localeCompare(cB);
+          const wubrg = { 'W': 1, 'White': 1, 'U': 2, 'Blue': 2, 'B': 3, 'Black': 3, 'R': 4, 'Red': 4, 'G': 5, 'Green': 5, 'Colorless': 6 };
+          cmp = (wubrg[cA] || 99) - (wubrg[cB] || 99);
+          if (cmp === 0) cmp = cA.localeCompare(cB);
           break;
         }
         case 'rarity':

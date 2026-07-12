@@ -413,6 +413,43 @@ button, input, select, textarea {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  position: relative;
+  overflow: hidden;
+  padding: 1.25rem 1.5rem;
+}
+
+/* Each card carries a semantic accent color via --card-accent */
+.metric-card {
+  --card-accent: var(--accent-red);
+}
+.metric-card.accent-networth { --card-accent: var(--type-grass); }
+.metric-card.accent-invested { --card-accent: var(--accent-yellow); }
+.metric-card.accent-gain-up  { --card-accent: var(--type-grass); }
+.metric-card.accent-gain-down{ --card-accent: var(--accent-red); }
+.metric-card.accent-cards    { --card-accent: var(--accent-blue); }
+
+.metric-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-glass-hover);
+}
+
+/* Tinted rounded chip holding each metric's icon */
+.metric-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  color: var(--card-accent);
+  background: color-mix(in srgb, var(--card-accent) 16%, transparent);
+}
+.metric-icon svg { color: inherit; }
+
+/* Net Worth is the headline metric: larger value */
+.metric-card.accent-networth .metric-value {
+  font-size: 2.15rem;
 }
 
 .metric-header {
@@ -420,19 +457,20 @@ button, input, select, textarea {
   justify-content: space-between;
   align-items: center;
   color: var(--text-secondary);
-  font-size: 0.85rem;
-  margin-bottom: 0.5rem;
-}
-
-.metric-header svg {
-  color: var(--accent-red);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  margin-bottom: 0.6rem;
 }
 
 .metric-value {
-  font-size: 1.6rem;
+  font-size: 1.75rem;
   font-weight: 800;
   color: var(--text-primary);
-  line-height: 1.2;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
 }
 
 .metric-footer {
@@ -443,6 +481,32 @@ button, input, select, textarea {
 
 .metric-footer.positive { color: var(--type-grass); }
 .metric-footer.negative { color: #f87171; }
+
+/* Clickable list rows (Top Valuable, Recent Additions) */
+.dashboard-card-clickable {
+  position: relative;
+}
+.dashboard-card-clickable:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border-color: var(--border-glass-hover) !important;
+  transform: translateX(3px);
+}
+.dashboard-card-clickable:active {
+  transform: translateX(1px) scale(0.995);
+}
+
+/* Empty-state message inside a chart/panel area */
+.chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 140px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 1rem;
+}
 
 /* Dashboard Detail Layout */
 .dashboard-details {
@@ -469,8 +533,18 @@ button, input, select, textarea {
   font-size: 1.1rem;
   font-weight: 700;
   margin-bottom: 1rem;
-  border-left: 3px solid var(--accent-red);
-  padding-left: 0.5rem;
+  padding-left: 0.65rem;
+  position: relative;
+}
+.chart-title::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.1em;
+  bottom: 0.1em;
+  width: 4px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--accent-red) 0%, var(--accent-yellow) 100%);
 }
 
 /* Card Grid Styles */

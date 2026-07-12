@@ -345,7 +345,7 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
                   <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     <span style={{ color: 'var(--text-muted)' }}>Location: </span>
                     <strong style={{ color: '#fff' }}>
-                      {card.location_name ? `${card.location_name} (${card.location_type})` : 'Unassigned Pile'}
+                      {card.location_name ? `${card.location_name}${card.location_type ? ` (${card.location_type})` : ''}` : 'Unassigned Pile'}
                     </strong>
                     {card.location_name && card.compartment_display_label && (
                       <span style={{ color: 'var(--text-secondary)' }}>

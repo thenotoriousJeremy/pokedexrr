@@ -215,9 +215,21 @@ function sortCards(cards, sortOrder, foilSorting) {
           break;
         case 'color_identity':
         case 'color': {
-          const cA = Array.isArray(a.color_identity) && a.color_identity.length > 0 ? a.color_identity[0] : 'Colorless';
-          const cB = Array.isArray(b.color_identity) && b.color_identity.length > 0 ? b.color_identity[0] : 'Colorless';
-          cmp = cA.localeCompare(cB);
+          let cA = 'Colorless';
+          if (typeof a.color_identity === 'string') {
+            try { const p = JSON.parse(a.color_identity); if (p.length > 0) cA = p[0]; } catch(e){}
+          } else if (Array.isArray(a.color_identity) && a.color_identity.length > 0) {
+            cA = a.color_identity[0];
+          }
+          let cB = 'Colorless';
+          if (typeof b.color_identity === 'string') {
+            try { const p = JSON.parse(b.color_identity); if (p.length > 0) cB = p[0]; } catch(e){}
+          } else if (Array.isArray(b.color_identity) && b.color_identity.length > 0) {
+            cB = b.color_identity[0];
+          }
+          const wubrg = { 'W': 1, 'White': 1, 'U': 2, 'Blue': 2, 'B': 3, 'Black': 3, 'R': 4, 'Red': 4, 'G': 5, 'Green': 5, 'Colorless': 6 };
+          cmp = (wubrg[cA] || 99) - (wubrg[cB] || 99);
+          if (cmp === 0) cmp = cA.localeCompare(cB);
           break;
         }
         case 'rarity':
@@ -244,14 +256,19 @@ function getSortCategory(card, sortOrder) {
     if (sortOrder.startsWith('[')) {
       try { criteria = JSON.parse(sortOrder); } catch(e){}
     } else {
-      criteria = [{by: sortOrder.split('-')[0]}];
+      criteria = [{by: sortOrder.split('-')[0], divider: true}];
     }
   } else if (Array.isArray(sortOrder)) {
     criteria = sortOrder;
   }
   if (!criteria || criteria.length === 0) return null;
 
-  const primary = criteria[0].by;
+  const dividers = criteria.filter(c => c.divider === true);
+  if (dividers.length === 0 && criteria.some(c => c.divider === false)) {
+    return null; // User explicitly disabled all dividers, don't categorize
+  }
+
+  const primary = dividers.length > 0 ? dividers[0].by : criteria[0].by;
 
   if (primary === 'name') return card.name ? card.name.charAt(0).toUpperCase() : '?';
   if (primary === 'set') {
@@ -260,7 +277,17 @@ function getSortCategory(card, sortOrder) {
     const idx = setsCache.findIndex(s => s.name === card.set_name);
     return idx >= 0 ? `${idx + 1}. ${card.set_name}` : card.set_name;
   }
-  if (primary === 'type' || primary === 'color') {
+  if (primary === 'color_identity' || primary === 'color') {
+    let ci = 'Colorless';
+    if (typeof card.color_identity === 'string') {
+      try { const p = JSON.parse(card.color_identity); if (p.length > 0) ci = p[0]; } catch(e){}
+    } else if (Array.isArray(card.color_identity) && card.color_identity.length > 0) {
+      ci = card.color_identity[0];
+    }
+    const names = { 'W': 'White', 'U': 'Blue', 'B': 'Black', 'R': 'Red', 'G': 'Green' };
+    return names[ci] || ci || 'Colorless';
+  }
+  if (primary === 'type') {
     let types = [];
     if (card.types) {
       try {
@@ -574,7 +601,26 @@ async function recommendSlot(db, location, cardMetadata, overrideCompartments = 
   const targetIndex = sorted.findIndex(c => c.entry_id === -1);
   if (targetIndex === -1) return null;
 
-  const scheme = SORT_SCHEME_LABELS[location.sort_order] || location.sort_order;
+  let scheme = SORT_SCHEME_LABELS[location.sort_order] || location.sort_order;
+  if (typeof scheme === 'string' && scheme.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(scheme);
+      if (Array.isArray(parsed)) {
+        const prettyLabels = {
+          'color_identity': 'Color Identity',
+          'color': 'Color',
+          'type': 'Type',
+          'name': 'Name',
+          'set': 'Set',
+          'price': 'Price',
+          'rarity': 'Rarity',
+          'number': 'Number',
+          'language': 'Language'
+        };
+        scheme = parsed.map(p => prettyLabels[p.by] || p.by).join(', ');
+      }
+    } catch (e) {}
+  }
   const prevCard = targetIndex > 0 ? sorted[targetIndex - 1] : null;
   const nextCard = targetIndex < sorted.length - 1 ? sorted[targetIndex + 1] : null;
 

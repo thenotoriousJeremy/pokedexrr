@@ -58,11 +58,11 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const [inspectorCard, setInspectorCard] = useState(null);
   const [inspectorStartEdit, setInspectorStartEdit] = useState(false);
   const [subTab, setSubTab] = useState('collection'); // 'collection', 'wishlist'
-  const [showFilters, setShowFilters] = useState(true);
+  const [showFilters, setShowFilters] = useState(false);
 
   // Search & Filter state
   const [searchFilter, setSearchFilter] = useState('');
-  const [gameFilter, setGameFilter] = useState(''); // '' | 'pokemon' | 'mtg'
+  const [gameFilter, setGameFilter] = useState(() => localStorage.getItem('default_game') || ''); // '' | 'pokemon' | 'mtg'
   const [locationFilter, setLocationFilter] = useState('');
   const [rarityFilter, setRarityFilter] = useState('');
   const [conditionFilter, setConditionFilter] = useState('');

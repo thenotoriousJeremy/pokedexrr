@@ -4,7 +4,7 @@ import { sortCardsByOrder } from '../utils/cardSort';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder } from '../utils/cardRarity';
 import CardInspectorModal from './CardInspectorModal';
-import CompartmentView, { getPrimaryCategory } from './CompartmentView';
+import CompartmentView, { getPrimaryCategory, FocusedCardInfo } from './CompartmentView';
 import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
 import CreateContainerModal from './CreateContainerModal';
 
@@ -68,6 +68,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [unsortedSort, setUnsortedSort] = useState('scanned-desc');
 
   const [activePageIndex, setActivePageIndex] = useState(0);
+  const [binderActiveEntryId, setBinderActiveEntryId] = useState(null);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
 
   const [filingMode, setFilingMode] = useState(false);
@@ -91,9 +92,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   useEffect(() => {
     if (filingMode && filingQueue[filingIndex]?.recommended) {
       const rec = filingQueue[filingIndex].recommended;
-      // A card's home may be a different container than the one open (Sort &
-      // File spans every container) — switch to it, then compartments reload
-      // and this effect reruns to snap to the right page/row.
+      // Filing is scoped to the open container, so rec.location_id normally
+      // matches it. Guard anyway (re-sort review reuses this path) — switch,
+      // then compartments reload and this effect reruns to snap to the slot.
       if (rec.location_id && rec.location_id !== activeLocationId) {
         setActiveLocationId(rec.location_id);
         return;
@@ -169,6 +170,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   useEffect(() => {
     setActiveCompartmentId(null);
     setActivePageIndex(0);
+    setBinderActiveEntryId(null);
+    if (!filingReadOnly) setFilingQueue([]);
     setCoverflowActiveIndex(0);
     setStorageSelectMode(false);
     setStorageSelectedIds(new Set());
@@ -593,12 +596,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   };
 
   const startFilingMode = async () => {
-    if (unsortedCards.length === 0 || locations.length === 0) return;
+    if (unsortedCards.length === 0 || !activeLocationId) return;
+    const target = locations.find(l => l.id === activeLocationId);
     try {
-      // Ask across every container where each card can go, then walk through
-      // only the ones that actually have a home. Cards that fit nowhere are
-      // reported and left in the Unsorted queue.
-      const res = await fetch('/api/smart-recommend-batch', {
+      // Scope the walkthrough to the open container only — file just the cards
+      // that fit its rules and capacity; the rest stay in the Unsorted queue.
+      const res = await fetch(`/api/locations/${activeLocationId}/recommend-batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ entry_ids: unsortedCards.map(c => c.entry_id) })
@@ -609,18 +612,15 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       const noRoom = data.filter(d => !d.recommended);
 
       if (placeable.length === 0) {
-        showToast(`No unsorted card fits any container. ${noRoom.length} left unsorted — add space or adjust filing rules.`);
+        showToast(`No unsorted card fits "${target?.name}". ${noRoom.length} left unsorted — add space or adjust its filing rules.`);
         return;
       }
 
       setFilingQueue(placeable);
       setFilingIndex(0);
       setFilingMode(true);
-      if (placeable[0].recommended.location_id) {
-        setActiveLocationId(placeable[0].recommended.location_id);
-      }
       if (noRoom.length > 0) {
-        showToast(`Filing ${placeable.length} card(s). ${noRoom.length} have nowhere to go and stay unsorted.`);
+        showToast(`Filing ${placeable.length} card(s) into "${target?.name}". ${noRoom.length} don't fit and stay unsorted.`);
       }
     } catch (err) { console.error(err); showToast('Error starting filing mode.'); }
   };
@@ -724,6 +724,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           <div className="glass-panel" style={{ width: '400px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             <h3 style={{ margin: 0 }}>Container Settings</h3>
             
+            {selectedLoc?.type === 'binder' && (
+              <div style={{ background: 'rgba(255, 170, 0, 0.1)', border: '1px solid #d97706', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                <strong>Binder Sorting Tip:</strong> When filing brand new cards into a tightly sorted binder, the app will append them to the first empty slot at the end of the binder to prevent cascading shifts of your physical cards. <br/><br/>
+                <strong>Best Practice:</strong> File all your new cards into the binder first, then use <strong>Re-sort Container</strong> to shift everything into perfectly sorted order at once!
+              </div>
+            )}
+
             <SortBuilder value={sortDraft} onChange={setSortDraft} />
             <FilterBuilder value={filterDraft} onChange={setFilterDraft} setsList={setsList} fieldOptions={filterFieldOptions} />
 
@@ -950,12 +957,12 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
             <div style={{ display: 'flex', flexDirection: 'column', gap: isBinderType ? '1rem' : '0.6rem' }}>
               {isBinderType ? (() => {
                 if (compartments.length === 0) return null;
-                const pageProps = (c, idx) => ({
+                const pageProps = (c, i) => ({
                   compartment: c,
                   cards: cardsByCompartment.get(c.id) || [],
                   sortOrder: selectedLoc.sort_order,
                   setsList,
-                  canRemove: idx === compartments.length - 1 && compartments.length > 1 && (cardsByCompartment.get(c.id) || []).length === 0,
+                  canRemove: i === compartments.length - 1 && compartments.length > 1 && (cardsByCompartment.get(c.id) || []).length === 0,
                   moveTargets: compartments,
                   onRename: (label) => handleRenameCompartment(c.id, label),
                   onSetCapacity: (cap) => handleSetCapacity(c.id, cap),
@@ -974,14 +981,18 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   selectedIds: storageSelectedIds,
                   onCardLongPress: armStorageSelect,
                   onCardToggle: toggleStorageSelect,
-                  onEditRules: openCompartmentRules
+                  onEditRules: openCompartmentRules,
+                  activeEntryId: binderActiveEntryId,
+                  onActiveEntryIdChange: setBinderActiveEntryId,
+                  hideFocusedCardInfo: true
                 });
 
+                let binderPages = null;
                 if (isMobile) {
                   const targetIdx = Math.min(activePageIndex, compartments.length - 1);
                   const activePage = compartments[targetIdx];
                   if (!activePage) return null;
-                  return (
+                  binderPages = (
                     <div
                       className="binder-page-container"
                       onTouchStart={handleTouchStart}
@@ -1000,7 +1011,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   const left = compartments[leftIdx];
                   const right = compartments[rightIdx];
 
-                  return (
+                  binderPages = (
                     <div className="binder-page-container">
                       <div className="binder-page-left">
                         <CompartmentView {...pageProps(left, leftIdx)} locationType={selectedLoc.type} />
@@ -1014,6 +1025,35 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     </div>
                   );
                 }
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                    {binderPages}
+                    {(() => {
+                      if (!binderActiveEntryId) return null;
+                      const activeCard = cardsInActiveLocation.find(c => c.entry_id === binderActiveEntryId);
+                      if (!activeCard) return null;
+                      const compCards = cardsByCompartment.get(activeCard.compartment_id) || [];
+                      const slotNumber = compCards.findIndex(c => c.entry_id === binderActiveEntryId) + 1;
+                      
+                      const moveSelect = selectedLoc.sort_order === 'custom' && compartments.length > 1 ? (
+                        <select
+                          className="select-control"
+                          value=""
+                          onChange={(e) => { if (e.target.value) handleMoveCard(activeCard.entry_id, parseInt(e.target.value, 10)); }}
+                          style={{ fontSize: '0.65rem', padding: '0.15rem 0.3rem', width: '110px', flexShrink: 0 }}
+                        >
+                          <option value="">Move to...</option>
+                          {compartments.filter(t => t.id !== activeCard.compartment_id).map(t => (
+                            <option key={t.id} value={t.id}>{t.display_label}</option>
+                          ))}
+                        </select>
+                      ) : null;
+                      
+                      return <FocusedCardInfo card={activeCard} slotNumber={slotNumber} moveSelect={moveSelect} />;
+                    })()}
+                  </div>
+                );
               })() : (() => {
                 if (compartments.length === 0) return <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No compartments/rows in this location.</p>;
 
@@ -1134,14 +1174,13 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                           if (compIdx !== -1) setActivePageIndex(compIdx);
                         } else {
                           setActiveCompartmentId(rec.compartment_id);
-                          const posIdx = Math.floor(rec.position / 1000) - 1;
-                          setCoverflowActiveIndex(Math.max(0, posIdx));
                         }
                         let attempts = 0;
                         const tryScroll = () => {
                           const el = document.getElementById('recommended-spot');
                           if (el) {
                             el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+                            el.click(); // Rotates coverflow in Box view
                             el.classList.remove('flash-highlight');
                             void el.offsetWidth;
                             el.classList.add('flash-highlight');
@@ -1206,11 +1245,11 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                   type="button"
                   className="btn btn-primary"
                   onClick={startFilingMode}
-                  disabled={locations.length === 0}
-                  title={locations.length === 0 ? 'Create a container first' : 'File the cards that fit any container, walking through each spot'}
+                  disabled={!activeLocationId}
+                  title={activeLocationId ? 'Walk through filing each fitting card into the open container' : 'Select a container first'}
                   style={{ fontSize: '0.8rem', padding: '0.5rem', width: '100%' }}
                 >
-                  Sort & File Cards
+                  Sort & File (into open container)
                 </button>
                 <button
                   type="button"

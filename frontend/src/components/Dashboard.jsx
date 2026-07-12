@@ -116,11 +116,16 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
 
   const { summary, types, rarities, sets, topValuable, recentAdditions = [], setProgress } = stats;
 
-  const typeChartData = types.map(t => ({
-    name: t.name,
-    value: t.value,
-    color: TYPE_COLORS[t.name] || '#94a3b8'
-  }));
+  // Match type name to its color case-insensitively; fall back to a distinct
+  // palette color by index so slices are never all the same gray.
+  const typeColorLookup = Object.fromEntries(
+    Object.entries(TYPE_COLORS).map(([k, v]) => [k.toLowerCase(), v])
+  );
+  const typeChartData = types.map((t, i) => {
+    const fill = typeColorLookup[String(t.name).toLowerCase()] || COLORS[i % COLORS.length];
+    return { name: t.name, value: t.value, color: fill, fill };
+  });
+  const rarityChartData = rarities.map((r, i) => ({ ...r, fill: COLORS[i % COLORS.length] }));
 
   return (
     <div>
@@ -144,9 +149,12 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
       {/* Metrics Summary Grid */}
       <div className="metrics-grid">
         {/* Net Worth Card with historical switcher */}
-        <div className="glass-panel metric-card">
+        <div className="glass-panel metric-card accent-networth">
           <div className="metric-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>Net Worth</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span className="metric-icon" style={{ width: '28px', height: '28px' }}><TrendingUp size={16} /></span>
+              Net Worth
+            </span>
             <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.05)', padding: '2px', borderRadius: '4px' }}>
               {['7d', '30d', '1y', '5y'].map(p => (
                 <button 
@@ -158,7 +166,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
                     fontSize: '0.65rem',
                     border: 'none',
                     borderRadius: '3px',
-                    background: timePeriod === p ? 'var(--accent-red)' : 'transparent',
+                    background: timePeriod === p ? 'var(--type-grass)' : 'transparent',
                     color: '#fff',
                     cursor: 'pointer',
                     fontWeight: 700,
@@ -198,10 +206,10 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
         </div>
 
         {/* Total Invested (cost basis) */}
-        <div className="glass-panel metric-card">
+        <div className="glass-panel metric-card accent-invested">
           <div className="metric-header">
             <span>Total Invested</span>
-            <Coins size={18} style={{ color: 'var(--accent-yellow)' }} />
+            <span className="metric-icon"><Coins size={18} /></span>
           </div>
           <div className="metric-value">${(summary.totalSpent || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
           <div className="metric-footer">
@@ -214,10 +222,10 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
           const roi = summary.roi || { abs: 0, pct: null };
           const isPositive = (roi.abs || 0) >= 0;
           return (
-            <div className="glass-panel metric-card">
+            <div className={`glass-panel metric-card ${isPositive ? 'accent-gain-up' : 'accent-gain-down'}`}>
               <div className="metric-header">
                 <span>Unrealized Gain</span>
-                <ArrowUpRight size={18} style={{ color: isPositive ? '#22c55e' : '#ef4444', transform: isPositive ? 'none' : 'rotate(90deg)' }} />
+                <span className="metric-icon"><ArrowUpRight size={18} style={{ transform: isPositive ? 'none' : 'rotate(90deg)' }} /></span>
               </div>
               <div className="metric-value" style={{ color: isPositive ? '#22c55e' : '#ef4444' }}>
                 {isPositive ? '+' : '−'}${Math.abs(roi.abs || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
@@ -230,10 +238,10 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
         })()}
 
         {/* Total Cards count */}
-        <div className="glass-panel metric-card">
+        <div className="glass-panel metric-card accent-cards">
           <div className="metric-header">
             <span>Total Cards Owned</span>
-            <Library size={18} />
+            <span className="metric-icon"><Library size={18} /></span>
           </div>
           <div className="metric-value">{summary.totalCards}</div>
           <div className="metric-footer">
@@ -253,13 +261,15 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
         <div className="chart-container" style={{ height: '240px', position: 'relative' }}>
           {loadingHistory ? (
             <div className="spinner" style={{ position: 'absolute', top: '45%', left: '45%' }}></div>
+          ) : historyData.length < 2 ? (
+            <div className="chart-empty">Not enough history yet to plot a trend for this range.</div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={historyData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--accent-red)" stopOpacity={0.4}/>
-                    <stop offset="95%" stopColor="var(--accent-red)" stopOpacity={0.0}/>
+                    <stop offset="5%" stopColor="var(--type-grass)" stopOpacity={0.4}/>
+                    <stop offset="95%" stopColor="var(--type-grass)" stopOpacity={0.0}/>
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="date" stroke="var(--text-secondary)" style={{ fontSize: '0.7rem' }} />
@@ -269,7 +279,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
                   labelStyle={{ color: 'var(--text-primary)' }}
                   formatter={(v) => [`$${v}`, 'Portfolio Value']}
                 />
-                <Area type="monotone" dataKey="value" stroke="var(--accent-red)" strokeWidth={2} fillOpacity={1} fill="url(#colorVal)" />
+                <Area type="monotone" dataKey="value" stroke="var(--type-grass)" strokeWidth={2} fillOpacity={1} fill="url(#colorVal)" />
               </AreaChart>
             </ResponsiveContainer>
           )}
@@ -285,6 +295,9 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
           <div className="glass-panel">
             <h3 className="chart-title">Collection Value by Set</h3>
             <div className="chart-container">
+              {sets.length === 0 ? (
+                <div className="chart-empty">No set value data for this filter yet.</div>
+              ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={sets} layout="vertical" margin={{ left: 10, right: 30, top: 10, bottom: 10 }}>
                   <XAxis type="number" stroke="var(--text-secondary)" tickFormatter={(v) => `$${v}`} />
@@ -297,14 +310,18 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
                   <Bar dataKey="value" fill="var(--accent-red)" radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
+              )}
             </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
             {/* Type Distribution Donut Chart */}
             <div className="glass-panel">
-              <h3 className="chart-title">Energy Type Distribution</h3>
+              <h3 className="chart-title">{gameFilter === 'mtg' ? 'Color Distribution' : 'Energy Type Distribution'}</h3>
               <div className="chart-container" style={{ height: '220px' }}>
+                {typeChartData.length === 0 ? (
+                  <div className="chart-empty">No type data for this filter yet.</div>
+                ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
@@ -333,6 +350,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
                     />
                   </PieChart>
                 </ResponsiveContainer>
+                )}
               </div>
             </div>
 
@@ -340,18 +358,22 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
             <div className="glass-panel">
               <h3 className="chart-title">Rarity Distribution</h3>
               <div className="chart-container" style={{ height: '220px' }}>
+                {rarityChartData.length === 0 ? (
+                  <div className="chart-empty">No rarity data for this filter yet.</div>
+                ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
-                      data={rarities}
+                      data={rarityChartData}
                       cx="50%"
                       cy="50%"
-                      innerRadius={0}
-                      outerRadius={75}
+                      innerRadius={45}
+                      outerRadius={78}
+                      paddingAngle={3}
                       dataKey="value"
                     >
-                      {rarities.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      {rarityChartData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.fill} />
                       ))}
                     </Pie>
                     <Tooltip 
@@ -367,6 +389,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
                     />
                   </PieChart>
                 </ResponsiveContainer>
+                )}
               </div>
             </div>
           </div>
@@ -399,7 +422,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
                   }}
                   className="dashboard-card-clickable"
                 >
-                  <img src={card.image_url} alt={card.name} style={{ width: '40px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '4px' }} />
+                  <img src={card.image_url} alt={card.name} style={{ width: '56px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '5px', boxShadow: '0 2px 6px rgba(0,0,0,0.4)' }} />
                   <div style={{ flex: 1, overflow: 'hidden' }}>
                     <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {getCardDisplayName(card.name, card.language)}
@@ -439,7 +462,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
                     style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', cursor: 'pointer', transition: 'all 0.2s ease' }}
                     className="dashboard-card-clickable"
                   >
-                    <img src={card.image_url} alt={card.name} style={{ width: '34px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '4px' }} />
+                    <img src={card.image_url} alt={card.name} style={{ width: '48px', aspectRatio: 0.718, objectFit: 'cover', borderRadius: '5px', boxShadow: '0 2px 6px rgba(0,0,0,0.4)' }} />
                     <div style={{ flex: 1, overflow: 'hidden' }}>
                       <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {getCardDisplayName(card.name, card.language)}
