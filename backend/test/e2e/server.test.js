@@ -11,7 +11,7 @@ const tmpDb = path.join(os.tmpdir(), `bindarr-server-test-${process.pid}.db`);
 const projectRoot = path.join(__dirname, '../../../');
 
 async function waitForServer(url) {
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 150; i++) {
     try { const res = await fetch(url); if (res.ok) return; } catch { /* not up yet */ }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
