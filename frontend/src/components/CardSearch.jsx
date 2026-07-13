@@ -4,7 +4,7 @@ import confetti from 'canvas-confetti';
 import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
-import { translateJapaneseName } from '../utils/pokemonTranslation';
+import { translateJapaneseName } from '../utils/langHelper';
 
 
 function CardSearch({ onAddSuccess, showToast, setActiveTab }) {

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Trash2, X, ChevronLeft, Play, BarChart2, Search, LogOut, PackageCheck } from 'lucide-react';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { shuffleArray } from '../utils/shuffle';
-import { translateJapaneseName } from '../utils/pokemonTranslation';
+import { translateJapaneseName } from '../utils/langHelper';
 import CheckoutWizardModal from './CheckoutWizardModal';
 
 function DeckBuilder({ showToast }) {

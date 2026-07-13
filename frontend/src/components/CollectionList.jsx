@@ -1,9 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, Trash2, Edit2, LayoutGrid, List, SlidersHorizontal, X, MousePointerClick } from 'lucide-react';
-import { getCardDisplayName } from '../utils/langHelper';
+import { getCardDisplayName, translateJapaneseName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
-import { translateJapaneseName } from '../utils/pokemonTranslation';
 import { getPrintingBadgeLabel, getPrintingBadgeStyle, getFoilOverlayClass } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeLabel, getRarityBadgeStyle } from '../utils/cardRarity';
 import { sortCardsByOrder } from '../utils/cardSort';
