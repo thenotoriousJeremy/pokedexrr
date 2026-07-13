@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const tcgApi = require('../tcgApi');
+const { parseCardRow } = require('../utils/priceHelpers');
 const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
@@ -85,11 +86,7 @@ router.get('/:id', async (req, res) => {
     `;
     const cards = await db.all(cardsQuery, [req.user.id, id]);
 
-    const formatted = cards.map(c => ({
-      ...c,
-      subtypes: JSON.parse(c.subtypes || '[]'),
-      types: JSON.parse(c.types || '[]')
-    }));
+    const formatted = cards.map(parseCardRow);
 
     res.json({
       ...deck,

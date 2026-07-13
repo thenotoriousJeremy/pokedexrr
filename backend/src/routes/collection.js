@@ -7,6 +7,7 @@ const setIndex = require('../setIndex');
 const { authenticateToken, searchLimiter, importLimiter } = require('../middleware/auth');
 const {
   resolveCardPrice,
+  parseCardRow,
   isVintageSet,
   parseSqliteUtc
 } = require('../utils/priceHelpers');
@@ -266,11 +267,8 @@ router.get('/collection', async (req, res) => {
 
     // Parse JSON fields
     const formatted = rows.map(row => ({
-      ...row,
+      ...parseCardRow(row),
       price_trend: resolveCardPrice(row),
-      subtypes: JSON.parse(row.subtypes || '[]'),
-      types: JSON.parse(row.types || '[]'),
-      color_identity: JSON.parse(row.color_identity || '[]'),
       checked_out_qty: alloc.get(row.entry_id) || 0,
       compartment_display_label: row.compartment_id
         ? compartmentLabel({ idx: row.compartment_idx, label: row.compartment_label }, row.location_type)

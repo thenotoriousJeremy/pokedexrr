@@ -1,5 +1,6 @@
 const axios = require('axios');
 const db = require('./db');
+const { parseCardRow } = require('./utils/priceHelpers');
 
 // Scryfall needs no API key but asks callers to identify themselves and accept
 // JSON. See https://scryfall.com/docs/api. IDs from Scryfall are UUIDs / set-num
@@ -75,14 +76,6 @@ async function cacheCards(cards) {
   }
 }
 
-function parseRow(r) {
-  return {
-    ...r,
-    subtypes: JSON.parse(r.subtypes || '[]'),
-    types: JSON.parse(r.types || '[]'),
-    color_identity: JSON.parse(r.color_identity || '[]')
-  };
-}
 
 async function fetchFromScryfall(q, lang, retries = 3) {
   let url = `/cards/search?q=${encodeURIComponent(q)}`;
@@ -145,7 +138,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
     if (cleanNumber) { sql += ` AND (cc.number = ? OR CAST(cc.number AS INTEGER) = CAST(? AS INTEGER))`; params.push(cleanNumber, cleanNumber); }
     if (cleanSet) { sql += ` AND (cc.set_name LIKE ? OR cc.set_id = ?)`; params.push(`%${cleanSet}%`, cleanSet); }
     sql += ` GROUP BY cc.id LIMIT 50`;
-    return (await db.all(sql, params)).map(parseRow);
+    return (await db.all(sql, params)).map(parseCardRow);
   }
 
   // 2. Local cache first
@@ -176,7 +169,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
           }
         })();
       }
-      return localResults.map(parseRow);
+      return localResults.map(parseCardRow);
     }
   }
 
@@ -221,7 +214,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
     // Merge: exact matches first, then broad alternatives deduped.
     const seen = new Set(exact.map(c => c.id));
     const merged = [...exact, ...broad.filter(c => !seen.has(c.id))];
-    if (merged.length === 0) return localResults.map(parseRow);
+    if (merged.length === 0) return localResults.map(parseCardRow);
 
     const cards = merged.slice(0, 50);
     // Sort alternatives (after exact) by collector number.
@@ -240,7 +233,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
     return cards;
   } catch (err) {
     console.error('Scryfall search failed:', err.message);
-    return localResults.map(parseRow);
+    return localResults.map(parseCardRow);
   }
 }
 
