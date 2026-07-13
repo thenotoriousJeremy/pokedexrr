@@ -115,7 +115,7 @@ async function runTests() {
       throw err;
     }
 
-    // F5-TC3: Verify scanner OCR set/number code triggers Scryfall search & auto-adds match to compartment
+    // F5-TC3: Verify a set/number code triggers Scryfall search & auto-adds match to compartment
     try {
       // 1. Setup Location & Compartment
       const locId = (await db.run(
@@ -127,10 +127,10 @@ async function runTests() {
         [locId, 1, 9]
       )).lastID;
 
-      // 2. Simulate parsed OCR set and number triggering search
-      const ocrSet = 'LEA';
-      const ocrNumber = '232';
-      const searchRes = await fetch(`http://localhost:${port}/api/search?game=mtg&set=${ocrSet}&number=${ocrNumber}`, { headers: authHeaders });
+      // 2. A parsed set and number triggering search
+      const scanSet = 'LEA';
+      const scanNumber = '232';
+      const searchRes = await fetch(`http://localhost:${port}/api/search?game=mtg&set=${scanSet}&number=${scanNumber}`, { headers: authHeaders });
       assert.strictEqual(searchRes.status, 200);
       const searchData = await searchRes.json();
       assert.ok(searchData.length > 0);

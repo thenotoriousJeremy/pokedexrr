@@ -147,11 +147,11 @@ async function runTests() {
       throw err;
     }
 
-    // F6-TC4: Scanner OCR pipeline (OCR text -> set/number -> API Search -> Add -> Compartment recomendation)
+    // F6-TC4: set/number code -> API Search -> Add -> Compartment recommendation
     try {
-      const ocrText = 'ELD/171';
-      // Parse
-      const match = ocrText.match(/^([A-Z0-9]{3,5})[\s\/]+([0-9a-zA-Z★]+)$/);
+      const scanText = 'ELD/171';
+      // Parse a set code + collector number
+      const match = scanText.match(/^([A-Z0-9]{3,5})[\s\/]+([0-9a-zA-Z★]+)$/);
       assert.ok(match);
       const set = match[1];
       const num = match[2];

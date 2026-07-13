@@ -685,17 +685,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   animation: scanFlash === 'success' ? 'border-flash-success 1.5s ease-in-out' : scanFlash === 'error' ? 'border-flash-error 1.5s ease-in-out' : 'none'
                 }}
               >
-                {/* Name Guide */}
-                <div className="scan-region-title" />
-
-                {/* Left Number Guide. MTG puts the set code + collector number in
-                    the bottom-left corner, so its box sits low-left and is taller
-                    to catch its two lines. */}
-                <div
-                  className="scan-region-number-left"
-                  style={cardLayout === 'mtg' ? { left: '4%', bottom: '4%', width: '45%', height: '11%' } : {}}
-                />
-
                 {loading && <div className="scan-line"></div>}
               </div>
               ); })()}

@@ -173,7 +173,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
     }
   }
 
-  // Strip leading zeros from collector numbers — OCR often reads "0488" but
+  // Strip leading zeros from collector numbers — input may arrive as "0488" but
   // Scryfall expects "488".
   const strippedNumber = cleanNumber.replace(/^0+/, '') || cleanNumber;
 

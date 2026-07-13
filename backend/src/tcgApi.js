@@ -205,7 +205,7 @@ function getStringSimilarity(str1, str2) {
 
 // Search cards locally first, then hit API if not found or empty
 async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiKey = '', scope = 'database', userId = null) {
-  // Sanitize the name query: drop pure-noise tokens (OCR garbage with no letters)
+  // Sanitize the name query: drop pure-noise tokens (junk with no letters)
   // and normalize everything else to Title Case, so typed-lowercase input like
   // "pikachu" is treated the same as "Pikachu" instead of being silently dropped.
   let cleanName = '';
