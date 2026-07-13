@@ -440,25 +440,27 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
               if (candidates && candidates.length > 0) {
                 if (confident) {
                   // Uses the DETECTED game (auto-detect may override the UI mode).
-                  const usedSet = matchGame === scanGame && scanSetCode;
-                  const buildParams = (withSet) => {
-                    const p = new URLSearchParams({ game: matchGame, prints: '1' });
-                    if (top.name) p.append('name', top.name);
-                    if (withSet) p.append('set', scanSetCode);
-                    return p;
-                  };
-                  let searchResponse = await fetch(`/api/search?${buildParams(usedSet).toString()}`);
+                  // Query the MATCHED card's exact set + number (top.set/top.number),
+                  // not just its name — otherwise search returns some other printing
+                  // of the same name instead of the card ORB actually identified.
+                  const exact = new URLSearchParams({ game: matchGame });
+                  if (top.name) exact.append('name', top.name);
+                  if (top.set) exact.append('set', top.set);
+                  if (top.number) exact.append('number', top.number);
+                  let searchResponse = await fetch(`/api/search?${exact.toString()}`);
                   if (scanId !== currentScanId.current) return;
                   let matches = searchResponse.ok ? await searchResponse.json() : [];
-                  // Set code didn't match this card (wrong box / card not in that
-                  // set) — retry across all printings so the user can still pick.
-                  if (usedSet && matches.length === 0) {
-                    searchResponse = await fetch(`/api/search?${buildParams(false).toString()}`);
+                  // Fallback: exact set/number isn't cached/known — offer all
+                  // printings by name so the user can still pick.
+                  if (matches.length === 0) {
+                    const byName = new URLSearchParams({ game: matchGame, prints: '1' });
+                    if (top.name) byName.append('name', top.name);
+                    searchResponse = await fetch(`/api/search?${byName.toString()}`);
                     if (scanId !== currentScanId.current) return;
                     matches = searchResponse.ok ? await searchResponse.json() : [];
                   }
-                  // Confident image match: a single result is unambiguous (one
-                  // printing, or set code narrowed it), so take the fast path.
+                  // Confident image match on an exact set+number is unambiguous, so
+                  // take the fast path (single result auto-adds).
                   if (matches.length) { await applyMatches(matches, '', true); return; }
                 }
 
