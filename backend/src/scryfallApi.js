@@ -12,6 +12,25 @@ const client = axios.create({
   headers: { 'User-Agent': 'Bindarr/1.0', 'Accept': 'application/json' }
 });
 
+// Scryfall asks for ~10 requests/second and 429s aggressively on bursts. Search,
+// per-set fetches, and the background price refresh all hit it and can run
+// concurrently, so serialize EVERY request through one queue with a minimum gap.
+// A global limiter beats the per-caller delays that don't see each other.
+const SCRYFALL_MIN_GAP_MS = 120;
+let scryfallQueue = Promise.resolve();
+let lastScryfallAt = 0;
+function scryGet(url, config) {
+  const run = scryfallQueue.then(async () => {
+    const wait = SCRYFALL_MIN_GAP_MS - (Date.now() - lastScryfallAt);
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    lastScryfallAt = Date.now();
+    return client.get(url, config);
+  });
+  // Keep the chain alive regardless of this request's outcome.
+  scryfallQueue = run.then(() => {}, () => {});
+  return run;
+}
+
 const COLOR_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
 const CACHE_AGE_LIMIT_MS = 1000 * 60 * 60 * 24 * 3; // 3 days
 
@@ -83,11 +102,14 @@ async function fetchFromScryfall(q, lang, retries = 3) {
   
   for (let i = 0; i < retries; i++) {
     try {
-      const resp = await client.get(url);
+      const resp = await scryGet(url);
       return (resp.data && resp.data.data) || [];
     } catch (error) {
       if (error.response && error.response.status === 429 && i < retries - 1) {
-        await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+        // Honor Retry-After when Scryfall sends it; else exponential backoff.
+        const ra = parseInt(error.response.headers?.['retry-after'], 10);
+        const backoff = Number.isFinite(ra) ? ra * 1000 : 1000 * (i + 1);
+        await new Promise(r => setTimeout(r, backoff));
         continue;
       }
       throw error;
@@ -266,7 +288,7 @@ async function fetchAndCacheSets(force = false) {
       return;
     }
     console.log('Fetching sets from Scryfall...');
-    const resp = await client.get('/sets');
+    const resp = await scryGet('/sets');
     const sets = (resp.data && resp.data.data) || [];
     for (const s of sets) {
       await db.run(
