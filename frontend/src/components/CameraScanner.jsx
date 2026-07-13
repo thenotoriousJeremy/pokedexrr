@@ -4,7 +4,7 @@ import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
-import { CONDITIONS, PRINTINGS, LANGUAGES } from '../utils/cardOptions';
+import CardEntryFields from './CardEntryFields';
 // Fixed centered guide box (normalized 0..1). Center the card in it; the crop
 // inside is sent to the server embedding matcher.
 const DEFAULT_RECT = { x: 0.17, y: 0.06, w: 0.66, h: 0.88 };
@@ -1125,54 +1125,11 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                   <div className="quick-add-section-title">Card Properties</div>
                   
-                  <div className="quick-add-fields-group">
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>Quantity</label>
-                      <input 
-                        type="number" 
-                        className="input-control" 
-                        min="1" 
-                        value={quantity}
-                        onChange={(e) => setQuantity(e.target.value)}
-                        required
-                      />
-                    </div>
-
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>Purchase Price ($)</label>
-                      <input 
-                        type="number" 
-                        step="0.01" 
-                        className="input-control" 
-                        value={purchasePrice}
-                        onChange={(e) => setPurchasePrice(e.target.value)}
-                        placeholder="0.00"
-                      />
-                    </div>
-
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>Condition</label>
-                      <select className="select-control" value={condition} onChange={(e) => setCondition(e.target.value)}>
-                        {CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </div>
-
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label>Printing</label>
-                      <select className="select-control" value={printing} onChange={(e) => setPrinting(e.target.value)}>
-                        {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
-                      </select>
-                    </div>
-
-                    <div className="form-group quick-add-full-width" style={{ marginBottom: 0 }}>
-                      <label>Language</label>
-                      <select className="select-control" value={language} onChange={(e) => setLanguage(e.target.value)}>
-                        {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
-                      </select>
-                    </div>
-
-
-                  </div>
+                  <CardEntryFields
+                    variant="stacked"
+                    quantity={quantity} purchasePrice={purchasePrice} condition={condition} printing={printing} language={language}
+                    onQuantity={setQuantity} onPurchasePrice={setPurchasePrice} onCondition={setCondition} onPrinting={setPrinting} onLanguage={setLanguage}
+                  />
                 </div>
               </div>
 
