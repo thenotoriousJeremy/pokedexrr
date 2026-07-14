@@ -26,6 +26,26 @@ async function waitForServer(port) {
   throw new Error(`Server on port ${port} did not start in time`);
 }
 
+async function stopServer(proc) {
+  if (!proc || proc.exitCode !== null || proc.killed) return;
+  await new Promise(resolve => {
+    let done = false;
+    const finish = () => {
+      if (!done) {
+        done = true;
+        setTimeout(resolve, 500);
+      }
+    };
+    proc.once('close', finish);
+    proc.once('exit', finish);
+    try {
+      proc.kill('SIGKILL');
+    } catch (e) {
+      finish();
+    }
+  });
+}
+
 async function waitForDatabase() {
   for (let i = 0; i < 150; i++) {
     try {
@@ -94,7 +114,7 @@ async function runTests() {
     // F3-TC3: Verify local cache read when Scryfall is offline (mocked error state)
     try {
       // Re-create server process with mock error
-      server.kill('SIGKILL');
+      await stopServer(server);
       
       const serverErr = spawn('node', ['-r', mockScript, serverScript], {
         env: {
@@ -115,7 +135,7 @@ async function runTests() {
       assert.strictEqual(data[0].name, 'Black Lotus');
       console.log('PASS: F3-TC3');
       
-      serverErr.kill('SIGKILL');
+      await stopServer(serverErr);
     } catch (err) {
       console.error('FAIL: F3-TC3 -', err.message);
       throw err;
@@ -142,7 +162,7 @@ async function runTests() {
       }
       assert.ok(rateLimited, 'Rapid search requests must be rate limited with 429 status code');
       console.log('PASS: F3-TC4');
-      serverRate.kill('SIGKILL');
+      await stopServer(serverRate);
     } catch (err) {
       console.error('FAIL: F3-TC4 -', err.message);
       throw err;
@@ -172,7 +192,7 @@ async function runTests() {
       assert.strictEqual(card.price_normal, 0.50);
       assert.strictEqual(card.price_holofoil, 2.50);
       console.log('PASS: F3-TC5');
-      serverField.kill('SIGKILL');
+      await stopServer(serverField);
     } catch (err) {
       console.error('FAIL: F3-TC5 -', err.message);
       throw err;
@@ -194,7 +214,7 @@ async function runTests() {
       const data = await res.json();
       assert.deepStrictEqual(data, []);
       console.log('PASS: F3-TC6');
-      serverEmpty.kill('SIGKILL');
+      await stopServer(serverEmpty);
     } catch (err) {
       console.error('FAIL: F3-TC6 -', err.message);
       throw err;
@@ -215,7 +235,7 @@ async function runTests() {
       const res = await fetch(`http://localhost:${port}/api/search?game=mtg&name=Lightning`, { headers: authHeaders });
       assert.ok(res.status === 504 || res.status === 200);
       console.log('PASS: F3-TC7');
-      serverTime.kill('SIGKILL');
+      await stopServer(serverTime);
     } catch (err) {
       console.error('FAIL: F3-TC7 -', err.message);
       throw err;
@@ -247,7 +267,7 @@ async function runTests() {
       const lastUpdated = new Date(cached.last_updated);
       assert.ok(Date.now() - lastUpdated.getTime() < 10000, 'Background refresh should update last_updated to now');
       console.log('PASS: F3-TC8');
-      serverExp.kill('SIGKILL');
+      await stopServer(serverExp);
     } catch (err) {
       console.error('FAIL: F3-TC8 -', err.message);
       throw err;
@@ -270,7 +290,7 @@ async function runTests() {
       assert.strictEqual(data[0].language, 'Japanese');
       assert.strictEqual(data[0].name, '黒き蓮');
       console.log('PASS: F3-TC9');
-      serverLang.kill('SIGKILL');
+      await stopServer(serverLang);
     } catch (err) {
       console.error('FAIL: F3-TC9 -', err.message);
       throw err;
@@ -294,7 +314,7 @@ async function runTests() {
       assert.strictEqual(card.name, 'Delver of Secrets');
       assert.strictEqual(card.image_url, 'https://images.scryfall.com/delver.png');
       console.log('PASS: F3-TC10');
-      serverDF.kill('SIGKILL');
+      await stopServer(serverDF);
     } catch (err) {
       console.error('FAIL: F3-TC10 -', err.message);
       throw err;
@@ -302,7 +322,7 @@ async function runTests() {
 
   } finally {
     // Teardown everything
-    try { server.kill('SIGKILL'); } catch {}
+    try { await stopServer(server); } catch {}
     try {
       await new Promise(resolve => {
         db.dbConnection.close(() => resolve());
