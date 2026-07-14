@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     ports:
       - "3001:3001"
-    environment:
+    environment: {}
       # All optional. Uncomment and set as needed.
       # - POKEMON_TCG_API_KEY=          # Pokemon TCG API key to raise rate limits
       # - PUBLIC_BASE_URL=              # External URL behind a reverse proxy, e.g. https://cards.example.com. Used for share links AND auto-allowed as a CORS origin (so proxied logins work with just this set)
