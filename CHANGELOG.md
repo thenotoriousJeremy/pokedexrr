@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.1.0] - 2026-07-14
+## [1.3.0] - 2026-07-14
 
 ### Fixed
 - Replaced `COUNT(*)` with `COALESCE(SUM(quantity), 0)` in storage capacity calculations across `collectionHelpers.js`, `compartmentSort.js`, and `storage.js`.
