@@ -4,10 +4,27 @@ const os = require('os');
 const assert = require('assert');
 const { spawn } = require('child_process');
 
+const net = require('net');
+
 // Isolated temp DB and unique port
 const tmpDb = path.join(os.tmpdir(), `bindarr-scryfall-test-${process.pid}.db`);
 process.env.DB_PATH = tmpDb;
-const port = '3010';
+
+let currentPort = 3030;
+function getNextPort() {
+  return (currentPort++).toString();
+}
+
+function isPortFree(port) {
+  return new Promise(resolve => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(Number(port));
+  });
+}
 
 const projectRoot = path.join(__dirname, '../../../');
 const db = require('../../src/db');
@@ -26,24 +43,31 @@ async function waitForServer(port) {
   throw new Error(`Server on port ${port} did not start in time`);
 }
 
-async function stopServer(proc) {
-  if (!proc || proc.exitCode !== null || proc.killed) return;
-  await new Promise(resolve => {
-    let done = false;
-    const finish = () => {
-      if (!done) {
-        done = true;
-        setTimeout(resolve, 500);
+async function stopServer(proc, port) {
+  if (proc && proc.exitCode === null && !proc.killed) {
+    await new Promise(resolve => {
+      let done = false;
+      const finish = () => {
+        if (!done) {
+          done = true;
+          setTimeout(resolve, 500);
+        }
+      };
+      proc.once('close', finish);
+      proc.once('exit', finish);
+      try {
+        proc.kill('SIGKILL');
+      } catch (e) {
+        finish();
       }
-    };
-    proc.once('close', finish);
-    proc.once('exit', finish);
-    try {
-      proc.kill('SIGKILL');
-    } catch (e) {
-      finish();
+    });
+  }
+  if (port) {
+    for (let i = 0; i < 50; i++) {
+      if (await isPortFree(port)) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
-  });
+  }
 }
 
 async function waitForDatabase() {
@@ -63,6 +87,7 @@ async function runTests() {
   // Start server preloading scryfall-mock.js
   const mockScript = path.join(__dirname, 'scryfall-mock.js');
   const serverScript = path.join(projectRoot, 'backend/src/server.js');
+  let port = getNextPort();
   const server = spawn('node', ['-r', mockScript, serverScript], {
     env: {
       ...process.env,
@@ -114,8 +139,9 @@ async function runTests() {
     // F3-TC3: Verify local cache read when Scryfall is offline (mocked error state)
     try {
       // Re-create server process with mock error
-      await stopServer(server);
+      await stopServer(server, port);
       
+      port = getNextPort();
       const serverErr = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -135,7 +161,7 @@ async function runTests() {
       assert.strictEqual(data[0].name, 'Black Lotus');
       console.log('PASS: F3-TC3');
       
-      await stopServer(serverErr);
+      await stopServer(serverErr, port);
     } catch (err) {
       console.error('FAIL: F3-TC3 -', err.message);
       throw err;
@@ -143,6 +169,7 @@ async function runTests() {
 
     // F3-TC4: Verify proxy rate limiting returns 429
     try {
+      port = getNextPort();
       const serverRate = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -162,7 +189,7 @@ async function runTests() {
       }
       assert.ok(rateLimited, 'Rapid search requests must be rate limited with 429 status code');
       console.log('PASS: F3-TC4');
-      await stopServer(serverRate);
+      await stopServer(serverRate, port);
     } catch (err) {
       console.error('FAIL: F3-TC4 -', err.message);
       throw err;
@@ -170,6 +197,7 @@ async function runTests() {
 
     // F3-TC5: Verify mapped fields contract
     try {
+      port = getNextPort();
       const serverField = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -192,7 +220,7 @@ async function runTests() {
       assert.strictEqual(card.price_normal, 0.50);
       assert.strictEqual(card.price_holofoil, 2.50);
       console.log('PASS: F3-TC5');
-      await stopServer(serverField);
+      await stopServer(serverField, port);
     } catch (err) {
       console.error('FAIL: F3-TC5 -', err.message);
       throw err;
@@ -200,6 +228,7 @@ async function runTests() {
 
     // F3-TC6: Verify empty search results return 200 with empty array
     try {
+      port = getNextPort();
       const serverEmpty = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -214,7 +243,7 @@ async function runTests() {
       const data = await res.json();
       assert.deepStrictEqual(data, []);
       console.log('PASS: F3-TC6');
-      await stopServer(serverEmpty);
+      await stopServer(serverEmpty, port);
     } catch (err) {
       console.error('FAIL: F3-TC6 -', err.message);
       throw err;
@@ -222,6 +251,7 @@ async function runTests() {
 
     // F3-TC7: Verify API timeout returns 504 Gateway Timeout or fallback cached data
     try {
+      port = getNextPort();
       const serverTime = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -235,7 +265,7 @@ async function runTests() {
       const res = await fetch(`http://localhost:${port}/api/search?game=mtg&name=Lightning`, { headers: authHeaders });
       assert.ok(res.status === 504 || res.status === 200);
       console.log('PASS: F3-TC7');
-      await stopServer(serverTime);
+      await stopServer(serverTime, port);
     } catch (err) {
       console.error('FAIL: F3-TC7 -', err.message);
       throw err;
@@ -243,6 +273,7 @@ async function runTests() {
 
     // F3-TC8: Verify cache expiration (3 days) triggers background refresh
     try {
+      port = getNextPort();
       const serverExp = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -267,7 +298,7 @@ async function runTests() {
       const lastUpdated = new Date(cached.last_updated);
       assert.ok(Date.now() - lastUpdated.getTime() < 10000, 'Background refresh should update last_updated to now');
       console.log('PASS: F3-TC8');
-      await stopServer(serverExp);
+      await stopServer(serverExp, port);
     } catch (err) {
       console.error('FAIL: F3-TC8 -', err.message);
       throw err;
@@ -275,6 +306,7 @@ async function runTests() {
 
     // F3-TC9: Verify foreign language mappings
     try {
+      port = getNextPort();
       const serverLang = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -290,7 +322,7 @@ async function runTests() {
       assert.strictEqual(data[0].language, 'Japanese');
       assert.strictEqual(data[0].name, '黒き蓮');
       console.log('PASS: F3-TC9');
-      await stopServer(serverLang);
+      await stopServer(serverLang, port);
     } catch (err) {
       console.error('FAIL: F3-TC9 -', err.message);
       throw err;
@@ -298,6 +330,7 @@ async function runTests() {
 
     // F3-TC10: Verify double-faced transform cards resolve using front face
     try {
+      port = getNextPort();
       const serverDF = spawn('node', ['-r', mockScript, serverScript], {
         env: {
           ...process.env,
@@ -314,7 +347,7 @@ async function runTests() {
       assert.strictEqual(card.name, 'Delver of Secrets');
       assert.strictEqual(card.image_url, 'https://images.scryfall.com/delver.png');
       console.log('PASS: F3-TC10');
-      await stopServer(serverDF);
+      await stopServer(serverDF, port);
     } catch (err) {
       console.error('FAIL: F3-TC10 -', err.message);
       throw err;
@@ -322,7 +355,7 @@ async function runTests() {
 
   } finally {
     // Teardown everything
-    try { await stopServer(server); } catch {}
+    try { await stopServer(server, port); } catch {}
     try {
       await new Promise(resolve => {
         db.dbConnection.close(() => resolve());
