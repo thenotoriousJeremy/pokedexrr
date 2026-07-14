@@ -182,7 +182,9 @@ async function runTests() {
       let rateLimited = false;
       for (let i = 0; i < 350; i++) {
         const res = await fetch(`http://localhost:${port}/api/search?game=mtg&name=Spam`, { headers: authHeaders });
-        if (res.status === 429) {
+        const status = res.status;
+        await res.text();
+        if (status === 429) {
           rateLimited = true;
           break;
         }

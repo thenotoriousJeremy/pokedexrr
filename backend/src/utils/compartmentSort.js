@@ -116,6 +116,30 @@ const PRINTING_ORDER_NORMALS_FIRST = { 'Normal': 1, 'Reverse Holofoil': 2, 'Holo
 const PRINTING_ORDER_FOILS_FIRST = { 'Reverse Holofoil': 1, 'Holofoil': 2, 'Normal': 3, '1st Edition': 4, 'Promo': 5 };
 const LANGUAGE_ORDER = { 'English': 1, 'Japanese': 2, 'German': 3, 'French': 4, 'Spanish': 5, 'Italian': 6 };
 
+const WUBRG_ORDER = {
+  'White': 1, 'W': 1,
+  'Blue': 2, 'U': 2,
+  'Black': 3, 'B': 3,
+  'Red': 4, 'R': 4,
+  'Green': 5, 'G': 5,
+  'Multicolor': 6,
+  'Colorless': 7
+};
+
+function getColorCategory(card) {
+  if (!card) return 'Colorless';
+  let ci = [];
+  if (typeof card.color_identity === 'string') {
+    try { ci = JSON.parse(card.color_identity); } catch(e){ if (card.color_identity) ci = [card.color_identity]; }
+  } else if (Array.isArray(card.color_identity)) {
+    ci = card.color_identity;
+  }
+  if (!ci || ci.length === 0) return 'Colorless';
+  if (ci.length > 1) return 'Multicolor';
+  const names = { 'W': 'White', 'U': 'Blue', 'B': 'Black', 'R': 'Red', 'G': 'Green' };
+  return names[ci[0]] || ci[0] || 'Colorless';
+}
+
 const RARITY_RANK = [
   ['classic collection', 16], ['hyper', 15], ['special illustration', 14],
   ['illustration', 13], ['secret', 12], ['ultra', 11], ['radiant', 10],
@@ -198,30 +222,6 @@ function sortCards(cards, sortOrder, foilSorting) {
         case 'cmc':
           cmp = (a.cmc || 0) - (b.cmc || 0);
           break;
-const WUBRG_ORDER = {
-  'White': 1, 'W': 1,
-  'Blue': 2, 'U': 2,
-  'Black': 3, 'B': 3,
-  'Red': 4, 'R': 4,
-  'Green': 5, 'G': 5,
-  'Multicolor': 6,
-  'Colorless': 7
-};
-
-function getColorCategory(card) {
-  if (!card) return 'Colorless';
-  let ci = [];
-  if (typeof card.color_identity === 'string') {
-    try { ci = JSON.parse(card.color_identity); } catch(e){ if (card.color_identity) ci = [card.color_identity]; }
-  } else if (Array.isArray(card.color_identity)) {
-    ci = card.color_identity;
-  }
-  if (!ci || ci.length === 0) return 'Colorless';
-  if (ci.length > 1) return 'Multicolor';
-  const names = { 'W': 'White', 'U': 'Blue', 'B': 'Black', 'R': 'Red', 'G': 'Green' };
-  return names[ci[0]] || ci[0] || 'Colorless';
-}
-
         case 'color_identity':
         case 'color': {
           const catA = getColorCategory(a);
