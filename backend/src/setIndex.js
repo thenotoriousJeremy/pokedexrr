@@ -49,7 +49,7 @@ async function fetchMtgSet(set) {
   let url = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(`set:${set} unique:prints`)}&order=set`;
   const cards = [];
   while (url) {
-    const r = await http.get(url);
+    const r = await scryfallApi.scryGetRetried(url);
     for (const c of r.data.data || []) {
       const img = c.image_uris?.normal || c.card_faces?.[0]?.image_uris?.normal;
       if (img) cards.push({ name: c.name || '', set: c.set || set, number: c.collector_number || '', img, raw: c });
@@ -208,7 +208,7 @@ function deleteBuild(game, set) {
 // warn about size before committing to a full build.
 async function previewSet(game, set) {
   if (game === 'mtg') {
-    const r = await http.get(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(`set:${set} unique:prints`)}`);
+    const r = await scryfallApi.scryGetRetried(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(`set:${set} unique:prints`)}`);
     return r.data.total_cards || (r.data.data ? r.data.data.length : 0);
   }
   const key = process.env.POKEMON_TCG_API_KEY || '';

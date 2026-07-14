@@ -73,6 +73,11 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   const setSuggestions = setQuery
     ? setList.filter(s => [s.id, s.ptcgo_code, s.name].some(v => (v || '').toLowerCase().includes(setQuery))).slice(0, 8)
     : [];
+  // Resolve the entered code to its set record so the UI can show the full name
+  // next to the id (e.g. "Foundations (FDN)"). Falls back to the bare code for
+  // free-typed sets not in the cached list.
+  const currentSet = setList.find(s => (setScanCode(s) || '').toLowerCase() === setQuery);
+  const setLabel = currentSet ? `${currentSet.name} (${setScanCode(currentSet)})` : scanSetCode;
 
   const [debugHashImg, setDebugHashImg] = useState('');
   const [debugCandidates, setDebugCandidates] = useState([]);
@@ -172,7 +177,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   // one-time build finishes.
   useEffect(() => {
     if (!scanSetCode) { setSetPrep('idle'); setSetBuildProgress(null); return; }
-    let cancelled = false, timer;
+    let cancelled = false, timer, debounce;
     const poll = async () => {
       try {
         const r = await fetch('/api/prepare-set', {
@@ -187,9 +192,11 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         timer = setTimeout(poll, 3000);
       } catch { if (!cancelled) setSetPrep('idle'); }
     };
-    setSetPrep('building');
-    poll();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    // Debounce: /api/prepare-set starts a server-side set build, so firing it on
+    // every keystroke makes typing "fdn" build "f","fd","fdn" (and bursts
+    // Scryfall into 429s). Wait for a typing pause, then prepare once.
+    debounce = setTimeout(() => { setSetPrep('building'); poll(); }, 600);
+    return () => { cancelled = true; clearTimeout(debounce); if (timer) clearTimeout(timer); };
   }, [scanGame, scanSetCode]);
 
   // Detect manual-exposure support on the live track. Present on most Android
@@ -845,12 +852,12 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   text = 'Highly recommended: pick your set below. Scans are far more accurate scoped to one set — without it we search every set and may misidentify the card.';
                 } else if (setPrep === 'building') {
                   text = pct === null
-                    ? `Preparing set ${scanSetCode}… fetching card list (one-time). Scans work meanwhile.`
-                    : `Building set ${scanSetCode}: ${bp.done}/${bp.total} cards (${pct}%). One-time; scans work meanwhile.`;
+                    ? `Preparing set ${setLabel}… fetching card list (one-time). Scans work meanwhile.`
+                    : `Building set ${setLabel}: ${bp.done}/${bp.total} cards (${pct}%). One-time; scans work meanwhile.`;
                 } else if (setPrep === 'ready') {
-                  text = `Set ${scanSetCode} ready: exact matches, no set to pick.`;
+                  text = `Set ${setLabel} ready: exact matches, no set to pick.`;
                 } else {
-                  text = `Set ${scanSetCode}.`;
+                  text = `Set ${setLabel}.`;
                 }
                 return (
                   <>
