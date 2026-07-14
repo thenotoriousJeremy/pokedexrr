@@ -31,6 +31,26 @@ function scryGet(url, config) {
   return run;
 }
 
+// Queue + 429 backoff, returning the raw axios response (callers that need
+// has_more/next_page/total_cards can't use fetchFromScryfall, which strips to
+// .data.data). Set-index builds page through this so their traffic shares the
+// one global gap instead of bursting Scryfall into a 429.
+async function scryGetRetried(url, config, retries = 4) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await scryGet(url, config);
+    } catch (error) {
+      if (error.response && error.response.status === 429 && i < retries - 1) {
+        const ra = parseInt(error.response.headers?.['retry-after'], 10);
+        const backoff = Number.isFinite(ra) ? ra * 1000 : 1000 * (i + 1);
+        await new Promise(r => setTimeout(r, backoff));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 const COLOR_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
 const CACHE_AGE_LIMIT_MS = 1000 * 60 * 60 * 24 * 3; // 3 days
 
@@ -343,4 +363,19 @@ async function updateCollectionPrices() {
   }
 }
 
-module.exports = { searchCards, normalizeCard, cacheCards, getCardsBySet, fetchAndCacheSets, updateCollectionPrices };
+async function getCardById(cardId) {
+  const rawId = cardId.startsWith('mtg-') ? cardId.slice(4) : cardId;
+  const cached = await db.get(`SELECT * FROM card_cache WHERE id = ?`, [cardId]);
+  if (cached) return parseCardRow(cached);
+  try {
+    const resp = await scryGet(`/cards/${rawId}`);
+    if (resp.data) {
+      const norm = normalizeCard(resp.data);
+      await cacheCards([norm]);
+      return norm;
+    }
+  } catch (e) {}
+  return null;
+}
+
+module.exports = { searchCards, normalizeCard, cacheCards, getCardsBySet, fetchAndCacheSets, updateCollectionPrices, getCardById, scryGetRetried };

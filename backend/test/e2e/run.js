@@ -27,7 +27,6 @@ async function runTestFile(file) {
       const output = data.toString();
       process.stdout.write(output);
       
-      // Parse PASS counts
       const passMatches = output.match(/PASS: F\d-TC\d+/g);
       if (passMatches) {
         filePassed += passMatches.length;
@@ -38,7 +37,6 @@ async function runTestFile(file) {
       const output = data.toString();
       process.stderr.write(output);
       
-      // Parse FAIL counts
       const failMatches = output.match(/FAIL: F\d-TC\d+/g);
       if (failMatches) {
         fileFailed += failMatches.length;
@@ -52,7 +50,6 @@ async function runTestFile(file) {
       } else {
         console.error(`FAIL: ${file} exited with code ${code}.`);
         failedSuites++;
-        // If there were no explicit FAIL prints recorded but process exited with non-zero, record it as a failure
         if (fileFailed === 0) {
           fileFailed = 1;
         }

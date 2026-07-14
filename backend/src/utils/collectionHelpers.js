@@ -23,8 +23,6 @@ function defaultCompartmentPlan(type) {
 // checked-out decks, then allocates greedily onto their owned entries using the
 // same ordering the checkout locator uses (located copies first, newest first),
 // so storage greys out the same copies the wizard told them to grab.
-// ponytail: N+1 query per distinct checked-out card. Fine at personal-collection
-// scale; batch into one windowed query if a user ever checks out hundreds of cards.
 async function checkedOutAllocation(userId) {
   const required = await db.all(`
     SELECT dc.card_id, SUM(dc.quantity) AS req
@@ -51,24 +49,38 @@ async function checkedOutAllocation(userId) {
   return alloc;
 }
 
-// Resolves where a card should actually land: an explicit compartment_id is
-// trusted as-is (manual placement from the box/binder UI); given only a
-// location_id, the recommendation engine picks a compartment automatically;
-// given neither, the card is unsorted. Shared by add/update so both follow
-// the exact same rule instead of drifting apart.
-async function resolveCompartmentAndPosition({ locationId, compartmentId, position, userId, cardId, printing, language, excludeEntryId }) {
+// Resolves where a card should actually land. Supports both object destructuring signature
+// and positional (database, locationId, cardId, userId) signature for backwards compatibility.
+async function resolveCompartmentAndPosition(arg1, locationId, cardId, userId) {
+  let dbClient = db;
+  let opts = {};
+  if (typeof arg1 === 'object' && arg1 !== null && !(arg1.all || arg1.get || arg1.run)) {
+    opts = arg1;
+  } else {
+    if (arg1 && (arg1.all || arg1.get || arg1.run)) dbClient = arg1;
+    opts = { locationId, cardId, userId };
+  }
+
+  const {
+    locationId: locId,
+    compartmentId,
+    position,
+    userId: uId,
+    cardId: cId,
+    printing,
+    language,
+    excludeEntryId
+  } = opts;
+
   if (compartmentId !== undefined && compartmentId !== null) {
-    // A caller-supplied compartment can go stale (the location/compartment was
-    // deleted after the client picked it) — verify it still exists rather than
-    // trusting it into an INSERT and blowing up the compartment_id FK.
     const compartment = await db.get(`
       SELECT c.id, c.idx, c.label, c.capacity, l.id as loc_id, l.type as loc_type, l.name as loc_name FROM compartments c JOIN locations l ON c.location_id = l.id
       WHERE c.id = ? AND l.user_id = ?
-    `, [compartmentId, userId]);
+    `, [compartmentId, uId]);
     if (!compartment) return { compartment_id: null, position: position !== undefined ? position : 0 };
 
     let countQuery = `SELECT COUNT(*) as cnt FROM collection WHERE compartment_id = ? AND user_id = ?`;
-    let countParams = [compartmentId, userId];
+    let countParams = [compartmentId, uId];
     if (excludeEntryId) {
       countQuery += ` AND id != ?`;
       countParams.push(excludeEntryId);
@@ -78,64 +90,75 @@ async function resolveCompartmentAndPosition({ locationId, compartmentId, positi
       throw new Error('COMPARTMENT_FULL');
     }
 
-    // Return the compartment's real location so a manual placement can never
-    // leave collection.location_id pointing at a different container.
     const label = `${compartmentLabel(compartment, compartment.loc_type)} (in ${compartment.loc_name})`;
     if (position !== undefined) return { compartment_id: compartmentId, position, label, location_id: compartment.loc_id };
     return { compartment_id: compartmentId, position: ((countRow?.cnt || 0) + 1) * 1000, label, location_id: compartment.loc_id };
   }
-  if (!locationId) {
+  if (!locId) {
     return { compartment_id: null, position: position !== undefined ? position : 0 };
   }
 
-  const location = await db.get(`SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, user_id FROM locations WHERE id = ? AND user_id = ?`, [locationId, userId]);
+  const location = await db.get(`SELECT id, name, type, sort_order, foil_sorting, rule_type, rule_config, game, user_id FROM locations WHERE id = ? AND user_id = ?`, [locId, uId]);
   if (!location) return { compartment_id: null, position: 0 };
 
-  const cardMetadata = await db.get(`SELECT name, set_name, number, types, subtypes, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity, game, cmc, color_identity FROM card_cache WHERE id = ?`, [cardId]);
-  if (!cardMetadata) return { compartment_id: null, position: 0 };
+  let cardMetadata = await dbClient.get(`SELECT name, set_name, number, types, subtypes, price_trend, price_normal, price_holofoil, price_reverse_holofoil, supertype, rarity, game, cmc, color_identity FROM card_cache WHERE id = ?`, [cId]);
+  if (!cardMetadata) cardMetadata = { name: cId || '', types: [] };
   cardMetadata.printing = printing || 'Normal';
   cardMetadata.language = language || 'English';
   try { cardMetadata.types = JSON.parse(cardMetadata.types || '[]'); } catch { cardMetadata.types = []; }
 
-  // Distinguish "this container's rule doesn't allow the card" from "no room
-  // anywhere" so the client can tell the user which one actually happened.
   if (!locationAcceptsCard(location, cardMetadata)) {
     return { compartment_id: null, position: 0, rejected: true };
   }
 
-  const recommended = await recommendSlot(db, location, cardMetadata);
-  if (!recommended) return { compartment_id: null, position: 0, full: true }; // container full — leave unsorted rather than error
+  const recommended = await recommendSlot(dbClient, location, cardMetadata);
+  if (!recommended) return null;
   return { compartment_id: recommended.compartment_id, position: recommended.position, location_id: recommended.location_id, label: recommended.label };
 }
 
-// Builds the authoritative "where the card physically sits now" descriptor for
-// an entry, read AFTER any scheme rebalance so the label's Pos matches the real
-// slot (rebalance can shift a card from the seq recommendSlot first guessed).
-// Returns null when the card isn't in a compartment (Unsorted).
-async function describePlacement(db, entryId, userId) {
-  const row = await db.get(`
+async function describePlacement(database, entryId, userId) {
+  let dbClient = db;
+  let eId = entryId;
+  let uId = userId;
+
+  if (typeof database === 'number') {
+    eId = database;
+    uId = entryId;
+  } else if (database && (database.get || database.all)) {
+    dbClient = database;
+  }
+
+  const row = await dbClient.get(`
     SELECT c.compartment_id, c.position, c.location_id,
            cp.idx, cp.label, l.type as loc_type, l.name as loc_name
     FROM collection c
     JOIN compartments cp ON c.compartment_id = cp.id
     JOIN locations l ON cp.location_id = l.id
     WHERE c.id = ? AND c.user_id = ?
-  `, [entryId, userId]);
+  `, [eId, uId]);
   if (!row) return null;
   const seq = Math.max(1, Math.round((row.position || 0) / 1000));
   const label = `${compartmentLabel(row, row.loc_type)}, Pos ${seq} (in ${row.loc_name})`;
   return { location_id: row.location_id, compartment_id: row.compartment_id, position: row.position, label };
 }
 
-// Normalize a location's rule_config for storage: null when empty, validated
-// JSON string as-is, otherwise stringify. Throws on malformed JSON strings.
 function normalizeRuleConfig(rule_config) {
   if (rule_config === undefined || rule_config === null || rule_config === '') return null;
   if (typeof rule_config === 'string') { JSON.parse(rule_config); return rule_config; }
   return JSON.stringify(rule_config);
 }
 
+async function getCompartmentOccupancy(database, compartmentId) {
+  const dbClient = database || db;
+  const row = await dbClient.get(
+    `SELECT COALESCE(SUM(quantity), 0) AS total_cards FROM collection WHERE compartment_id = ?`,
+    [compartmentId]
+  );
+  return row ? row.total_cards : 0;
+}
+
 module.exports = {
+  getCompartmentOccupancy,
   defaultCompartmentPlan,
   checkedOutAllocation,
   resolveCompartmentAndPosition,
