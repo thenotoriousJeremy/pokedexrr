@@ -137,7 +137,7 @@ function SharedCollection({ shareToken }) {
       {/* Header */}
       <header className="app-header" style={{ marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '1px solid var(--border-glass)' }}>
         <div className="logo-section">
-          <div className="logo-icon"></div>
+          <div className="logo-icon"><img src="/logo.svg" alt="" aria-hidden="true" /></div>
           <h1 className="logo-text">Poke<span>Keep</span></h1>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>

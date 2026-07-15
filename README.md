@@ -1,6 +1,6 @@
 <div align="center">
 
-# Bindarr
+<h1><img src="frontend/public/logo.svg" width="40" height="40" align="center" alt="" /> Bindarr</h1>
 
 **Scan, value, organize, and locate your Pokémon & Magic: The Gathering cards — self-hosted.**
 
