@@ -44,6 +44,7 @@ jobs:
           ANDROID_VERSION_NAME: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0' }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
         run: |
+          chmod +x ./gradlew
           if [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d > release.keystore
             export BINDARR_KEYSTORE_FILE="$PWD/release.keystore"
