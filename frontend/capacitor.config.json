@@ -1,0 +1,10 @@
+{
+  "appId": "com.bindarr.app",
+  "appName": "Bindarr",
+  "webDir": "dist",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}

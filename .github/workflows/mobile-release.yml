@@ -1,0 +1,160 @@
+name: Build Mobile Apps
+
+# Builds the Android APK and (when Apple signing secrets are present) a signed
+# iOS .ipa, then attaches both to the GitHub Release for the tag and uploads
+# them as workflow artifacts. Store uploads (Google Play / TestFlight) are NOT
+# done here yet — the packages just land on GitHub.
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build web + sync Capacitor
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          npx cap sync android
+
+      - name: Build APK
+        working-directory: frontend/android
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          BINDARR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          BINDARR_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          BINDARR_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_VERSION_NAME: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0' }}
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > release.keystore
+            export BINDARR_KEYSTORE_FILE="$PWD/release.keystore"
+            ./gradlew assembleRelease
+            echo "APK=frontend/android/app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_ENV"
+          else
+            echo "No keystore secret set — building a debug APK (installable, debug-signed)."
+            ./gradlew assembleDebug
+            echo "APK=frontend/android/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: ${{ env.APK }}
+
+      - name: Attach APK to release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.APK }}
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Apple signing secrets
+        id: gate
+        env:
+          CERT: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+        run: echo "ready=${{ secrets.IOS_CERTIFICATE_BASE64 != '' }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          node-version: 20
+
+      - name: Build web + sync Capacitor
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          npx cap sync ios
+
+      - name: Import signing certificate
+        if: steps.gate.outputs.ready == 'true'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+
+      - name: Install provisioning profile
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}" | base64 -d > ~/Library/MobileDevice/Provisioning\ Profiles/bindarr.mobileprovision
+
+      - name: Write ExportOptions.plist
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: frontend/ios/App
+        run: |
+          cat > ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store</string>
+            <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.bindarr.app</key><string>${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}</string>
+            </dict>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Archive
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: frontend/ios/App
+        run: |
+          VERSION="${{ github.ref_type == 'tag' && github.ref_name || '0.0.0' }}"
+          xcodebuild -project App.xcodeproj -scheme App -configuration Release \
+            -archivePath $RUNNER_TEMP/App.xcarchive \
+            -destination 'generic/platform=iOS' \
+            MARKETING_VERSION="${VERSION#v}" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }} \
+            PROVISIONING_PROFILE_SPECIFIER="${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}" \
+            archive
+
+      - name: Export IPA
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: frontend/ios/App
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/App.xcarchive \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath $RUNNER_TEMP/export
+
+      - uses: actions/upload-artifact@v4
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          name: ios-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+
+      - name: Attach IPA to release
+        if: steps.gate.outputs.ready == 'true' && github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ runner.temp }}/export/*.ipa

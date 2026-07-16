@@ -63,3 +63,8 @@ TEST_READY.md
 
 # Prebuilt scan-match data (embeddings, ORB indexes, per-set caches) — large, regenerable
 backend/data/
+
+# Capacitor: build artifacts + web copies are handled by the per-platform
+# .gitignore files under frontend/android and frontend/ios. Only add here what
+# they miss: never commit a release signing keystore.
+*.keystore

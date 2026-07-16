@@ -1693,26 +1693,38 @@ button, input, select, textarea {
 }
 
 .holo-shine-overlay {
+  /* Default center so the rainbow sits still until a pointer drives --px/--py
+     (set by the delegated handler in App.jsx). */
+  --px: 50%;
+  --py: 50%;
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
   overflow: hidden;
   border-radius: inherit;
-  background: linear-gradient(125deg,
-    rgba(255, 255, 255, 0) 0%,
-    rgba(255, 0, 128, 0.14) 15%,
-    rgba(128, 0, 255, 0.20) 30%,
-    rgba(0, 128, 255, 0.20) 45%,
-    rgba(0, 255, 128, 0.14) 60%,
-    rgba(255, 255, 0, 0.18) 75%,
-    rgba(255, 255, 255, 0) 100%
-  );
-  background-size: 200% 200%;
+  background:
+    /* specular glare that follows the pointer */
+    radial-gradient(circle at var(--px) var(--py),
+      rgba(255, 255, 255, 0.55) 0%,
+      rgba(255, 255, 255, 0) 45%),
+    /* rainbow prism, panned by pointer position */
+    linear-gradient(115deg,
+      rgba(255, 0, 128, 0.30) 0%,
+      rgba(128, 0, 255, 0.34) 20%,
+      rgba(0, 128, 255, 0.34) 40%,
+      rgba(0, 255, 170, 0.28) 58%,
+      rgba(255, 238, 0, 0.30) 78%,
+      rgba(255, 90, 0, 0.30) 100%
+    );
+  background-size: 160% 160%, 220% 220%;
+  background-position: var(--px) var(--py), calc(100% - var(--px)) var(--py);
   pointer-events: none;
   z-index: 5;
   mix-blend-mode: screen;
   opacity: 0.5;
-  transition: opacity 0.3s ease, background-position 0.05s ease-out;
+  transition: opacity 0.3s ease, background-position 0.08s ease-out;
 }
+.holo-shine-overlay.foil-active,
+.foil-active .holo-shine-overlay { opacity: 0.85; }
 .holo-shine-overlay::after {
   content: '';
   position: absolute;
@@ -1725,6 +1737,8 @@ button, input, select, textarea {
 }
 
 .reverse-holo-shine-overlay {
+  --px: 50%;
+  --py: 50%;
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
   overflow: hidden;
@@ -1732,19 +1746,25 @@ button, input, select, textarea {
   /* Stripe alpha was 0.06 at container opacity 0.55 (~0.03 effective) — nearly
      invisible against card art at rest, making it hard to tell apart from
      Holofoil. Raised so the silver stripe texture reads without needing hover
-     or waiting for the sweep animation to pass over. */
-  background: repeating-linear-gradient(112deg,
-    rgba(220, 240, 255, 0.22) 0px,
-    rgba(220, 240, 255, 0.22) 6px,
-    rgba(0, 0, 0, 0) 6px,
-    rgba(0, 0, 0, 0) 13px
-  );
+     or waiting for the sweep animation to pass over. Pointer-tracked silver
+     glare sits above the pinstripes so it reads as brushed foil, not rainbow. */
+  background:
+    radial-gradient(circle at var(--px) var(--py),
+      rgba(235, 245, 255, 0.55) 0%,
+      rgba(235, 245, 255, 0) 42%),
+    repeating-linear-gradient(112deg,
+      rgba(220, 240, 255, 0.22) 0px,
+      rgba(220, 240, 255, 0.22) 6px,
+      rgba(0, 0, 0, 0) 6px,
+      rgba(0, 0, 0, 0) 13px
+    );
   pointer-events: none;
   z-index: 5;
   mix-blend-mode: overlay;
   opacity: 0.75;
   transition: opacity 0.3s ease, background-position 0.05s ease-out;
 }
+.foil-active .reverse-holo-shine-overlay { opacity: 0.95; }
 .reverse-holo-shine-overlay::after {
   content: '';
   position: absolute;

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Bindarr</string>
+    <string name="title_activity_main">Bindarr</string>
+    <string name="package_name">com.bindarr.app</string>
+    <string name="custom_url_scheme">com.bindarr.app</string>
+</resources>

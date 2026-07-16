@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
-import { User, Lock, ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { User, Lock, ArrowRight, Eye, EyeOff, Server } from 'lucide-react';
+import { isNative, getServerUrl, setServerUrl } from '../apiBase';
 
 function Login({ onLoginSuccess }) {
   const [isRegister, setIsRegister] = useState(false);
+  // Native app connects to the user's own self-hosted instance; web is same-origin.
+  const [server, setServer] = useState(getServerUrl());
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -14,15 +17,22 @@ function Login({ onLoginSuccess }) {
   const [registrationEnabled, setRegistrationEnabled] = useState(false);
 
   useEffect(() => {
+    if (isNative && !server) return; // wait until user sets their server URL
     fetch('/api/auth/config')
       .then(res => res.ok ? res.json() : { registrationEnabled: false })
       .then(data => setRegistrationEnabled(!!data.registrationEnabled))
       .catch(() => setRegistrationEnabled(false));
-  }, []);
+  }, [server]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+
+    if (isNative && !server) {
+      setError('Enter your server URL first.');
+      return;
+    }
+
     setLoading(true);
 
     if (isRegister) {
@@ -118,6 +128,29 @@ function Login({ onLoginSuccess }) {
         )}
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          {isNative && (
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label htmlFor="login-server" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Server URL</label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  id="login-server"
+                  type="url"
+                  inputMode="url"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  className="input-control"
+                  style={{ width: '100%', paddingLeft: '2.5rem' }}
+                  placeholder="https://your-server.example.com"
+                  value={server}
+                  onChange={(e) => { setServer(e.target.value); setServerUrl(e.target.value); }}
+                  required
+                  disabled={loading}
+                />
+                <Server size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              </div>
+            </div>
+          )}
+
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label htmlFor="login-username" style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Username</label>
             <div style={{ position: 'relative' }}>

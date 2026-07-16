@@ -122,6 +122,30 @@ function App() {
     return () => window.removeEventListener('bindarr_logout', handleAutoLogout);
   }, []);
 
+  // Pointer-reactive foil: one delegated listener drives --px/--py (0-100%) on
+  // whichever card the pointer is over, so the holo/reverse-holo rainbow tracks
+  // the cursor (MTG-style). CSS custom props inherit down to the overlay div.
+  useEffect(() => {
+    const onMove = (e) => {
+      const card = e.target.closest && e.target.closest('.tilt-card-wrapper');
+      if (!card) return;
+      const r = card.getBoundingClientRect();
+      card.style.setProperty('--px', `${((e.clientX - r.left) / r.width) * 100}%`);
+      card.style.setProperty('--py', `${((e.clientY - r.top) / r.height) * 100}%`);
+      card.classList.add('foil-active');
+    };
+    const onLeave = (e) => {
+      const card = e.target.closest && e.target.closest('.tilt-card-wrapper');
+      if (card) card.classList.remove('foil-active');
+    };
+    document.addEventListener('pointermove', onMove, { passive: true });
+    document.addEventListener('pointerout', onLeave, { passive: true });
+    return () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerout', onLeave);
+    };
+  }, []);
+
   const handleLoginSuccess = (newToken, newUser) => {
     setToken(newToken);
     setUser(newUser);
