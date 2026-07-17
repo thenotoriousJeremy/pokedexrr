@@ -672,7 +672,7 @@ button, input, select, textarea {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1.5rem;
+  gap: 0.85rem;
   max-width: 600px;
   margin: 0 auto;
 }
@@ -688,12 +688,92 @@ button, input, select, textarea {
   box-shadow: var(--shadow-glow);
 }
 
+/* Live scan box is locked to the trading-card aspect and height-capped so the
+   camera + controls + diagnostics fit on a phone without the box ballooning to
+   the stream's own (often tall) ratio. object-fit:cover fills it without squish. */
+.camera-preview-wrapper.camera-active {
+  aspect-ratio: 5 / 7;
+  height: min(64vh, 560px);
+  width: auto;
+  max-width: 100%;
+  margin-inline: auto;
+}
+
 .camera-video {
   width: 100%;
   height: 100%;
-  object-fit: fill; /* Maps display dimensions to stream dimensions 1-to-1 with zero zoom overflow cropping */
+  object-fit: contain; /* show the WHOLE camera frame (widest angle, no FOV cropped); letterbox where the stream aspect != box. Crop mapping mirrors this with a min (contain) scale. */
   display: block;
 }
+
+/* Shared card detail popup. Base = desktop two-column; mobile compacts padding,
+   gaps and the image so it fits a phone popup without a wall of whitespace. */
+.card-inspector {
+  max-width: 720px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  padding: 2.5rem;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 2.5rem;
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+}
+
+@media (max-width: 768px) {
+  .card-inspector {
+    padding: 1.1rem 0.9rem !important;
+    gap: 0.85rem !important;
+    max-height: 90vh !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    max-width: 440px !important;
+    width: 92vw !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+    border-radius: var(--radius-md) !important;
+  }
+  .card-inspector .ci-image-col {
+    flex: 0 0 auto !important;
+    max-width: 210px !important;
+    width: 100% !important;
+    align-items: center !important;
+    gap: 0.6rem !important;
+  }
+  .card-inspector .ci-image-wrap {
+    max-width: 190px !important;
+    width: 100% !important;
+  }
+  .card-inspector .ci-info-col {
+    flex: 1 1 auto !important;
+    width: 100% !important;
+    gap: 0.85rem !important;
+  }
+  .card-inspector .ci-info-col h3 {
+    font-size: 1.35rem !important;
+    line-height: 1.2 !important;
+    text-align: center !important;
+  }
+  .card-inspector .ci-info-col p {
+    text-align: center !important;
+  }
+  .card-entry-fields-row-3 {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 0.5rem !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .card-entry-fields-row-3 {
+    grid-template-columns: 1fr !important;
+  }
+}
+
 
 /* Card Target Overlay overlay with visual crop zones */
 .camera-overlay {
@@ -710,7 +790,13 @@ button, input, select, textarea {
   pointer-events: none;
 }
 
+/* Card-shaped aim box, centered by .camera-overlay's flex. Height-driven at card
+   ratio so it stays card-shaped whatever the preview box aspect is, with margin
+   so the card doesn't sit tight against the frame. */
 .scan-card-guide {
+  height: 72%;
+  aspect-ratio: 5 / 7;
+  max-width: 88%;
   border: 2px dashed rgba(255, 255, 255, 0.4);
   border-radius: var(--radius-md);
   position: relative;
@@ -1000,13 +1086,16 @@ button, input, select, textarea {
      inline), so object-fit:fill still maps display->stream without distortion.
      3/4 is a fallback until the real ratio loads. */
   .scanner-container {
-    gap: 0.85rem;
+    gap: 0.5rem;
   }
+  /* Mobile: full-width square box for maximum vertical FOV without pushing the
+     controls off-screen. Width-driven (height follows aspect). The card guide
+     stays card-shaped (its own aspect-ratio), centered with scene around it. */
   .camera-preview-wrapper.camera-active {
-    height: min(50dvh, 440px);
-    width: auto;
+    width: min(68vw, 40dvh);
     max-width: 100%;
-    aspect-ratio: 3 / 4;
+    aspect-ratio: 5 / 6;
+    height: auto;
   }
 
   .quick-add-grid {
@@ -1307,12 +1396,18 @@ button, input, select, textarea {
   grid-template-columns: 1fr 420px;
   gap: 1.25rem;
   min-height: 70vh;
+  overflow-x: hidden;
 }
 
 @media (max-width: 1024px) {
   .storage-workspace-grid {
     grid-template-columns: 1fr !important;
     height: auto !important;
+    /* Stacked = one column; the 70vh floor stretches short content (esp. during
+       filing when the unsorted col is hidden) leaving dead space above the fixed
+       filing bar. Let rows size to content instead. */
+    min-height: 0 !important;
+    align-content: start;
   }
   .location-unsorted-col {
     max-height: 400px;
@@ -1935,6 +2030,7 @@ button, input, select, textarea {
   border: 1px solid var(--border-glass);
   margin: 0.5rem 0;
   user-select: none;
+  touch-action: pan-y;
 }
 
 .box-coverflow-track {
@@ -2016,12 +2112,16 @@ button, input, select, textarea {
 .focused-card-info-panel {
   display: flex;
   flex-direction: column;
+  justify-content: flex-start;
   gap: 0.5rem;
-  padding: 0.85rem;
+  padding: 0.75rem 0.85rem;
   background: rgba(0,0,0,0.25);
   border: 1px solid var(--border-glass);
   border-radius: var(--radius-md);
   margin-top: 0.25rem;
+  height: 96px;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 /* Mobile styles for navigation and tabs */
@@ -2068,6 +2168,7 @@ button, input, select, textarea {
 
 .sub-nav-tab {
   flex: 1;
+  min-width: 0; /* let flex-basis:0 equalize; else the changing "(N)" count resizes the tabs */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2081,6 +2182,65 @@ button, input, select, textarea {
   font-size: 0.85rem;
   cursor: pointer;
   transition: var(--transition-smooth);
+}
+
+/* Storage pane switcher (mobile): strict fixed 42px height grid container so the bounding box and buttons never scale vertically */
+.storage-pane-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  align-items: center;
+  height: 42px;
+  min-height: 42px;
+  max-height: 42px;
+  padding: 3px;
+  width: 100%;
+  max-width: 340px;
+  margin-inline: auto;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.storage-pane-tabs .sub-nav-tab {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 0 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border: 1px solid transparent;
+}
+
+.tab-count-badge {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-glass);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--transition-smooth);
+}
+
+.tab-count-badge.has-unsorted {
+  background: var(--accent-red);
+  color: #ffffff;
+  border-color: rgba(255, 71, 71, 0.6);
+  box-shadow: 0 0 10px var(--accent-red-glow);
+}
+
+.sub-nav-tab.active .tab-count-badge:not(.has-unsorted) {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: var(--text-primary);
 }
 
 .sub-nav-tab.active {
@@ -2120,5 +2280,12 @@ button, input, select, textarea {
 .flash-highlight {
   animation: pulseHighlight 1s ease-out 3;
   border-color: #ffc107 !important;
+  z-index: 100 !important;
+}
+
+.focus-flash {
+  animation: pulseHighlight 1s ease-out 3 !important;
+  border: 2.5px solid #facc15 !important;
+  box-shadow: 0 0 15px rgba(250, 204, 21, 0.7) !important;
   z-index: 100 !important;
 }

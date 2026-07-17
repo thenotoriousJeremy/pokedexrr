@@ -25,7 +25,7 @@ const TYPE_COLORS = {
   'Colorless': '#cbd5e1'
 };
 
-function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, showToast }) {
+function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEntryId, onUpdate, showToast }) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -517,6 +517,7 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, onUpdate, 
         showToast={showToast}
         onViewStorage={(card) => {
           if (setSelectedLocationId) setSelectedLocationId(card.location_id || 'unsorted');
+          if (setFocusEntryId) setFocusEntryId(card.entry_id || card.id);
           onNavigate('storage');
           setInspectorCard(null);
         }}

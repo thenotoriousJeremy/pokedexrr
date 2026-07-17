@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, MapPin, Trash2, Star } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import CardEntryFields from './CardEntryFields';
 import PriceHistoryChart from './PriceHistoryChart';
+import { useBackGuard } from '../utils/useBackGuard';
 
 // MTG color identity pip colors (WUBRG), approximating the printed mana colors.
 const MTG_COLOR_BG = {
@@ -17,7 +18,7 @@ const MTG_COLOR_FG = {
 // Self-contained: owns its edit form (PUT) and delete (DELETE) so every screen
 // gets the same rich view + edit without duplicating the form. onUpdate() lets
 // the parent refetch after a change. onViewStorage is optional (hidden if absent).
-function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage, startInEdit = false }) {
+function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onViewStorage, startInEdit = false }) {
   const [mode, setMode] = useState('view');
   const [locations, setLocations] = useState([]);
   const [q, setQ] = useState(1);
@@ -29,6 +30,9 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
   const [isTrade, setIsTrade] = useState(0);
   const [favorite, setFavorite] = useState(0);
   const [listType, setListType] = useState('collection');
+  const hasToggledRef = useRef(false);
+
+  const targetEntryId = card?.entry_id || card?.id;
 
   useEffect(() => {
     fetch('/api/locations')
@@ -39,6 +43,7 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
 
   useEffect(() => {
     if (!card) return;
+    hasToggledRef.current = false;
     setMode(startInEdit ? 'edit' : 'view');
     setQ(card.quantity ?? 1);
     setCondition(card.condition || 'Near Mint');
@@ -46,18 +51,27 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
     setLanguage(card.language || 'English');
     setPurchasePrice(card.purchase_price || 0);
     setLocationId(card.location_id || '');
-    setIsTrade(card.is_trade || 0);
-    setFavorite(card.favorite || 0);
+    setIsTrade(card.is_trade ? 1 : 0);
+    setFavorite(card.favorite ? 1 : 0);
     setListType(card.list_type || 'collection');
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [card?.entry_id, startInEdit]);
+  }, [targetEntryId, startInEdit]);
+
+  const handleClose = () => {
+    if (hasToggledRef.current && onUpdate) {
+      onUpdate();
+    }
+    onClose && onClose();
+  };
+
+  useBackGuard(!!card, handleClose);
 
   if (!card) return null;
 
   const handleSave = async (e) => {
     e.preventDefault();
+    if (!targetEntryId) return;
     try {
-      const res = await fetch(`/api/collection/${card.entry_id}`, {
+      const res = await fetch(`/api/collection/${targetEntryId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -68,11 +82,20 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
           purchase_price: parseFloat(purchasePrice) || 0,
           location_id: locationId ? parseInt(locationId, 10) : null,
           list_type: listType,
-          is_trade: isTrade,
-          favorite
+          is_trade: isTrade ? 1 : 0,
+          favorite: favorite ? 1 : 0
         })
       });
       if (res.ok) {
+        card.quantity = parseInt(q, 10);
+        card.condition = condition;
+        card.printing = printing;
+        card.language = language;
+        card.purchase_price = parseFloat(purchasePrice) || 0;
+        card.location_id = locationId ? parseInt(locationId, 10) : null;
+        card.list_type = listType;
+        card.is_trade = isTrade ? 1 : 0;
+        card.favorite = favorite ? 1 : 0;
         showToast && showToast('Card entry updated.');
         onUpdate && onUpdate();
         onClose();
@@ -86,12 +109,16 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
   };
 
   const handleQuickToggle = async (field, value) => {
-    // Optimistic UI updates
-    if (field === 'is_trade') setIsTrade(value);
-    if (field === 'favorite') setFavorite(value);
-    if (field === 'list_type') setListType(value);
+    if (!targetEntryId) return;
+    const nextFavorite = field === 'favorite' ? (value ? 1 : 0) : (favorite ? 1 : 0);
+    const nextIsTrade = field === 'is_trade' ? (value ? 1 : 0) : (isTrade ? 1 : 0);
+    const nextListType = field === 'list_type' ? value : listType;
 
-    // We update the backend by sending all current form state but overriding the toggled field
+    // Optimistic UI & prop object updates
+    if (field === 'is_trade') { setIsTrade(nextIsTrade); card.is_trade = nextIsTrade; }
+    if (field === 'favorite') { setFavorite(nextFavorite); card.favorite = nextFavorite; }
+    if (field === 'list_type') { setListType(nextListType); card.list_type = nextListType; }
+
     const payload = {
       quantity: parseInt(q, 10),
       condition,
@@ -99,41 +126,44 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
       language,
       purchase_price: parseFloat(purchasePrice) || 0,
       location_id: locationId ? parseInt(locationId, 10) : null,
-      list_type: field === 'list_type' ? value : listType,
-      is_trade: field === 'is_trade' ? value : isTrade,
-      favorite: field === 'favorite' ? value : favorite
+      list_type: nextListType,
+      is_trade: nextIsTrade,
+      favorite: nextFavorite
     };
+
     try {
-      const res = await fetch(`/api/collection/${card.entry_id}`, {
+      const res = await fetch(`/api/collection/${targetEntryId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
       if (res.ok) {
-        showToast && showToast(`Card updated.`);
-        onUpdate && onUpdate();
+        hasToggledRef.current = true;
+        showToast && showToast('Card updated.');
       } else {
         // revert on fail
-        if (field === 'is_trade') setIsTrade(isTrade);
-        if (field === 'favorite') setFavorite(favorite);
-        if (field === 'list_type') setListType(listType);
+        if (field === 'is_trade') { setIsTrade(isTrade); card.is_trade = isTrade; }
+        if (field === 'favorite') { setFavorite(favorite); card.favorite = favorite; }
+        if (field === 'list_type') { setListType(listType); card.list_type = listType; }
         showToast && showToast('Failed to update card.');
       }
     } catch (err) {
       console.error(err);
-      if (field === 'is_trade') setIsTrade(isTrade);
-      if (field === 'favorite') setFavorite(favorite);
-      if (field === 'list_type') setListType(listType);
+      if (field === 'is_trade') { setIsTrade(isTrade); card.is_trade = isTrade; }
+      if (field === 'favorite') { setFavorite(favorite); card.favorite = favorite; }
+      if (field === 'list_type') { setListType(listType); card.list_type = listType; }
       showToast && showToast('Error updating card.');
     }
   };
 
   const handleDelete = async () => {
+    if (!targetEntryId) return;
     if (!window.confirm(`Are you sure you want to delete ${card.name} from your collection?`)) return;
     try {
-      const res = await fetch(`/api/collection/${card.entry_id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/collection/${targetEntryId}`, { method: 'DELETE' });
       if (res.ok) {
         showToast && showToast(`${card.name} removed from collection.`);
+        onDeleted && onDeleted(targetEntryId);
         onUpdate && onUpdate();
         onClose();
       } else {
@@ -144,6 +174,8 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
       showToast && showToast('Error connecting to backend.');
     }
   };
+
+  const cardNumber = card.number || card.collector_number || card.card_number || '';
 
   return (
     <div style={{
@@ -156,22 +188,9 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
       justifyContent: 'center',
       zIndex: 999,
       padding: '1.5rem'
-    }} onClick={onClose}>
-      <div className="glass-panel" style={{
-        maxWidth: '720px',
-        width: '100%',
-        maxHeight: '90vh',
-        overflowY: 'auto',
-        padding: '2.5rem',
-        display: 'flex',
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: '2.5rem',
-        position: 'relative',
-        border: '1px solid rgba(255, 255, 255, 0.1)',
-        boxShadow: '0 20px 50px rgba(0,0,0,0.6)'
-      }} onClick={(e) => e.stopPropagation()}>
-        <button className="btn btn-secondary btn-icon-only" onClick={onClose} style={{
+    }} onClick={handleClose}>
+      <div className="glass-panel card-inspector" onClick={(e) => e.stopPropagation()}>
+        <button className="btn btn-secondary btn-icon-only" onClick={handleClose} style={{
           position: 'absolute',
           top: '1rem',
           right: '1rem',
@@ -182,8 +201,8 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
         </button>
 
         {/* Left side: Card Image & Badge overlays */}
-        <div style={{ flex: '1 1 250px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
-          <div style={{ position: 'relative', width: '100%', maxWidth: '280px' }}>
+        <div className="ci-image-col" style={{ flex: '1 1 250px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
+          <div className="ci-image-wrap" style={{ position: 'relative', width: '100%', maxWidth: '280px' }}>
             <img
               src={card.image_url}
               alt={card.name}
@@ -209,7 +228,7 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
         </div>
 
         {/* Right side: Information / Edit */}
-        <div style={{ flex: '1 1 320px', display: 'flex', flexDirection: 'column', gap: '1.25rem', justifyContent: 'space-between' }}>
+        <div className="ci-info-col" style={{ flex: '1 1 320px', display: 'flex', flexDirection: 'column', gap: '1.25rem', justifyContent: 'space-between' }}>
           <div>
             <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
               {card.list_type === 'wishlist' && (
@@ -222,17 +241,14 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
                   For Trade
                 </span>
               )}
-              {favorite === 1 && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', padding: '0.2rem 0.5rem', borderRadius: '4px', backgroundColor: 'rgba(250, 204, 21, 0.15)', color: '#facc15', border: '1px solid rgba(250, 204, 21, 0.3)' }}>
-                  <Star size={11} fill="#facc15" /> Favorite
-                </span>
-              )}
             </div>
 
             <h3 style={{ fontSize: '1.65rem', color: '#fff', fontWeight: 800, lineHeight: 1.15, marginBottom: '0.25rem' }}>
               {getCardDisplayName(card.name, card.language)}
             </h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 500 }}>{card.set_name} • Card #{card.number}</p>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 500 }}>
+              {card.set_name}{cardNumber ? ` • Card #${cardNumber}` : ''}
+            </p>
 
             {/* MTG cards: show color pips + type line (Pokémon energy types are
                 already conveyed via the type-glow styling elsewhere). */}
@@ -313,7 +329,7 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
               </div>
 
               {/* Price History Area Chart */}
-              <PriceHistoryChart cardId={card.card_id} defaultRange="1y" />
+              <PriceHistoryChart cardId={card.card_id} height={100} defaultRange="1y" />
 
               {/* Specifications Details Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem 1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-glass)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>
@@ -323,11 +339,21 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
                 <div><span style={{ color: 'var(--text-muted)' }}>Supertype:</span> <span style={{ color: '#fff', fontWeight: 600 }}>{card.supertype}</span></div>
               </div>
 
-              {/* Storage Container details */}
+              {/* Storage Container details (clickable to view in storage) */}
               {card.list_type !== 'wishlist' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255, 71, 71, 0.02)', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', fontSize: '0.75rem' }}>
+                <div 
+                  onClick={() => onViewStorage && card.list_type !== 'wishlist' && onViewStorage(card)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                    background: 'rgba(255, 71, 71, 0.03)', padding: '0.65rem 0.75rem',
+                    borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)',
+                    fontSize: '0.75rem', cursor: onViewStorage ? 'pointer' : 'default',
+                    transition: 'background 0.2s'
+                  }}
+                  title={onViewStorage ? 'Click to view in storage' : undefined}
+                >
                   <MapPin size={14} style={{ color: 'var(--accent-red)', flexShrink: 0 }} />
-                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                     <span style={{ color: 'var(--text-muted)' }}>Location: </span>
                     <strong style={{ color: '#fff' }}>
                       {card.location_name ? `${card.location_name}${card.location_type ? ` (${card.location_type})` : ''}` : 'Unassigned Pile'}
@@ -342,48 +368,42 @@ function CardInspectorModal({ card, onClose, onUpdate, showToast, onViewStorage,
                 </div>
               )}
 
-              {/* Actions row */}
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem', flexWrap: 'wrap' }}>
-                <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setMode('edit')}>
+              {/* Main Actions Row: Edit Card + Icon buttons for Favorite & Delete */}
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem', alignItems: 'center' }}>
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => setMode('edit')}>
                   Edit Card
                 </button>
-                {onViewStorage && card.list_type !== 'wishlist' && (
-                  <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => onViewStorage(card)}>
-                    View in Storage
+
+                {card.list_type === 'wishlist' && (
+                  <button 
+                    className="btn btn-secondary" 
+                    style={{ backgroundColor: 'rgba(74,222,128,0.2)', color: 'var(--type-grass)', border: '1px solid rgba(74,222,128,0.3)', padding: '0 0.75rem', fontSize: '0.8rem' }} 
+                    onClick={() => handleQuickToggle('list_type', 'collection')}
+                    title="Move to Collection"
+                  >
+                    Obtained
                   </button>
                 )}
-                <button className="btn btn-danger" style={{ padding: '0 0.75rem' }} onClick={handleDelete} title="Delete">
+
+                <button
+                  type="button"
+                  className={`btn ${favorite === 1 ? 'btn-primary' : 'btn-secondary'} btn-icon-only`}
+                  style={{ borderRadius: 'var(--radius-sm)', padding: '0.6rem', ...(favorite === 1 ? { backgroundColor: 'rgba(250,204,21,0.2)', color: '#facc15', border: '1px solid rgba(250,204,21,0.3)' } : {}) }}
+                  onClick={() => handleQuickToggle('favorite', favorite === 1 ? 0 : 1)}
+                  title={favorite === 1 ? 'Remove Favorite' : 'Mark as Favorite'}
+                >
+                  <Star size={16} fill={favorite === 1 ? '#facc15' : 'none'} />
+                </button>
+
+                <button
+                  type="button"
+                  className="btn btn-danger btn-icon-only"
+                  style={{ borderRadius: 'var(--radius-sm)', padding: '0.6rem' }}
+                  onClick={handleDelete}
+                  title="Delete Card"
+                >
                   <Trash2 size={16} />
                 </button>
-              </div>
-
-              {/* Quick toggles row */}
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <button
-                  className={`btn ${favorite === 1 ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem', flex: 1, ...(favorite === 1 ? { backgroundColor: 'rgba(250,204,21,0.2)', color: '#facc15', border: '1px solid rgba(250,204,21,0.3)' } : {}) }}
-                  onClick={() => handleQuickToggle('favorite', favorite === 1 ? 0 : 1)}
-                >
-                  <Star size={15} fill={favorite === 1 ? '#facc15' : 'none'} />
-                  {favorite === 1 ? 'Favorited' : 'Favorite'}
-                </button>
-                {card.list_type === 'wishlist' ? (
-                  <button 
-                    className="btn btn-primary" 
-                    style={{ flex: 1, backgroundColor: 'rgba(74,222,128,0.2)', color: 'var(--type-grass)', border: '1px solid rgba(74,222,128,0.3)' }} 
-                    onClick={() => handleQuickToggle('list_type', 'collection')}
-                  >
-                    Move to Collection
-                  </button>
-                ) : (
-                  <button 
-                    className={`btn ${isTrade === 1 ? 'btn-primary' : 'btn-secondary'}`} 
-                    style={{ flex: 1, ...(isTrade === 1 ? { backgroundColor: 'rgba(74,222,128,0.2)', color: 'var(--type-grass)', border: '1px solid rgba(74,222,128,0.3)' } : {}) }} 
-                    onClick={() => handleQuickToggle('is_trade', isTrade === 1 ? 0 : 1)}
-                  >
-                    {isTrade === 1 ? 'Remove from Trade' : 'Add to Trade Binder'}
-                  </button>
-                )}
               </div>
             </>
           )}

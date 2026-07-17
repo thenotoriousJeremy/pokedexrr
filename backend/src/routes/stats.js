@@ -118,7 +118,7 @@ router.get('/stats', async (req, res) => {
       SELECT
         c.id AS entry_id, c.location_id, (SELECT name FROM locations WHERE id = c.location_id) AS location_name,
         (SELECT type FROM locations WHERE id = c.location_id) AS location_type,
-        c.quantity, c.condition, c.printing, c.language, c.purchase_price,
+        c.quantity, c.condition, c.printing, c.language, c.purchase_price, c.is_trade, c.favorite, c.list_type,
         cc.id as card_id, cc.name, cc.rarity, cc.set_name, cc.image_url, cc.price_trend,
         cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
       FROM collection c
@@ -185,7 +185,7 @@ router.get('/stats', async (req, res) => {
     const recentRows = await db.all(`
       SELECT c.id AS entry_id, c.location_id, (SELECT name FROM locations WHERE id = c.location_id) AS location_name,
              (SELECT type FROM locations WHERE id = c.location_id) AS location_type,
-             c.quantity, c.condition, c.printing, c.language, c.added_at,
+             c.quantity, c.condition, c.printing, c.language, c.added_at, c.is_trade, c.favorite, c.list_type,
              cc.id as card_id, cc.name, cc.rarity, cc.set_name, cc.number, cc.image_url,
              cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil
       FROM collection c

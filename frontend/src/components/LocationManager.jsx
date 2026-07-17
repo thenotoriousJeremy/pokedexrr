@@ -1,13 +1,15 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Trash2, X, MoreVertical, Settings, LayoutList, RefreshCw, Lock, Unlock } from 'lucide-react';
+import { Plus, Trash2, X, MoreVertical, Settings, LayoutList, RefreshCw, Lock, Unlock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
-import { getFoilOverlayClass } from '../utils/cardPrinting';
-import { getCardRarityBorder } from '../utils/cardRarity';
+import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
+import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
 import CardInspectorModal from './CardInspectorModal';
+import { useMultiSelect } from '../utils/useMultiSelect';
 import { isBinderType as computeIsBinder } from '../utils/cardOptions';
 import CompartmentView, { getPrimaryCategory, FocusedCardInfo } from './CompartmentView';
 import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
 import CreateContainerModal from './CreateContainerModal';
+import { useBackGuard } from '../utils/useBackGuard';
 
 function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId, setSelectedLocationId, focusEntryId }) {
   const [locations, setLocations] = useState([]);
@@ -42,10 +44,47 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   // Per-compartment filing-rule editor.
   const [rulesComp, setRulesComp] = useState(null);
+  useBackGuard(!!rulesComp, () => setRulesComp(null));
+  useBackGuard(showRulesModal, () => setShowRulesModal(false));
+  useBackGuard(!!capacityUpdatePending, () => setCapacityUpdatePending(null));
   const [compRuleDraft, setCompRuleDraft] = useState([]);
 
   const [unsortedSearch, setUnsortedSearch] = useState('');
   const [unsortedSort, setUnsortedSort] = useState('scanned-desc');
+  const [unsortedViewMode, setUnsortedViewMode] = useState('grid'); // 'grid' | 'detail'
+  const [unsortedBulkLocation, setUnsortedBulkLocation] = useState('');
+
+  const {
+    selectMode: unsortedSelectMode,
+    setSelectMode: setUnsortedSelectMode,
+    selectedIds: unsortedSelectedIds,
+    setSelectedIds: setUnsortedSelectedIds,
+    toggleSelect: toggleUnsortedSelect,
+    clearSelection: clearUnsortedSelection,
+    exitSelectMode: exitUnsortedSelectMode,
+    pressHandlers: unsortedPressHandlers,
+    longPressFired: unsortedLongPressFired,
+    runBulk: runUnsortedBulk,
+  } = useMultiSelect({
+    showToast,
+    onChanged: () => {
+      onUpdate && onUpdate();
+      refreshAll();
+    }
+  });
+
+  const activateUnsortedCard = (card) => {
+    if (unsortedLongPressFired.current) return;
+    if (moveMode) {
+      handlePickCard(card.entry_id);
+      return;
+    }
+    if (unsortedSelectMode) {
+      toggleUnsortedSelect(card.entry_id);
+      return;
+    }
+    setInspectorCard(card);
+  };
 
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [binderActiveEntryId, setBinderActiveEntryId] = useState(null);
@@ -62,6 +101,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   // Re-sort review reuses the filing UI, but the cards are already placed in the
   // DB by /resort — so "Placed" just advances instead of issuing a move.
   const [filingReadOnly, setFilingReadOnly] = useState(false);
+  // Collapse the mobile filing bar to a slim strip so it stops covering the binder.
+  const [filingBarCollapsed, setFilingBarCollapsed] = useState(false);
 
   // Manual tap-to-place ("Arrange"), custom-order containers only. Pick a card
   // (unsorted or in-container), then tap a slot to place/swap it.
@@ -103,7 +144,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       const tryScroll = () => {
         const el = document.getElementById('recommended-spot');
         if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+          if (isBinderType) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+          }
           el.classList.remove('flash-highlight');
           void el.offsetWidth;
           el.classList.add('flash-highlight');
@@ -115,22 +158,32 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       tryScroll();
     }
   }, [filingMode, filingIndex, filingQueue, compartments, isBinderType, activeLocationId]);
-  const touchStartRef = useRef(0);
+  const touchStartRef = useRef({ x: 0, y: 0 });
+  const focusNavRef = useRef(null); // focusEntryId already navigated to (run-once guard)
 
   const [activeCompartmentId, setActiveCompartmentId] = useState(null);
-  const [coverflowActiveIndex, setCoverflowActiveIndex] = useState(0);
+  const [, setCoverflowActiveIndex] = useState(0); // value unused; setter drives filing-snap resets
 
   const handleTouchStart = (e) => {
-    touchStartRef.current = e.changedTouches[0].clientX;
+    if (!e.changedTouches || !e.changedTouches[0]) return;
+    touchStartRef.current = {
+      x: e.changedTouches[0].clientX,
+      y: e.changedTouches[0].clientY
+    };
   };
 
   const handleTouchEnd = (e) => {
+    if (!e.changedTouches || !e.changedTouches[0]) return;
     const endX = e.changedTouches[0].clientX;
-    const diffX = touchStartRef.current - endX;
-    if (diffX > 50) {
-      setActivePageIndex(prev => Math.min(compartments.length - 1, prev + 1));
-    } else if (diffX < -50) {
-      setActivePageIndex(prev => Math.max(0, prev - 1));
+    const endY = e.changedTouches[0].clientY;
+    const diffX = touchStartRef.current.x - endX;
+    const diffY = touchStartRef.current.y - endY;
+    if (Math.abs(diffX) > 35 && Math.abs(diffX) > Math.abs(diffY)) {
+      if (diffX > 0) {
+        setActivePageIndex(prev => Math.min(compartments.length - 1, prev + 1));
+      } else {
+        setActivePageIndex(prev => Math.max(0, prev - 1));
+      }
     }
   };
 
@@ -152,23 +205,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     setPickedEntryId(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLocationId]);
-
-  // During filing, follow the recommended slot so it blinks in view on the same
-  // screen as the filing bar (no manual paging / "locate" tap needed).
-  useEffect(() => {
-    if (!filingMode || !currentRecSpot) return;
-    if (currentRecSpot.location_id && currentRecSpot.location_id !== activeLocationId) {
-      setActiveLocationId(currentRecSpot.location_id); // effect re-runs once compartments reload
-      return;
-    }
-    if (isBinderType) {
-      const idx = compartments.findIndex(c => c.id === currentRecSpot.compartment_id);
-      if (idx !== -1) setActivePageIndex(idx);
-    } else {
-      setActiveCompartmentId(currentRecSpot.compartment_id);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filingMode, filingIndex, currentRecSpot?.compartment_id, currentRecSpot?.location_id, compartments.length, isBinderType, activeLocationId]);
 
   useEffect(() => {
     if (compartments.length > 0) {
@@ -220,7 +256,9 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   useEffect(() => {
     (async () => {
-      setLoading(true);
+      if (locations.length === 0 && allCards.length === 0) {
+        setLoading(true);
+      }
       await Promise.all([fetchLocations(), fetchAllCards()]);
       setLoading(false);
     })();
@@ -232,7 +270,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   useEffect(() => {
     if (selectedLocationId) {
-      if (selectedLocationId === 'unsorted') {
+      if (selectedLocationId === 'unsorted' || selectedLocationId === 'unassigned') {
         setActiveLocationId(null);
       } else {
         setActiveLocationId(selectedLocationId);
@@ -243,12 +281,57 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   }, [selectedLocationId]);
 
   useEffect(() => {
+    if (!focusEntryId || allCards.length === 0) return;
+    const targetCard = allCards.find(c => (c.entry_id || c.id) === focusEntryId);
+    if (!targetCard) return;
+
+    // Navigate to the card's location ONCE per focus request. Reruns (compartments
+    // reload when you open another container) must NOT re-apply this, or an
+    // unsorted focus target would yank you back to Unsorted every time you open a
+    // container. Compartment snapping is left to run on reruns so it can settle
+    // once the target location's compartments finish loading.
+    const firstForThisFocus = focusNavRef.current !== focusEntryId;
+    if (firstForThisFocus) {
+      focusNavRef.current = focusEntryId;
+      if (targetCard.location_id) {
+        setActiveLocationId(targetCard.location_id);
+      } else {
+        setActiveLocationId(null);
+        setMobilePane('unsorted');
+      }
+    }
+
+    if (targetCard.location_id && targetCard.compartment_id && compartments.length > 0) {
+      const compIdx = compartments.findIndex(c => c.id === targetCard.compartment_id);
+      if (compIdx !== -1) {
+        setActivePageIndex(compIdx);
+        setActiveCompartmentId(targetCard.compartment_id);
+        setBinderActiveEntryId(targetCard.entry_id || targetCard.id);
+      }
+    }
+
+    if (firstForThisFocus) {
+      let attempts = 0;
+      const tryScroll = () => {
+        const el = document.getElementById(`card-${focusEntryId}`) || document.querySelector(`.focus-flash`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        } else if (attempts < 15) {
+          attempts++;
+          setTimeout(tryScroll, 100);
+        }
+      };
+      tryScroll();
+    }
+  }, [focusEntryId, allCards, compartments]);
+
+  useEffect(() => {
     // If the storage tab is opened without a specific container URL (selectedLocationId is falsy),
     // and there are locations available, auto-select the first one.
-    if (!selectedLocationId && !activeLocationId && locations.length > 0) {
+    if (!selectedLocationId && !activeLocationId && !focusEntryId && locations.length > 0) {
       setActiveLocationId(locations[0].id);
     }
-  }, [locations, selectedLocationId, activeLocationId]);
+  }, [locations, selectedLocationId, activeLocationId, focusEntryId]);
 
   const unsortedCards = useMemo(() => {
     let cards = allCards.filter(c => !c.location_id && (
@@ -574,24 +657,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     } catch (err) { console.error(err); showToast('Error updating row rules.'); }
   };
 
-  const handleFileCard = async (entryId, locationId) => {
-    try {
-      const res = await fetch(`/api/collection/${entryId}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ location_id: locationId })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.placement?.label) showToast(`Filed → ${data.placement.label}`);
-        else if (data.rule_rejected) showToast("Doesn't match this container's filing rule — left Unsorted.");
-        else if (data.container_full) showToast('Container full — card left Unsorted.');
-        else showToast('Card filed.');
-        await refreshAll(); onUpdate();
-      }
-      else showToast('Failed to file card.');
-    } catch (err) { console.error(err); showToast('Error filing card.'); }
-  };
-
   const handleApplyAll = async () => {
     if (!activeLocationId || unsortedCards.length === 0) return;
     const target = locations.find(l => l.id === activeLocationId);
@@ -650,6 +715,34 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       setFilingReadOnly(false);
       onUpdate();
     }
+  };
+
+  // Snap the container view to a recommendation's slot and flash it. Shared by
+  // the desktop guide card and the mobile filing bar.
+  const locateRecommendedSpot = (rec) => {
+    if (!rec) return;
+    if (rec.location_id && rec.location_id !== activeLocationId) setActiveLocationId(rec.location_id);
+    if (isBinderType) {
+      const compIdx = compartments.findIndex(c => c.id === rec.compartment_id);
+      if (compIdx !== -1) setActivePageIndex(compIdx);
+    } else {
+      setActiveCompartmentId(rec.compartment_id);
+    }
+    let attempts = 0;
+    const tryScroll = () => {
+      const el = document.getElementById('recommended-spot');
+      if (el) {
+        if (isBinderType) el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        el.click(); // Rotates coverflow in Box view
+        el.classList.remove('flash-highlight');
+        void el.offsetWidth;
+        el.classList.add('flash-highlight');
+      } else if (attempts < 10) {
+        attempts++;
+        setTimeout(tryScroll, 100);
+      }
+    };
+    tryScroll();
   };
 
   const handleFilingPlaced = async (entryId, locationId, compartmentId, position) => {
@@ -768,10 +861,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
         </div>
       )}
 
-      {isStacked && !filingMode && (
-        <div className="sub-nav-tabs" style={{ gridColumn: '1 / -1', marginBottom: 0, position: 'sticky', top: 0, zIndex: 50 }}>
+      {/* Tabs stay visible during filing so there's always a way back — otherwise
+          starting Sort & File hides them and dismissing the filing popup leaves no
+          navigation. Switching to Unsorted cancels filing (its column is hidden
+          while filing, so it must exit to be shown). */}
+      {isStacked && (
+        <div className="sub-nav-tabs storage-pane-tabs" style={{ gridColumn: '1 / -1', marginBottom: 0, position: 'sticky', top: 0, zIndex: 50 }}>
           <button type="button" className={`sub-nav-tab ${mobilePane === 'container' ? 'active' : ''}`} onClick={() => setMobilePane('container')}>Container</button>
-          <button type="button" className={`sub-nav-tab ${mobilePane === 'unsorted' ? 'active' : ''}`} onClick={() => setMobilePane('unsorted')}>Unsorted ({unsortedCards.length})</button>
+          <button type="button" className={`sub-nav-tab ${mobilePane === 'unsorted' ? 'active' : ''}`} onClick={() => { if (filingMode) { setFilingMode(false); setFilingReadOnly(false); refreshAll(); } setMobilePane('unsorted'); }}>
+            Unsorted <span className={`tab-count-badge ${unsortedCards.length > 0 ? 'has-unsorted' : ''}`}>{unsortedCards.length}</span>
+          </button>
         </div>
       )}
 
@@ -1021,7 +1120,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                     index: Math.floor(currentRecSpot.position / 1000) - 1,
                     image_url: recCard?.image_url,
                     name: recCard?.name,
-                    set_name: recCard?.set_name
+                    set_name: recCard?.set_name,
+                    card: recCard
                   } : null,
                   focusEntryId,
                   selectMode: storageSelectMode,
@@ -1150,10 +1250,11 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                         index: Math.floor(currentRecSpot.position / 1000) - 1,
                         image_url: recCard?.image_url,
                         name: recCard?.name,
-                        set_name: recCard?.set_name
+                        set_name: recCard?.set_name,
+                        card: recCard
                       } : null}
                       focusEntryId={focusEntryId}
-                      targetActiveIndex={coverflowActiveIndex}
+                      targetActiveIndex={currentRecSpot && currentRecSpot.compartment_id === activeComp.id ? Math.floor(currentRecSpot.position / 1000) - 1 : null}
                       canRemove={compartments.length > 1 && (cardsByCompartment.get(activeComp.id) || []).length === 0}
                       selectMode={storageSelectMode}
                       selectedIds={storageSelectedIds}
@@ -1221,39 +1322,21 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                       style={{ background: 'rgba(255, 193, 7, 0.15)', border: '1px solid #ffc107', borderRadius: 'var(--radius-sm)', padding: '0.75rem', width: '100%', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255, 193, 7, 0.25)'; }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255, 193, 7, 0.15)'; }}
-                      onClick={() => {
-                        if (rec.location_id !== activeLocationId) {
-                          setActiveLocationId(rec.location_id);
-                        }
-                        if (isBinderType) {
-                          const compIdx = compartments.findIndex(c => c.id === rec.compartment_id);
-                          if (compIdx !== -1) setActivePageIndex(compIdx);
-                        } else {
-                          setActiveCompartmentId(rec.compartment_id);
-                        }
-                        let attempts = 0;
-                        const tryScroll = () => {
-                          const el = document.getElementById('recommended-spot');
-                          if (el) {
-                            el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-                            el.click(); // Rotates coverflow in Box view
-                            el.classList.remove('flash-highlight');
-                            void el.offsetWidth;
-                            el.classList.add('flash-highlight');
-                          } else if (attempts < 10) {
-                            attempts++;
-                            setTimeout(tryScroll, 100);
-                          }
-                        };
-                        tryScroll();
-                      }}
+                      onClick={() => locateRecommendedSpot(rec)}
                       title="Click to snap to this slot in the container"
                     >
                       <div style={{ fontSize: '0.7rem', color: '#ffc107', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 'bold', marginBottom: '0.25rem' }}>Click to Locate</div>
                       <strong style={{ fontSize: '0.9rem', color: '#fff', display: 'block' }}>{rec.label}</strong>
                       <strong style={{ fontSize: '1.2rem', color: '#ffc107', display: 'block', marginTop: '0.25rem' }}>Slot {Math.floor(rec.position / 1000)}</strong>
-                      {rec.reason && (
-                        <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>{rec.reason}</div>
+                      {rec.after ? (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', marginTop: '0.4rem' }}>
+                          {rec.after.image_url && <img src={rec.after.image_url} alt={rec.after.name} style={{ width: '26px', borderRadius: '3px' }} />}
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>File right after <strong style={{ color: '#fff' }}>{rec.after.name}</strong></span>
+                        </div>
+                      ) : rec.before ? (
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>File right before <strong style={{ color: '#fff' }}>{rec.before.name}</strong></div>
+                      ) : (
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>First card in this section</div>
                       )}
                     </div>
                   );
@@ -1281,29 +1364,112 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           </div>
         ) : (
           <>
-            <strong style={{ fontSize: '0.85rem' }}>Unsorted ({unsortedCards.length})</strong>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong style={{ fontSize: '0.85rem' }}>Unsorted ({unsortedCards.length})</strong>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                <button
+                  type="button"
+                  className={`btn ${unsortedSelectMode ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => (unsortedSelectMode ? exitUnsortedSelectMode() : setUnsortedSelectMode(true))}
+                  style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', height: '24px' }}
+                  title="Toggle multi-select"
+                >
+                  <MousePointerClick size={12} />
+                  {unsortedSelectMode ? 'Done' : 'Select'}
+                </button>
+                <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
+                  <button
+                    type="button"
+                    className={`btn btn-icon-only ${unsortedViewMode === 'grid' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setUnsortedViewMode('grid')}
+                    style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                    title="Grid Gallery View"
+                  >
+                    <LayoutGrid size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-icon-only ${unsortedViewMode === 'detail' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setUnsortedViewMode('detail')}
+                    style={{ borderRadius: 'var(--radius-sm)', padding: '0.25rem 0.35rem', width: '28px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                    title="Detail List View"
+                  >
+                    <List size={13} />
+                  </button>
+                </div>
+              </div>
+            </div>
 
-            <input
-              className="input-control" placeholder="Search..." value={unsortedSearch}
-              onChange={(e) => setUnsortedSearch(e.target.value)} style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
-            />
-            <select className="select-control" value={unsortedSort} onChange={(e) => setUnsortedSort(e.target.value)} style={{ fontSize: '0.7rem', padding: '0.3rem 0.5rem' }}>
-              <option value="scanned-desc">Scanned (Newest First)</option>
-              <option value="scanned-asc">Scanned (Oldest First)</option>
-              <option value="name-asc">A-Z</option>
-              <option value="price-desc">Value (High-Low)</option>
-              <option value="set-number">Set & Number</option>
-            </select>
+            {unsortedSelectMode && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'rgba(0,0,0,0.25)', padding: '0.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)', marginTop: '0.25rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#fff' }}>{unsortedSelectedIds.size} selected</span>
+                  <div style={{ display: 'flex', gap: '0.3rem' }}>
+                    <button type="button" className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0.15rem 0.4rem' }} onClick={() => setUnsortedSelectedIds(new Set(unsortedCards.map(c => c.entry_id)))}>Select All</button>
+                    <button type="button" className="btn btn-secondary" style={{ fontSize: '0.65rem', padding: '0.15rem 0.4rem' }} onClick={clearUnsortedSelection}>Clear</button>
+                  </div>
+                </div>
 
-            {unsortedCards.length > 0 && (
-              <>
+                <div style={{ display: 'flex', gap: '0.3rem' }}>
+                  <select
+                    className="select-control"
+                    value={unsortedBulkLocation}
+                    onChange={(e) => setUnsortedBulkLocation(e.target.value)}
+                    style={{ fontSize: '0.7rem', padding: '0.25rem 0.4rem', flex: 1, minWidth: 0 }}
+                  >
+                    <option value="">File selected to...</option>
+                    {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={!unsortedBulkLocation || !unsortedSelectedIds.size}
+                    onClick={() => {
+                      if (!unsortedBulkLocation) return;
+                      const locObj = locations.find(l => String(l.id) === String(unsortedBulkLocation));
+                      runUnsortedBulk('move', unsortedBulkLocation, `File ${unsortedSelectedIds.size} card(s) into "${locObj?.name || 'container'}"?`);
+                      setUnsortedBulkLocation('');
+                    }}
+                    style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem', fontWeight: 'bold' }}
+                  >
+                    File
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    disabled={!unsortedSelectedIds.size}
+                    onClick={() => runUnsortedBulk('delete', null, `Delete ${unsortedSelectedIds.size} selected card(s)? This cannot be undone.`)}
+                    style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
+              <input
+                className="input-control" placeholder="Search..." value={unsortedSearch}
+                onChange={(e) => setUnsortedSearch(e.target.value)} style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
+              />
+              <select className="select-control" value={unsortedSort} onChange={(e) => setUnsortedSort(e.target.value)} style={{ fontSize: '0.7rem', padding: '0.3rem 0.5rem' }}>
+                <option value="scanned-desc">Scanned (Newest First)</option>
+                <option value="scanned-asc">Scanned (Oldest First)</option>
+                <option value="name-asc">A-Z</option>
+                <option value="price-desc">Value (High-Low)</option>
+                <option value="set-number">Set & Number</option>
+              </select>
+            </div>
+
+            {unsortedCards.length > 0 && !unsortedSelectMode && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <button
                   type="button"
                   className="btn btn-primary"
                   onClick={startFilingMode}
                   disabled={!activeLocationId}
                   title={activeLocationId ? 'Walk through filing each fitting card into the open container' : 'Select a container first'}
-                  style={{ fontSize: '0.8rem', padding: '0.5rem', width: '100%' }}
+                  style={{ fontSize: '0.8rem', padding: '0.45rem', width: '100%' }}
                 >
                   Sort & File (into open container)
                 </button>
@@ -1317,88 +1483,286 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 >
                   Auto-File All (into open container)
                 </button>
-              </>
+              </div>
             )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-              {unsortedCards.map(card => {
-                const picked = moveMode && pickedEntryId === card.entry_id;
-                const onCardTap = moveMode ? () => handlePickCard(card.entry_id) : () => setInspectorCard(card);
-                return (
-                <div key={card.entry_id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.7rem', padding: '0.3rem', borderBottom: '1px solid var(--border-glass)', ...(picked ? { background: 'rgba(255,71,71,0.18)', outline: '2px solid var(--accent-red)', borderRadius: '4px' } : {}) }}>
-                  <div onClick={onCardTap} title={moveMode ? 'Tap to pick / unpick' : 'View details'} style={{ position: 'relative', width: '48px', flexShrink: 0, overflow: 'hidden', borderRadius: '3px', cursor: 'pointer', ...getCardRarityBorder(card.rarity) }}>
-                    <img src={card.image_url} alt={card.name} loading="lazy" decoding="async" style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', display: 'block' }} />
-                    {getFoilOverlayClass(card.printing) && (
-                      <div className={getFoilOverlayClass(card.printing)} style={{ borderRadius: '3px' }} />
-                    )}
-                  </div>
-                  <span
-                    onClick={onCardTap}
-                    title={moveMode ? 'Tap to pick / unpick' : 'View details'}
-                    style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', fontWeight: picked ? 700 : 400 }}
-                  >
-                    {picked ? '✓ ' : ''}{card.name}
-                  </span>
-                  {!moveMode && (
-                    <select
-                      className="select-control" value=""
-                      onChange={(e) => { if (e.target.value) handleFileCard(card.entry_id, parseInt(e.target.value, 10)); }}
-                      style={{ fontSize: '0.6rem', padding: '0.15rem 0.25rem', maxWidth: '90px' }}
+            {unsortedViewMode === 'grid' ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '0.6rem', marginTop: '0.25rem' }}>
+                {unsortedCards.map(card => {
+                  const picked = moveMode && pickedEntryId === card.entry_id;
+                  const isSelected = unsortedSelectMode && unsortedSelectedIds.has(card.entry_id);
+                  const isHighlighted = picked || isSelected;
+                  const rarityBorder = getCardRarityBorder(card.rarity);
+                  const foilClass = getFoilOverlayClass(card.printing);
+                  const printingBadgeLabel = getPrintingBadgeLabel(card.printing);
+
+                  return (
+                    <div
+                      key={card.entry_id}
+                      id={`card-${card.entry_id}`}
+                      className={card.entry_id === focusEntryId ? 'focus-flash' : ''}
+                      {...unsortedPressHandlers(card.entry_id)}
+                      onClick={() => activateUnsortedCard(card)}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        background: isHighlighted ? 'rgba(255, 71, 71, 0.12)' : 'rgba(255, 255, 255, 0.03)',
+                        border: isHighlighted ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '0.35rem',
+                        position: 'relative',
+                        cursor: 'pointer',
+                        userSelect: 'none',
+                        transition: 'all 0.15s ease-in-out'
+                      }}
                     >
-                      <option value="">File to...</option>
-                      {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                    </select>
-                  )}
-                  {!moveMode && (
-                    <button type="button" onClick={() => handleDeleteCard(card.entry_id)} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
-                      <X size={12} />
-                    </button>
-                  )}
-                </div>
-                );
-              })}
-              {unsortedCards.length === 0 && <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Nothing unsorted.</p>}
-            </div>
+                      {/* Card Thumbnail Box */}
+                      <div
+                        style={{
+                          position: 'relative',
+                          width: '100%',
+                          aspectRatio: 0.718,
+                          borderRadius: 'var(--radius-sm)',
+                          overflow: 'hidden',
+                          ...rarityBorder
+                        }}
+                      >
+                        <img src={card.image_url} alt={card.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                        {foilClass && <div className={foilClass} style={{ borderRadius: 'var(--radius-sm)' }} />}
+                        
+                        {/* Selected / Picked checkmark badge */}
+                        {isHighlighted && (
+                          <div style={{ position: 'absolute', top: '4px', right: '4px', zIndex: 20, width: '20px', height: '20px', borderRadius: '50%', background: 'var(--accent-red)', border: '2px solid #fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.75rem', fontWeight: 900 }}>
+                            ✓
+                          </div>
+                        )}
+
+                        {/* Rarity badge */}
+                        <span style={{
+                          position: 'absolute',
+                          top: '4px',
+                          left: '4px',
+                          fontSize: '0.5rem',
+                          fontWeight: 900,
+                          padding: '1px 3px',
+                          borderRadius: '2px',
+                          zIndex: 10,
+                          textTransform: 'uppercase',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+                          ...getRarityBadgeStyle(card.rarity)
+                        }}>
+                          {getRarityBadgeLabel(card.rarity)}
+                        </span>
+
+                        {/* Printing badge overlay */}
+                        {printingBadgeLabel && (
+                          <span style={{
+                            position: 'absolute',
+                            bottom: '4px',
+                            right: '4px',
+                            fontSize: '0.5rem',
+                            fontWeight: 900,
+                            padding: '1px 3px',
+                            borderRadius: '2px',
+                            zIndex: 10,
+                            border: '1px solid rgba(255,255,255,0.2)',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+                            ...getPrintingBadgeStyle(card.printing)
+                          }}>
+                            {printingBadgeLabel}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Card Info */}
+                      <div style={{ marginTop: '0.35rem', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '0.15rem' }}>
+                        <div
+                          style={{
+                            fontSize: '0.72rem',
+                            fontWeight: isHighlighted ? 700 : 600,
+                            color: 'var(--text-primary)',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis'
+                          }}
+                        >
+                          {isHighlighted ? '✓ ' : ''}{card.name}
+                        </div>
+                        <div style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.set_name || ''}</span>
+                          {card.price_trend > 0 && <span style={{ color: 'var(--accent-yellow)', fontWeight: 600, flexShrink: 0 }}>${card.price_trend.toFixed(2)}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.25rem' }}>
+                {unsortedCards.map(card => {
+                  const picked = moveMode && pickedEntryId === card.entry_id;
+                  const isSelected = unsortedSelectMode && unsortedSelectedIds.has(card.entry_id);
+                  const isHighlighted = picked || isSelected;
+                  const rarityBorder = getCardRarityBorder(card.rarity);
+                  const foilClass = getFoilOverlayClass(card.printing);
+                  const printingBadgeLabel = getPrintingBadgeLabel(card.printing);
+
+                  return (
+                    <div
+                      key={card.entry_id}
+                      id={`card-${card.entry_id}`}
+                      className={card.entry_id === focusEntryId ? 'focus-flash' : ''}
+                      {...unsortedPressHandlers(card.entry_id)}
+                      onClick={() => activateUnsortedCard(card)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        fontSize: '0.72rem',
+                        padding: '0.4rem',
+                        background: isHighlighted ? 'rgba(255,71,71,0.18)' : 'rgba(255, 255, 255, 0.02)',
+                        border: isHighlighted ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)',
+                        borderRadius: 'var(--radius-sm)',
+                        cursor: 'pointer',
+                        userSelect: 'none',
+                        transition: 'all 0.15s ease-in-out'
+                      }}
+                    >
+                      <div
+                        style={{ position: 'relative', width: '42px', flexShrink: 0, overflow: 'hidden', borderRadius: '4px', ...rarityBorder }}
+                      >
+                        <img src={card.image_url} alt={card.name} loading="lazy" decoding="async" style={{ width: '100%', aspectRatio: 0.718, objectFit: 'cover', display: 'block' }} />
+                        {foilClass && <div className={foilClass} style={{ borderRadius: '4px' }} />}
+                        {isHighlighted && (
+                          <div style={{ position: 'absolute', inset: 0, background: 'rgba(255, 71, 71, 0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 900, fontSize: '0.8rem' }}>
+                            ✓
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                        <div style={{ fontWeight: isHighlighted ? 700 : 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {isHighlighted ? '✓ ' : ''}{card.name}
+                        </div>
+                        <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.4rem', alignItems: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <span>{card.set_name || 'Unset'} {card.number ? `#${card.number}` : ''}</span>
+                          {card.condition && (
+                            <span style={{ padding: '1px 3px', borderRadius: '2px', background: 'rgba(0,0,0,0.4)', fontSize: '0.55rem', fontWeight: 700 }}>
+                              {card.condition}
+                            </span>
+                          )}
+                          {printingBadgeLabel && (
+                            <span style={{ padding: '1px 3px', borderRadius: '2px', fontSize: '0.55rem', fontWeight: 700, ...getPrintingBadgeStyle(card.printing) }}>
+                              {printingBadgeLabel}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {card.price_trend > 0 && (
+                        <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--accent-yellow)', flexShrink: 0 }}>
+                          ${card.price_trend.toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {unsortedCards.length === 0 && <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic', marginTop: '0.5rem' }}>Nothing unsorted.</p>}
           </>
         )}
       </div>
 
-      {/* Compact filing bar (mobile): the binder shows the blinking slot; this bar
-          names the card and destination and carries Placed/Skip. Replaces the
-          full guide so binder + guide share one screen. */}
+      {/* Filing card (mobile): the container shows the blinking slot; this card
+          shows what to file, where, and which physical card it goes behind, and
+          carries Locate / Placed / Skip. Replaces the full desktop guide so the
+          container and the guide share one screen. */}
       {isStacked && filingMode && filingQueue[filingIndex] && (
-        <div style={{ position: 'fixed', left: 0, right: 0, bottom: '4.5rem', zIndex: 90, padding: '0 0.6rem' }}>
-          <div className="glass-panel" style={{ padding: '0.55rem 0.7rem', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--bg-secondary)', boxShadow: '0 -6px 20px rgba(0,0,0,0.5)' }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: '0.58rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Filing {filingIndex + 1} / {filingQueue.length}
-              </div>
-              <div style={{ fontSize: '0.82rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {filingQueue[filingIndex].entry.name}
-              </div>
-              {currentRecSpot ? (
-                <div style={{ fontSize: '0.72rem', color: '#ffc107', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  &rarr; {currentRecSpot.label} &middot; Slot {Math.floor(currentRecSpot.position / 1000)}
-                </div>
-              ) : (
-                <div style={{ fontSize: '0.7rem', color: 'var(--accent-red)', fontWeight: 700 }}>
-                  {filingQueue[filingIndex].rejected ? "Doesn't fit rule — Skip" : 'Container full — Skip'}
-                </div>
+        <div style={{ position: 'fixed', left: 0, right: 0, bottom: 'calc(6rem + env(safe-area-inset-bottom, 0px))', zIndex: 90, padding: '0 0.6rem' }}>
+          <div className="glass-panel" style={{ padding: '0.7rem 0.8rem', display: 'flex', flexDirection: 'column', gap: '0.6rem', background: 'var(--bg-secondary)', boxShadow: '0 -6px 20px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                {filingReadOnly ? 'Re-file' : 'Filing'} {filingIndex + 1} / {filingQueue.length}
+              </span>
+              {filingBarCollapsed && (
+                <span style={{ flex: 1, minWidth: 0, fontSize: '0.72rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {filingQueue[filingIndex].entry.name}
+                </span>
               )}
+              <div style={{ display: 'flex', gap: '0.3rem', flexShrink: 0 }}>
+                <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => setFilingBarCollapsed(c => !c)} title={filingBarCollapsed ? 'Expand' : 'Collapse (see more of the binder)'} style={{ width: '26px', height: '26px', padding: 0 }}>
+                  {filingBarCollapsed ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
+                <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setFilingMode(false); setFilingReadOnly(false); refreshAll(); }} title="Exit filing" style={{ width: '26px', height: '26px', padding: 0 }}>
+                  <X size={13} />
+                </button>
+              </div>
             </div>
-            <button type="button" className="btn btn-secondary" onClick={advanceFiling} style={{ padding: '0.4rem 0.7rem', fontSize: '0.72rem', flexShrink: 0 }}>Skip</button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={!currentRecSpot}
-              onClick={() => handleFilingPlaced(filingQueue[filingIndex].entry.entry_id, currentRecSpot.location_id, currentRecSpot.compartment_id, currentRecSpot.position)}
-              style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem', fontWeight: 700, flexShrink: 0 }}
-            >
-              {filingReadOnly ? 'Next' : 'Placed'}
-            </button>
-            <button type="button" className="btn btn-secondary btn-icon-only" onClick={() => { setFilingMode(false); setFilingReadOnly(false); refreshAll(); }} title="Exit filing" style={{ flexShrink: 0, width: '30px', height: '30px', padding: 0 }}>
-              <X size={14} />
-            </button>
+
+            {!filingBarCollapsed && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <img src={filingQueue[filingIndex].entry.image_url} alt={filingQueue[filingIndex].entry.name} style={{ width: '48px', borderRadius: '4px', boxShadow: '0 2px 8px rgba(0,0,0,0.5)', flexShrink: 0 }} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '0.95rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {filingQueue[filingIndex].entry.name}
+                </div>
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {filingQueue[filingIndex].entry.set_name} &middot; {filingQueue[filingIndex].entry.printing}
+                </div>
+              </div>
+            </div>
+            )}
+
+            {currentRecSpot ? (
+              <>
+                <div
+                  onClick={() => locateRecommendedSpot(currentRecSpot)}
+                  title="Tap to snap the container to this slot"
+                  style={{ background: 'rgba(255,193,7,0.14)', border: '1px solid #ffc107', borderRadius: 'var(--radius-sm)', padding: '0.5rem 0.6rem', cursor: 'pointer' }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.6rem', color: '#ffc107', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>Tap to locate</span>
+                    <strong style={{ fontSize: '0.95rem', color: '#ffc107', whiteSpace: 'nowrap' }}>Slot {Math.floor(currentRecSpot.position / 1000)}</strong>
+                  </div>
+                  {!filingBarCollapsed && (<>
+                  <div style={{ fontSize: '0.72rem', color: '#fff', fontWeight: 600, marginTop: '0.1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {currentRecSpot.label}
+                  </div>
+                  {currentRecSpot.after ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.4rem' }}>
+                      {currentRecSpot.after.image_url && <img src={currentRecSpot.after.image_url} alt={currentRecSpot.after.name} style={{ width: '26px', borderRadius: '3px', flexShrink: 0 }} />}
+                      <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>File right after <strong style={{ color: '#fff' }}>{currentRecSpot.after.name}</strong></span>
+                    </div>
+                  ) : currentRecSpot.before ? (
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '0.4rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>File right before <strong style={{ color: '#fff' }}>{currentRecSpot.before.name}</strong></div>
+                  ) : (
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>First card in this section</div>
+                  )}
+                  </>)}
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button type="button" className="btn btn-secondary" onClick={advanceFiling} style={{ flex: 1, padding: '0.55rem', fontSize: '0.8rem' }}>Skip</button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => handleFilingPlaced(filingQueue[filingIndex].entry.entry_id, currentRecSpot.location_id, currentRecSpot.compartment_id, currentRecSpot.position)}
+                    style={{ flex: 2, padding: '0.55rem', fontSize: '0.85rem', fontWeight: 700 }}
+                  >
+                    {filingReadOnly ? 'Next' : 'Placed'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: '0.75rem', color: 'var(--accent-red)', fontWeight: 700, textAlign: 'center' }}>
+                  {filingQueue[filingIndex].rejected ? "Doesn't fit this container's rule" : 'Container full'}
+                </div>
+                <button type="button" className="btn btn-secondary" onClick={advanceFiling} style={{ padding: '0.55rem', fontSize: '0.82rem', fontWeight: 700 }}>Skip</button>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords } from 'lucide-react';
 import Login from './components/Login';
+import { pushBackGuard } from './utils/useBackGuard';
 
 // View components are code-split so heavy deps (recharts in the chart views)
 // load on demand instead of in the initial bundle.
@@ -85,9 +86,21 @@ function App() {
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedLocationId, setSelectedLocationId] = useState(null);
+  const [focusEntryId, setFocusEntryId] = useState(null);
   const [selectedCardFilter, setSelectedCardFilter] = useState('');
   const [toast, setToast] = useState(null);
-  const [statsTrigger, setStatsTrigger] = useState(0); 
+  const [statsTrigger, setStatsTrigger] = useState(0);
+
+  // Navigate tabs through here so each change pushes a history entry: a back
+  // gesture then returns to the PREVIOUS tab (not always dashboard), and modals
+  // stack their own guards on top. At the dashboard root with nothing pushed,
+  // back exits normally.
+  const goTab = (tab) => {
+    if (tab === activeTab) return;
+    const prev = activeTab;
+    pushBackGuard(() => setActiveTab(prev));
+    setActiveTab(tab);
+  };
 
   // Detect public share route on load
   const [shareToken] = useState(() => {
@@ -192,9 +205,9 @@ function App() {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={setActiveTab} setSelectedLocationId={setSelectedLocationId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
       case 'add-cards':
-        return <AddCards onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={setActiveTab} />;
+        return <AddCards onAddSuccess={triggerRefresh} showToast={showToast} setActiveTab={goTab} />;
       case 'collection':
         return (
           <CollectionList 
@@ -204,8 +217,9 @@ function App() {
             token={token} 
             selectedCardFilter={selectedCardFilter}
             setSelectedCardFilter={setSelectedCardFilter}
-            onNavigate={setActiveTab}
+            onNavigate={goTab}
             setSelectedLocationId={setSelectedLocationId}
+            setFocusEntryId={setFocusEntryId}
           />
         );
       case 'storage':
@@ -216,6 +230,8 @@ function App() {
             showToast={showToast}
             selectedLocationId={selectedLocationId}
             setSelectedLocationId={setSelectedLocationId}
+            focusEntryId={focusEntryId}
+            setFocusEntryId={setFocusEntryId}
           />
         );
       case 'deckbuilder':
@@ -225,7 +241,7 @@ function App() {
       case 'admin':
         return <AdminPanel showToast={showToast} />;
       default:
-        return <Dashboard statsTrigger={statsTrigger} onNavigate={setActiveTab} setSelectedLocationId={setSelectedLocationId} onUpdate={triggerRefresh} showToast={showToast} />;
+        return <Dashboard statsTrigger={statsTrigger} onNavigate={goTab} setSelectedLocationId={setSelectedLocationId} setFocusEntryId={setFocusEntryId} onUpdate={triggerRefresh} showToast={showToast} />;
     }
   };
 
@@ -244,35 +260,35 @@ function App() {
         <nav className="nav-tabs" style={{ margin: 0 }}>
           <button 
             className={`nav-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setActiveTab('dashboard')}
+            onClick={() => goTab('dashboard')}
           >
             <LayoutDashboard size={18} />
             <span>Dashboard</span>
           </button>
           <button 
             className={`nav-tab ${activeTab === 'add-cards' ? 'active' : ''}`}
-            onClick={() => setActiveTab('add-cards')}
+            onClick={() => goTab('add-cards')}
           >
             <Plus size={18} />
             <span>Add Cards</span>
           </button>
           <button 
             className={`nav-tab ${activeTab === 'collection' ? 'active' : ''}`}
-            onClick={() => setActiveTab('collection')}
+            onClick={() => goTab('collection')}
           >
             <Database size={18} />
             <span>Collection</span>
           </button>
           <button 
             className={`nav-tab ${activeTab === 'storage' ? 'active' : ''}`}
-            onClick={() => setActiveTab('storage')}
+            onClick={() => goTab('storage')}
           >
             <MapPin size={18} />
             <span>Storage</span>
           </button>
           <button 
             className={`nav-tab ${activeTab === 'deckbuilder' ? 'active' : ''}`}
-            onClick={() => setActiveTab('deckbuilder')}
+            onClick={() => goTab('deckbuilder')}
           >
             <Swords size={18} />
             <span>Deck Builder</span>
@@ -280,7 +296,7 @@ function App() {
 
           <button 
             className={`nav-tab ${activeTab === 'settings' ? 'active' : ''}`}
-            onClick={() => setActiveTab('settings')}
+            onClick={() => goTab('settings')}
           >
             <SettingsIcon size={18} />
             <span>Settings</span>
@@ -288,7 +304,7 @@ function App() {
           {user.role === 'admin' && (
             <button 
               className={`nav-tab ${activeTab === 'admin' ? 'active' : ''}`}
-              onClick={() => setActiveTab('admin')}
+              onClick={() => goTab('admin')}
             >
               <ShieldAlert size={18} style={{ color: 'var(--accent-red)' }} />
               <span>Admin</span>

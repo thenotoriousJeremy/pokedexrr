@@ -4,6 +4,7 @@ import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, 
 import { shuffleArray } from '../utils/shuffle';
 import { translateJapaneseName } from '../utils/langHelper';
 import CheckoutWizardModal from './CheckoutWizardModal';
+import { useBackGuard } from '../utils/useBackGuard';
 
 // Basic Energy is exempt from the "max 4 of a card" deck rule; Special Energy is not.
 const isBasicEnergy = (card) =>
@@ -47,6 +48,9 @@ function DeckBuilder({ showToast }) {
   // would otherwise each compute a new quantity from the same stale render and
   // clobber one another (last-writer-wins on the server upsert).
   const [savingCard, setSavingCard] = useState(false);
+
+  useBackGuard(showCreateModal, () => setShowCreateModal(false));
+  useBackGuard(showSimulator, () => setShowSimulator(false));
 
   useEffect(() => {
     fetchDecks();

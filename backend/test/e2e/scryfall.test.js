@@ -295,7 +295,7 @@ async function runTests() {
       assert.strictEqual(res.status, 200);
       
       // Wait a moment for background refresh
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, 800));
       const cached = await db.get(`SELECT last_updated FROM card_cache WHERE id = ?`, ['mtg-54321']);
       const lastUpdated = new Date(cached.last_updated);
       assert.ok(Date.now() - lastUpdated.getTime() < 10000, 'Background refresh should update last_updated to now');

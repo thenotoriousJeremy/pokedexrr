@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { X, Check, Minus, MapPin, Package, AlertTriangle } from 'lucide-react';
 import CompartmentView from './CompartmentView';
 import { sortCardsByOrder } from '../utils/cardSort';
+import { useBackGuard } from '../utils/useBackGuard';
 
 // Slot number a stored position encodes (positions are slot * 1000).
 const slotOf = (position) => (position ? Math.floor(position / 1000) : null);
@@ -30,6 +31,8 @@ const CheckoutWizardModal = ({ locationsData, mode = 'checkout', onClose }) => {
   const [done, setDone] = useState(new Set());
   const [setsList, setSetsList] = useState([]);
   const [grids, setGrids] = useState({}); // page.key -> { compartment, cards, locationType, sortOrder }
+
+  useBackGuard(true, onClose);
 
   // Flatten to pulls, then build container -> page tree plus a flat page list.
   const { containers, pagesFlat, missing, totalPulls, allEntryIds } = useMemo(() => {

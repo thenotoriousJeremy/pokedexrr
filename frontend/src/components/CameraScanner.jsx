@@ -1,15 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
-import { Camera, RefreshCw, AlertTriangle, X, Library, Zap, ZapOff, Settings } from 'lucide-react';
+import { Camera, RefreshCw, AlertTriangle, X, Zap, ZapOff, Settings, ScanLine } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import { resolveCardPrice } from '../utils/resolveCardPrice';
 import { CONDITIONS, PRINTINGS } from '../utils/cardOptions';
 import CardEntryFields from './CardEntryFields';
-import PackPriceSplitter from './PackPriceSplitter';
-// Fixed centered guide box (normalized 0..1). Center the card in it; the crop
-// inside is sent to the server embedding matcher.
-const DEFAULT_RECT = { x: 0.17, y: 0.06, w: 0.66, h: 0.88 };
+import CardInspectorModal from './CardInspectorModal';
+import { useBackGuard } from '../utils/useBackGuard';
+import { useMultiSelect } from '../utils/useMultiSelect';
+// Centered card-shaped guide box, styled in CSS (.scan-card-guide): card ratio
+// with margin, centered by the overlay's flex. The crop maps the box's on-screen
+// rect (getBoundingClientRect) into the frame, so its size is driven by CSS.
 // Confidence gates for the server match. When ORB geometric verification ran
 // (verified=true), gate on inlier count; otherwise on CLIP cosine similarity.
 // Below the gate the scan shows the candidates for manual selection.
@@ -26,7 +28,7 @@ const SCAN_PROFILES = [
   { label: 'Accurate', uploadW: 1280, cooldown: 3000, countdown: 2, recallK: 250, orb: 500 },
 ];
 
-function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
+function CameraScanner({ onAddSuccess, showToast }) {
 
   const [stream, setStream] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -35,17 +37,39 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   
   // UX scan history & effects states
   const [recentScans, setRecentScans] = useState([]);
+  // Tap a recent scan to view/edit it; long-press to delete. Inspector reuses the
+  // shared collection edit/delete modal (needs an entry-shaped object with entry_id).
+  const [inspectorEntry, setInspectorEntry] = useState(null);
+  // Long-press multi-select + bulk actions, same as the collection page.
+  const recentSelect = useMultiSelect({
+    showToast,
+    onChanged: ({ ids, action }) => {
+      onAddSuccess();
+      // Recent scans is a local list: prune deleted tiles. Moves leave the tile
+      // (its placement label just goes stale until the next scan).
+      if (action === 'delete') setRecentScans(prev => prev.filter(s => !ids.includes(s.entry_id)));
+    },
+  });
   const [scanFlash, setScanFlash] = useState(null); // 'capture', 'error', or null
   // Fixed-cadence capture countdown (Turbo): ms remaining until the next photo,
   // or null when the metronome isn't running. Drives the countdown ring.
   const [captureCountdown, setCaptureCountdown] = useState(null);
+  // Draggable/rotatable scan guide: translate (px, relative to centered) + angle
+  // (deg). Lets the user aim the crop at an off-center or tilted card.
+  const [guideOffset, setGuideOffset] = useState({ x: 0, y: 0 });
+  const [guideAngle, setGuideAngle] = useState(0);
+  const [guideScale, setGuideScale] = useState(1);
+  const guidePtrs = useRef(new Map());     // active pointerId -> {x,y}
+  const guideGesture = useRef(null);        // snapshot taken at each pointer-count change
   
   // Camera active states
   const [cameraActive, setCameraActive] = useState(false);
+  // Displayed stream aspect (w/h), set on loadedmetadata, so the preview box
+  // matches the camera exactly — no object-fit:contain letterbox bars.
+  const [videoAspect, setVideoAspect] = useState(null);
   const [hasCameraError, setHasCameraError] = useState(false);
   const [autoScan, setAutoScan] = useState(false);
   const [showScanSettings, setShowScanSettings] = useState(false);
-  const [videoRatio, setVideoRatio] = useState(null);
   // Scan detail level: index into SCAN_PROFILES. Persisted; default Balanced.
   const [scanDetail, setScanDetail] = useState(() => {
     const v = parseInt(localStorage.getItem('scan_detail'), 10);
@@ -144,6 +168,64 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     }, 2000);
   };
 
+  // Guide box drag/rotate/scale. Pointer capture on the box routes all move/up
+  // events here. One finger = move; two fingers = pinch-scale + twist-rotate +
+  // drag by the midpoint. Snapshot is re-taken on every pointer-count change so
+  // switching finger count rebases smoothly.
+  const snapshotGuideGesture = () => {
+    const el = document.querySelector('.scan-card-guide');
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const base = {
+      startOffset: guideOffset, startAngle: guideAngle, startScale: guideScale,
+      cx: rect.left + rect.width / 2, cy: rect.top + rect.height / 2,
+    };
+    const pts = [...guidePtrs.current.values()];
+    if (pts.length >= 2) {
+      const [p, q] = pts;
+      guideGesture.current = {
+        mode: 'pinch', ...base,
+        d0: Math.hypot(q.x - p.x, q.y - p.y) || 1,
+        a0: Math.atan2(q.y - p.y, q.x - p.x) * 180 / Math.PI,
+        mid0: { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 },
+      };
+    } else if (pts.length === 1) {
+      guideGesture.current = { mode: 'move', ...base, startX: pts[0].x, startY: pts[0].y };
+    } else {
+      guideGesture.current = null;
+    }
+  };
+  const onGuidePointerDown = (e) => {
+    guidePtrs.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    e.currentTarget.setPointerCapture(e.pointerId);
+    snapshotGuideGesture();
+    e.stopPropagation();
+  };
+  const onGuidePointerMove = (e) => {
+    if (!guidePtrs.current.has(e.pointerId)) return;
+    guidePtrs.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const g = guideGesture.current;
+    if (!g) return;
+    const pts = [...guidePtrs.current.values()];
+    if (g.mode === 'pinch' && pts.length >= 2) {
+      const [p, q] = pts;
+      const d = Math.hypot(q.x - p.x, q.y - p.y);
+      const a = Math.atan2(q.y - p.y, q.x - p.x) * 180 / Math.PI;
+      const mid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+      setGuideScale(Math.min(3, Math.max(0.3, g.startScale * (d / g.d0))));
+      setGuideAngle(g.startAngle + (a - g.a0));
+      setGuideOffset({ x: g.startOffset.x + (mid.x - g.mid0.x), y: g.startOffset.y + (mid.y - g.mid0.y) });
+    } else if (g.mode === 'move') {
+      setGuideOffset({ x: g.startOffset.x + (e.clientX - g.startX), y: g.startOffset.y + (e.clientY - g.startY) });
+    }
+  };
+  const onGuidePointerUp = (e) => {
+    guidePtrs.current.delete(e.pointerId);
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    snapshotGuideGesture(); // rebase any remaining finger
+  };
+  const resetGuide = () => { setGuideOffset({ x: 0, y: 0 }); setGuideAngle(0); setGuideScale(1); };
+
   // Drawer states
   const [selectedCard, setSelectedCard] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -157,6 +239,11 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   // Duplicate-scan confirm: set to the repeat-matched card; dupQty = copies to add.
   const [dupConfirmCard, setDupConfirmCard] = useState(null);
   const [dupQty, setDupQty] = useState(1);
+
+  useBackGuard(scanMatches.length > 0, () => setScanMatches([]));
+  useBackGuard(!!dupConfirmCard, () => setDupConfirmCard(null));
+  useBackGuard(!!inspectorEntry, () => setInspectorEntry(null));
+  useBackGuard(recentSelect.selectMode, recentSelect.exitSelectMode);
   
   // Form states
   const [quantity, setQuantity] = useState(1);
@@ -369,7 +456,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setDebugHashImg('');
     setDebugCandidates([]);
     setDebugScoped(null);
-    setVideoRatio(null);
     try {
       const constraints = {
         video: {
@@ -405,7 +491,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setDebugHashImg('');
     setDebugCandidates([]);
     setDebugScoped(null);
-    setVideoRatio(null);
   };
 
   const autoAddCard = async (card, qty = 1, overrides = null) => {
@@ -446,8 +531,13 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         }
 
         // Append to recent scans history log. entry_id (the last inserted row)
-        // lets the recent-scans price splitter target these exact entries.
-        setRecentScans(prev => [{ ...card, placementLabel, entry_id: data.id }, ...prev].slice(0, 10));
+        // lets the recent-scans price splitter target these exact entries and the
+        // inspector edit/delete the entry. Carry the entry fields it was saved with.
+        setRecentScans(prev => [{
+          ...card, card_id: card.id, placementLabel, entry_id: data.id,
+          quantity: qty, condition: autoCondition, printing: autoPrinting,
+          language: 'English', purchase_price: resolveCardPrice(card, autoPrinting), location_id: null,
+        }, ...prev].slice(0, 10));
 
         // Brief confetti blast for ultra-rares
         const rarity = (card.rarity || '').toLowerCase();
@@ -520,7 +610,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
       signal('error');
       return;
     }
-    setScanStatus(`Found ${matches.length} matching card(s)!`);
+    setScanStatus('');
     if (matches.length === 1 && (scanGame !== 'mtg' || autoSingle)) {
       if (autoScan) {
         const id = matches[0].id;
@@ -552,7 +642,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         }
         setScanMatches([]);
       } else {
-        stopCamera();
         openQuickAdd(matches[0]);
       }
     }
@@ -577,6 +666,41 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
 
     // 1. Capture and correctly orient the video frame onto a canvas
     const orientedCanvas = getOrientedVideoCanvas(video);
+
+    // Map the dashed guide box's rendered rect into oriented-canvas pixels through
+    // the preview's object-fit:cover transform, then pad it: the box is an aim
+    // hint, but a card can overhang it, so crop wider so a frame-filling card
+    // isn't clipped. Server auto-detects/deskews the card inside this region.
+    const CROP_PAD = 0.18; // extra margin around the box, each side
+    const oc = orientedCanvas;
+    const videoRect = video.getBoundingClientRect();
+    const guideRect = guideElement.getBoundingClientRect();
+    // Contain-transform mapping from displayed video px to oriented-canvas px
+    // (matches object-fit:contain on the preview; letterbox offsets handled below).
+    const k = Math.min(videoRect.width / oc.width, videoRect.height / oc.height);
+    const offX = (videoRect.width - oc.width * k) / 2;
+    const offY = (videoRect.height - oc.height * k) / 2;
+    // Box center (rotation is about the element center, so the rotated AABB
+    // center from getBoundingClientRect is still the true center) and unrotated
+    // size (offsetWidth/Height ignore the CSS transform).
+    const cx = ((guideRect.left + guideRect.width / 2) - videoRect.left - offX) / k;
+    const cy = ((guideRect.top + guideRect.height / 2) - videoRect.top - offY) / k;
+    // offsetWidth/Height are the unscaled layout size; the CSS scale transform
+    // doesn't change them, so fold guideScale in here.
+    const destW = Math.max(1, Math.round((guideElement.offsetWidth * guideScale / k) * (1 + 2 * CROP_PAD)));
+    const destH = Math.max(1, Math.round((guideElement.offsetHeight * guideScale / k) * (1 + 2 * CROP_PAD)));
+    const rad = (guideAngle * Math.PI) / 180;
+    const framedCanvas = document.createElement('canvas');
+    framedCanvas.width = destW;
+    framedCanvas.height = destH;
+    const fctx = framedCanvas.getContext('2d');
+    // Sample the (possibly rotated, off-center) box region upright: dest center
+    // maps to the box center, undo the box rotation, draw the frame. Pixels past
+    // the box (pad / frame overhang) come through black; server auto-detects the card.
+    fctx.translate(destW / 2, destH / 2);
+    fctx.rotate(-rad);
+    fctx.translate(-cx, -cy);
+    fctx.drawImage(oc, 0, 0);
     // Picture is now taken — fire the instant cue (click + vibrate + flash) so
     // the user can move the card immediately, before the server lookup runs.
     signal('capture');
@@ -591,10 +715,10 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           // Downscale the frame for upload; server auto-crops the card. Keep it
           // fairly high-res so a far/small card still has enough pixels to match.
           const up = document.createElement('canvas');
-          const s = Math.min(1, profile.uploadW / orientedCanvas.width);
-          up.width = Math.round(orientedCanvas.width * s);
-          up.height = Math.round(orientedCanvas.height * s);
-          up.getContext('2d').drawImage(orientedCanvas, 0, 0, up.width, up.height);
+          const s = Math.min(1, profile.uploadW / framedCanvas.width);
+          up.width = Math.round(framedCanvas.width * s);
+          up.height = Math.round(framedCanvas.height * s);
+          up.getContext('2d').drawImage(framedCanvas, 0, 0, up.width, up.height);
           const imageData = up.toDataURL('image/jpeg', 0.85);
           setDebugHashImg(imageData);
           try {
@@ -698,6 +822,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
   loadingRef.current = loading;
 
   const openQuickAdd = (card) => {
+    setScanMatches([]);
     setSelectedCard(card);
     setPurchasePrice(0);
     const rarity = (card.rarity || '').toLowerCase();
@@ -719,8 +844,19 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
     setPrinting('Normal');
     setLanguage('English');
     setPurchasePrice(0);
-    // Restart camera on close if we want to scan another
-    startCamera();
+    // Restart camera on close only if stream was stopped
+    if (!stream || !cameraActive) {
+      startCamera();
+    }
+  };
+
+  const removeRecentTile = (entryId) => setRecentScans(prev => prev.filter(s => s.entry_id !== entryId));
+  // Tap: open the inspector, unless a long-press just armed selection or we're
+  // already selecting (then toggle). Long-press + bulk actions come from the hook.
+  const activateRecent = (item) => {
+    if (recentSelect.longPressFired.current) { recentSelect.longPressFired.current = false; return; }
+    if (recentSelect.selectMode) recentSelect.toggleSelect(item.entry_id);
+    else setInspectorEntry(item);
   };
 
   const handleSubmit = async (e) => {
@@ -753,8 +889,13 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           showToast(`${selectedCard.name} added to collection!`);
         }
 
-        // Append to recent scans history
-        setRecentScans(prev => [{ ...selectedCard, placementLabel }, ...prev].slice(0, 10));
+        // Append to recent scans history. Carry entry_id + saved fields so the
+        // strip supports tap-to-edit / long-press-delete like the auto-add path.
+        setRecentScans(prev => [{
+          ...selectedCard, card_id: selectedCard.id, placementLabel, entry_id: data.id,
+          quantity: parseInt(quantity, 10), condition, printing, language,
+          purchase_price: parseFloat(purchasePrice) || 0, location_id: null,
+        }, ...prev].slice(0, 10));
 
         const rarity = (selectedCard.rarity || '').toLowerCase();
         const price = selectedCard.price_trend || 0;
@@ -811,27 +952,22 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
           )}
         </div>
       ) : (
-        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div
-            className="camera-preview-wrapper camera-active"
-            style={videoRatio ? { aspectRatio: `${videoRatio}` } : undefined}
-          >
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              muted 
+        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <div className="camera-preview-wrapper camera-active" style={{ aspectRatio: videoAspect || undefined }}>
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
               className="camera-video"
-              onLoadedMetadata={() => {
-                const video = videoRef.current;
-                if (video) {
-                  const isRotated = video.videoWidth > video.videoHeight && video.clientHeight > video.clientWidth;
-                  if (isRotated) {
-                    setVideoRatio(video.videoHeight / video.videoWidth);
-                  } else {
-                    setVideoRatio(video.videoWidth / video.videoHeight);
-                  }
-                }
+              onLoadedMetadata={(e) => {
+                const v = e.currentTarget;
+                if (!v.videoWidth || !v.videoHeight) return;
+                const raw = v.videoWidth / v.videoHeight;
+                // A landscape sensor in a portrait viewport is shown rotated
+                // (upright/portrait) by mobile browsers — flip the aspect to match.
+                const portraitViewport = window.innerHeight >= window.innerWidth;
+                setVideoAspect(raw > 1 && portraitViewport ? 1 / raw : raw);
               }}
             />
             
@@ -894,50 +1030,50 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   50% { border-color: #fff; box-shadow: 0 0 30px rgba(255, 255, 255, 0.9); }
                 }
               `}</style>
-              {(() => { const r = DEFAULT_RECT; return (
               <div
                 className="scan-card-guide"
+                onPointerDown={onGuidePointerDown}
+                onPointerMove={onGuidePointerMove}
+                onPointerUp={onGuidePointerUp}
+                onPointerCancel={onGuidePointerUp}
                 style={{
-                  position: 'absolute',
-                  left: `${r.x * 100}%`,
-                  top: `${r.y * 100}%`,
-                  width: `${r.w * 100}%`,
-                  height: `${r.h * 100}%`,
+                  pointerEvents: 'auto',
+                  cursor: 'move',
+                  touchAction: 'none',
+                  transform: `translate(${guideOffset.x}px, ${guideOffset.y}px) rotate(${guideAngle}deg) scale(${guideScale})`,
                   animation: scanFlash === 'capture' ? 'border-flash-capture 0.4s ease-in-out' : scanFlash === 'error' ? 'border-flash-error 1.5s ease-in-out' : 'none'
                 }}
               >
                 {loading && <div className="scan-line"></div>}
               </div>
-              ); })()}
+              {(guideOffset.x !== 0 || guideOffset.y !== 0 || guideAngle !== 0 || guideScale !== 1) && (
+                <button
+                  type="button"
+                  onClick={resetGuide}
+                  style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', pointerEvents: 'auto', zIndex: 10, fontSize: '0.68rem', fontWeight: 700, color: '#fff', background: 'rgba(0,0,0,0.6)', border: '1px solid rgba(255,255,255,0.4)', borderRadius: 999, padding: '0.25rem 0.7rem', cursor: 'pointer' }}
+                >
+                  Reset box
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Scanner controls: game + set (needed for matching) and auto-capture. */}
+          {/* Settings panel (toggled by the gear in the action row): game, set,
+              scan detail, exposure. Kept off the camera view so it stays clean. */}
+          {showScanSettings && (
           <div className="glass-panel" style={{ width: '100%', padding: '1rem', background: 'rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '0.25rem', position: 'relative', zIndex: setSearchOpen ? 40 : undefined }}>
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'stretch' }}>
-              <div className="sub-nav-tabs" style={{ marginBottom: 0, flex: 1 }}>
-                {[['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([g, label]) => (
-                  <button
-                    key={g}
-                    type="button"
-                    className={`sub-nav-tab ${scanGame === g ? 'active' : ''}`}
-                    style={{ padding: '0.5rem', fontSize: '0.8rem', fontWeight: 700 }}
-                    onClick={() => setCardLayout(g === 'mtg' ? 'mtg' : 'modern')}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                className={`btn ${showScanSettings ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setShowScanSettings(s => !s)}
-                title="Scan detail & exposure settings"
-                aria-label="Scan settings"
-                style={{ padding: '0 0.7rem', flexShrink: 0 }}
-              >
-                <Settings size={16} />
-              </button>
+            <div className="sub-nav-tabs" style={{ marginBottom: 0 }}>
+              {[['pokemon', 'Pokémon'], ['mtg', 'MTG']].map(([g, label]) => (
+                <button
+                  key={g}
+                  type="button"
+                  className={`sub-nav-tab ${scanGame === g ? 'active' : ''}`}
+                  style={{ padding: '0.5rem', fontSize: '0.8rem', fontWeight: 700 }}
+                  onClick={() => setCardLayout(g === 'mtg' ? 'mtg' : 'modern')}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
 
             {/* Set search (both games): pick a set to build a per-set index
@@ -1012,20 +1148,6 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
               )}
             </div>
 
-            {/* Auto-Capture: scan every few seconds without tapping Capture. */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
-              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Auto-Capture</span>
-              <button
-                type="button"
-                className={`btn ${autoScan ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setAutoScan(!autoScan)}
-                style={{ padding: '0.2rem 0.6rem', fontSize: '0.7rem' }}
-              >
-                {autoScan ? 'ON' : 'OFF'}
-              </button>
-            </div>
-
-            {showScanSettings && (<>
             {/* Scan Detail: quick↔accurate tradeoff. Lower = faster upload,
                 shorter cooldown, shallower server match; higher = more accurate. */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
@@ -1084,8 +1206,8 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 </div>
               </div>
             )}
-            </>)}
           </div>
+          )}
 
           {/* Scan crop + candidate diagnostics — only render when we actually have
               a crop/candidates, so an empty dashed box doesn't eat vertical space on phone. */}
@@ -1109,7 +1231,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                     <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Top matches ({debugCandidates[0]?.verified ? 'ORB inliers' : 'similarity'}, higher = closer)</span>
                     {debugCandidates.length === 0 ? (
                       <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>No candidates.</span>
-                    ) : debugCandidates.map((cd, i) => {
+                    ) : debugCandidates.slice(0, 3).map((cd, i) => {
                       const pass = cd.verified ? cd.inliers >= SCAN_MATCH_MIN_INLIERS : cd.score >= SCAN_MATCH_MIN_SCORE;
                       const label = cd.verified ? `${cd.inliers} inl` : (cd.score != null ? cd.score.toFixed(2) : '?');
                       return (
@@ -1125,9 +1247,24 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <button className="btn btn-secondary" onClick={stopCamera} style={{ flex: 1 }}>
-              Stop Camera
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'stretch' }}>
+            <button className="btn btn-secondary" onClick={stopCamera} style={{ flex: 1 }} title="Stop camera">
+              Stop
+            </button>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoScan}
+              className="btn btn-secondary"
+              onClick={() => setAutoScan(!autoScan)}
+              style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0 0.7rem', borderColor: autoScan ? 'var(--type-grass)' : undefined, color: autoScan ? 'var(--type-grass)' : undefined }}
+              title="Auto-capture: scan repeatedly without tapping"
+            >
+              <ScanLine size={15} />
+              <span style={{ fontSize: '0.72rem', fontWeight: 700 }}>Auto</span>
+              <span style={{ width: 28, height: 15, borderRadius: 999, background: autoScan ? 'var(--type-grass)' : 'rgba(255,255,255,0.22)', position: 'relative', transition: 'background 0.2s', flexShrink: 0 }}>
+                <span style={{ position: 'absolute', top: 2, left: autoScan ? 15 : 2, width: 11, height: 11, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
+              </span>
             </button>
             {loading ? (
               <button className="btn btn-primary" onClick={handleCancelScan} style={{ flex: 2, backgroundColor: 'var(--accent-red)', borderColor: 'var(--accent-red)' }}>
@@ -1138,6 +1275,17 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 Capture & Identify
               </button>
             )}
+            <button
+              type="button"
+              className={`btn ${showScanSettings ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setShowScanSettings(s => !s)}
+              title="Scan settings (game, set, detail, exposure)"
+              aria-label="Scan settings"
+              style={{ flexShrink: 0, padding: '0 0.7rem', position: 'relative' }}
+            >
+              <Settings size={16} />
+              {!scanSetCode && <span style={{ position: 'absolute', top: 4, right: 4, width: 7, height: 7, borderRadius: '50%', background: 'var(--accent-yellow)' }} />}
+            </button>
           </div>
         </div>
       )}
@@ -1406,7 +1554,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 onClick={() => {
                   setScanMatches([]);
                   setScanStatus('');
-                  startCamera();
+                  if (!stream || !cameraActive) startCamera();
                 }} 
                 style={{ borderRadius: '50%' }}
                 title="Close and Rescan"
@@ -1483,7 +1631,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                 onClick={() => {
                   setScanMatches([]);
                   setScanStatus('');
-                  startCamera();
+                  if (!stream || !cameraActive) startCamera();
                 }} 
                 style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
               >
@@ -1496,7 +1644,7 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
                   setScanMatches([]);
                   setScanStatus('');
                   setAutoScan(false);
-                  startCamera();
+                  if (!stream || !cameraActive) startCamera();
                 }}
                 style={{ flex: 1 }}
               >
@@ -1512,52 +1660,59 @@ function CameraScanner({ onAddSuccess, showToast, setActiveTab }) {
         <div className="glass-panel" style={{ width: '100%', marginTop: '1rem' }}>
           <h3 style={{ fontSize: '1rem', color: '#fff', marginBottom: '0.85rem', borderLeft: '3px solid var(--accent-red)', paddingLeft: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span>Recent Scans</span>
-            <button className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={() => setRecentScans([])}>Clear History</button>
+            {recentSelect.selectMode
+              ? <button className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={recentSelect.exitSelectMode}>Done</button>
+              : <button className="btn btn-secondary" style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }} onClick={() => setRecentScans([])}>Clear History</button>}
           </h3>
-          {/* Split the total paid for this batch (a pack/deck) across the cards
-              just scanned. Only entries with a known entry_id can be updated. */}
-          {(() => {
-            const ids = recentScans.map(s => s.entry_id).filter(Boolean);
-            return ids.length > 0 ? (
-              <div style={{ marginBottom: '0.85rem', padding: '0.5rem 0.6rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                <PackPriceSplitter entryIds={ids} showToast={showToast} onApplied={onAddSuccess} />
-              </div>
-            ) : null;
-          })()}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {recentScans.map((item, idx) => (
-              <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                  <img src={item.image_url} alt={item.name} style={{ width: '36px', height: '50px', objectFit: 'cover', borderRadius: '2px', boxShadow: '0 2px 5px rgba(0,0,0,0.3)' }} />
-                  <div>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#fff' }}>{item.name}</div>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{item.set_name} • #{item.number} • {item.rarity}</div>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent-yellow)' }}>${formatPrice(item.price_trend)}</div>
-                  {item.placementLabel ? (
-                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#ffc107', background: 'rgba(255, 193, 7, 0.1)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>{item.placementLabel}</span>
-                  ) : (
-                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--type-grass)', background: 'rgba(74, 222, 128, 0.1)', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>Unsorted</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
 
-          <button 
-            type="button" 
-            className="btn btn-primary" 
-            style={{ fontSize: '0.85rem', padding: '0.5rem 1rem', width: '100%', marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }} 
-            onClick={() => {
-              if (setActiveTab) setActiveTab('storage');
-            }}
-          >
-            <Library size={16} />
-            Start Sorting Coordinator ({recentScans.length} card(s))
-          </button>
+          {/* Bulk action bar (select mode). Same actions/endpoint as the collection page. */}
+          {recentSelect.selectMode && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center', marginBottom: '0.6rem' }}>
+              <span style={{ fontWeight: 800, color: '#fff', fontSize: '0.8rem', marginRight: '0.25rem' }}>{recentSelect.selectedIds.size} selected</span>
+              <button className="btn btn-danger" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!recentSelect.selectedIds.size} onClick={() => recentSelect.runBulk('delete', null, `Delete ${recentSelect.selectedIds.size} selected card(s)? This cannot be undone.`)}>Delete</button>
+              <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!recentSelect.selectedIds.size} onClick={() => recentSelect.runBulk('trade', null)}>Mark Trade</button>
+              <button className="btn btn-secondary" style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }} disabled={!recentSelect.selectedIds.size} onClick={() => recentSelect.runBulk('list_type', 'wishlist')}>Move to Wishlist</button>
+            </div>
+          )}
+
+          {/* Horizontal strip of recent scans, card-shaped like the box tiles.
+              Tap = edit; long-press = multi-select (shared with collection page). */}
+          <div style={{ display: 'flex', gap: '0.6rem', overflowX: 'auto', paddingBottom: '0.4rem' }}>
+            {recentScans.map((item, idx) => {
+              const selected = recentSelect.selectMode && recentSelect.selectedIds.has(item.entry_id);
+              return (
+              <div
+                key={idx}
+                onClick={() => activateRecent(item)}
+                {...recentSelect.pressHandlers(item.entry_id)}
+                title="Tap to edit • hold to select"
+                style={{ flex: '0 0 auto', width: '76px', display: 'flex', flexDirection: 'column', gap: '0.25rem', cursor: 'pointer', userSelect: 'none', WebkitTouchCallout: 'none', opacity: recentSelect.selectMode && !selected ? 0.55 : 1 }}
+              >
+                <img
+                  src={item.image_url}
+                  alt={item.name}
+                  draggable={false}
+                  style={{ width: '76px', height: '106px', objectFit: 'cover', borderRadius: '4px', border: selected ? '2px solid var(--accent-red)' : '1px solid var(--border-glass)', boxShadow: selected ? '0 0 12px var(--accent-red-glow)' : '0 2px 6px rgba(0,0,0,0.3)', pointerEvents: 'none' }}
+                />
+                <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--accent-yellow)', textAlign: 'center' }}>${formatPrice(item.price_trend)}</div>
+                {item.placementLabel && (
+                  <div style={{ fontSize: '0.55rem', color: '#ffc107', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={item.placementLabel}>{item.placementLabel}</div>
+                )}
+              </div>
+              );
+            })}
+          </div>
         </div>
+      )}
+
+      {inspectorEntry && (
+        <CardInspectorModal
+          card={inspectorEntry}
+          onClose={() => setInspectorEntry(null)}
+          onUpdate={onAddSuccess}
+          onDeleted={removeRecentTile}
+          showToast={showToast}
+        />
       )}
 
       {/* Drawer Overlay for Selected Card */}

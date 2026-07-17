@@ -37,6 +37,7 @@ router.get('/:share_token', async (req, res) => {
         c.language,
         c.added_at,
         c.is_trade,
+        c.favorite,
         c.list_type,
         cc.name,
         cc.supertype,

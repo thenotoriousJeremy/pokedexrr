@@ -4,6 +4,7 @@ import { Search, Trophy, Compass, Library, ShieldAlert, Sparkles, X } from 'luci
 import { formatPrice } from '../utils/formatPrice';
 import { PRINTINGS } from '../utils/cardOptions';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
+import { useBackGuard } from '../utils/useBackGuard';
 
 const COLORS = [
   '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', 
@@ -42,6 +43,7 @@ function SharedCollection({ shareToken }) {
 
   // Detailed Modal State
   const [activeCard, setActiveCard] = useState(null);
+  useBackGuard(!!activeCard, () => setActiveCard(null));
 
   useEffect(() => {
     fetchSharedData();

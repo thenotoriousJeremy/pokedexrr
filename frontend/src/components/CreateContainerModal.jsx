@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { X, BookOpen, Box, Package, Award, LayoutGrid, Layers, Archive, HelpCircle, ArrowLeft, ArrowRight } from 'lucide-react';
 import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
 import { isBinderType } from '../utils/cardOptions';
+import { useBackGuard } from '../utils/useBackGuard';
 
 // Container types with a friendly blurb + default layout. Counts kept modest;
 // the user adjusts them on step 2. Mirrors defaultCompartmentPlan in
@@ -36,6 +37,8 @@ export default function CreateContainerModal({ onClose, onCreate, setsList = [],
   const [sortDraft, setSortDraft] = useState([]);
   const [filterDraft, setFilterDraft] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+
+  useBackGuard(true, onClose);
 
   const pickType = (t) => {
     setType(t);

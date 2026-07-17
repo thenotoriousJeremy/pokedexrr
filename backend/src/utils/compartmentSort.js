@@ -299,7 +299,8 @@ async function recommendSlot(database, location, cardMetadata, overrideCompartme
   }
 
   const allLocationCards = await dbClient.all(`
-    SELECT c.id as entry_id, c.compartment_id, c.printing, c.language, c.favorite, cc.name, cc.supertype, cc.types, cc.rarity, cc.set_name, cc.number,
+    SELECT c.id as entry_id, c.card_id, c.compartment_id, c.position, c.quantity, c.condition, c.printing, c.language, c.purchase_price, c.added_at, c.is_trade, c.favorite, c.list_type,
+           cc.name, cc.supertype, cc.types, cc.subtypes, cc.rarity, cc.set_id, cc.set_name, cc.number, cc.image_url,
            cc.price_trend, cc.price_normal, cc.price_holofoil, cc.price_reverse_holofoil, cc.cmc, cc.color_identity
     FROM collection c
     JOIN card_cache cc ON c.card_id = cc.id
@@ -513,9 +514,16 @@ async function recommendSlot(database, location, cardMetadata, overrideCompartme
         target = spill;
         seq = localSeq(spill);
       }
+      // Neighbours in the TARGET compartment's own order (handles spill), so the
+      // "file it after X" hint names the physical card the new one sits behind.
+      const targetLocal = sortCards([...(cardsByCompId.get(target.id) || []), newCard], location.sort_order, location.foil_sorting);
+      const li = targetLocal.findIndex(c => c.entry_id === -1);
+      const afterCard = li > 0 ? targetLocal[li - 1] : (prevCard || null);
+      const beforeCard = (li !== -1 && li < targetLocal.length - 1) ? targetLocal[li + 1] : (nextCard || null);
+
       let reason = `Sorted by ${scheme}`;
-      if (prevCard) reason += `, right after ${prevCard.name}`;
-      else if (nextCard) reason += `, right before ${nextCard.name}`;
+      if (afterCard) reason += `, right after ${afterCard.name}`;
+      else if (beforeCard) reason += `, right before ${beforeCard.name}`;
       else reason += ` — first card here`;
       if (cardCat && (target.assignedFilters || []).includes(cardCat)) {
         reason += ` (${compartmentLabel(target, location.type)} is assigned "${cardCat}")`;
@@ -525,7 +533,9 @@ async function recommendSlot(database, location, cardMetadata, overrideCompartme
         compartment_id: target.id,
         position: (seq + 1) * 1000,
         label: `${compartmentLabel(target, location.type)}, Pos ${seq + 1} (in ${location.name})`,
-        reason
+        reason,
+        after: afterCard ? { name: afterCard.name, image_url: afterCard.image_url || null } : null,
+        before: beforeCard ? { name: beforeCard.name, image_url: beforeCard.image_url || null } : null
       };
     }
     cursor += compartment.capacity;

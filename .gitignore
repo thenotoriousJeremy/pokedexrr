@@ -68,3 +68,7 @@ backend/data/
 # .gitignore files under frontend/android and frontend/ios. Only add here what
 # they miss: never commit a release signing keystore.
 *.keystore
+
+# Build artifacts / secrets (never commit)
+app-release.aab
+asckey.b64

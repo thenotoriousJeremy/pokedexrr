@@ -76,7 +76,7 @@ export default function CardEntryFields({
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>{Quantity}{Price}</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>{Condition}{Printing}{Language}</div>
+      <div className="card-entry-fields-row-3" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>{Condition}{Printing}{Language}</div>
     </>
   );
 }

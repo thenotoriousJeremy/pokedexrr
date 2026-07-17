@@ -137,44 +137,53 @@ function PrintingBadge({ printing }) {
 // Detail banner for the currently focused card. Shared by the box coverflow and
 // the binder grid so both surfaces describe a selection the same way.
 export function FocusedCardInfo({ card, slotNumber, moveSelect = null }) {
+  if (!card) return null;
+  const isEmpty = !!card.__empty;
+  const isDivider = !!card.__divider;
+  const isGhost = !!card.__ghost;
+
   return (
-    <div className="focused-card-info-panel" style={{ marginTop: '0.5rem' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.7rem', borderRadius: 'var(--radius-sm)' }}>
+    <div className="focused-card-info-panel" style={{ marginTop: '0.5rem', height: '96px', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 0.7rem', borderRadius: 'var(--radius-sm)', width: '100%' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
           <div style={{ minWidth: 0 }}>
-            <strong style={{ fontSize: '0.85rem' }}>#{slotNumber} | {card.name}</strong>
+            <strong style={{ fontSize: '0.85rem' }}>
+              #{slotNumber || 1} | {isEmpty ? 'Empty Slot' : isDivider ? (card.label || 'Divider') : isGhost ? 'Recommended Spot' : card.name}
+            </strong>
             <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
-              {card.set_name} • #{card.number}
+              {isEmpty ? 'Available slot for storage' : isDivider ? 'Sorting category divider' : isGhost ? 'Ghost preview spot' : `${card.set_name || ''} ${card.number ? `• #${card.number}` : ''}`}
             </div>
           </div>
           {moveSelect}
         </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
-          {card.rarity && (
-            <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.03em', ...getRarityBadgeStyle(card.rarity) }}>
-              {getRarityBadgeLabel(card.rarity)}
-            </span>
-          )}
-          {card.printing && card.printing !== 'Normal' && (
-            <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', ...getPrintingBadgeStyle(card.printing) }}>
-              {getPrintingBadgeLabel(card.printing)}
-            </span>
-          )}
-          {card.printing === 'Normal' && <span style={infoChipStyle}>Normal</span>}
-          {card.supertype && <span style={{ ...infoChipStyle, color: '#fff' }} title="Supertype">{card.supertype}</span>}
-          {(card.types || []).length > 0 && <span style={infoChipStyle} title="Types">{card.types.join(' / ')}</span>}
-          {(card.subtypes || []).length > 0 && <span style={infoChipStyle} title="Subtypes">{card.subtypes.join(' / ')}</span>}
-          {card.condition && <span style={infoChipStyle}>{card.condition}</span>}
-          {card.language && card.language !== 'English' && <span style={infoChipStyle}>{card.language}</span>}
-          {card.quantity > 1 && <span style={{ ...infoChipStyle, color: '#fff' }}>x{card.quantity}</span>}
-          {card.price_trend > 0 && (
-            <span style={{ ...infoChipStyle, color: 'var(--accent-yellow)', marginLeft: 'auto' }}>
-              Value ${formatPrice(card.price_trend)}
-            </span>
-          )}
-          {card.purchase_price > 0 && <span style={infoChipStyle}>Paid ${formatPrice(card.purchase_price)}</span>}
-        </div>
+        {!isEmpty && !isDivider && !isGhost && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
+            {card.rarity && (
+              <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.03em', ...getRarityBadgeStyle(card.rarity) }}>
+                {getRarityBadgeLabel(card.rarity)}
+              </span>
+            )}
+            {card.printing && card.printing !== 'Normal' && (
+              <span style={{ fontSize: '0.6rem', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', ...getPrintingBadgeStyle(card.printing) }}>
+                {getPrintingBadgeLabel(card.printing)}
+              </span>
+            )}
+            {card.printing === 'Normal' && <span style={infoChipStyle}>Normal</span>}
+            {card.supertype && <span style={{ ...infoChipStyle, color: '#fff' }} title="Supertype">{card.supertype}</span>}
+            {(card.types || []).length > 0 && <span style={infoChipStyle} title="Types">{card.types.join(' / ')}</span>}
+            {(card.subtypes || []).length > 0 && <span style={infoChipStyle} title="Subtypes">{card.subtypes.join(' / ')}</span>}
+            {card.condition && <span style={infoChipStyle}>{card.condition}</span>}
+            {card.language && card.language !== 'English' && <span style={infoChipStyle}>{card.language}</span>}
+            {card.quantity > 1 && <span style={{ ...infoChipStyle, color: '#fff' }}>x{card.quantity}</span>}
+            {card.price_trend > 0 && (
+              <span style={{ ...infoChipStyle, color: 'var(--accent-yellow)', marginLeft: 'auto' }}>
+                Value ${formatPrice(card.price_trend)}
+              </span>
+            )}
+            {card.purchase_price > 0 && <span style={infoChipStyle}>Paid ${formatPrice(card.purchase_price)}</span>}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -288,6 +297,7 @@ export default function CompartmentView({
     while (cardsWithGhost.length < recIdx) cardsWithGhost.push(null);
     cardsWithGhost.splice(recIdx, 0, {
       __ghost: true,
+      ...(recommendedSpot.card || {}),
       image_url: recommendedSpot.image_url,
       name: recommendedSpot.name,
       set_name: recommendedSpot.set_name
@@ -305,13 +315,81 @@ export default function CompartmentView({
   const [coverflowActiveIndex, setCoverflowActiveIndex] = useState(0);
   const lastTargetActiveRef = useRef(null);
 
-  const [touchStart, setTouchStart] = useState(0);
+  const touchStartRef = useRef({ x: 0, y: 0 });
+  const lastWheelTimeRef = useRef(0);
+  const isDraggingRef = useRef(false);
+  const dragStartXRef = useRef(0);
 
-  const handleCoverflowTouchStart = (e) => setTouchStart(e.touches[0].clientX);
+  const handleCoverflowTouchStart = (e) => {
+    touchStartRef.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY
+    };
+  };
+
   const handleCoverflowTouchEnd = (e, totalCards) => {
-    const end = e.changedTouches[0].clientX;
-    if (touchStart - end > 40) setCoverflowActiveIndex(prev => Math.min(totalCards - 1, prev + 1));
-    if (end - touchStart > 40) setCoverflowActiveIndex(prev => Math.max(0, prev - 1));
+    const endX = e.changedTouches[0].clientX;
+    const endY = e.changedTouches[0].clientY;
+    const diffX = touchStartRef.current.x - endX;
+    const diffY = touchStartRef.current.y - endY;
+
+    if (Math.abs(diffX) > 30 && Math.abs(diffX) > Math.abs(diffY)) {
+      if (diffX > 0) {
+        setCoverflowActiveIndex(prev => Math.min(totalCards - 1, prev + 1));
+      } else {
+        setCoverflowActiveIndex(prev => Math.max(0, prev - 1));
+      }
+    }
+  };
+
+  const coverflowContainerRef = useRef(null);
+
+  useEffect(() => {
+    const el = coverflowContainerRef.current;
+    if (!el) return;
+
+    const onWheel = (e) => {
+      // Prevent browser vertical window scroll bouncing while scrolling through container box cards
+      e.preventDefault();
+      const now = Date.now();
+      if (now - lastWheelTimeRef.current < 75) return;
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (Math.abs(delta) < 8) return;
+
+      if (delta > 0) {
+        setCoverflowActiveIndex(prev => prev + 1);
+        lastWheelTimeRef.current = now;
+      } else if (delta < 0) {
+        setCoverflowActiveIndex(prev => Math.max(0, prev - 1));
+        lastWheelTimeRef.current = now;
+      }
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const handleCoverflowMouseDown = (e) => {
+    isDraggingRef.current = true;
+    dragStartXRef.current = e.clientX;
+  };
+
+  const handleCoverflowMouseUp = (e, totalCards) => {
+    if (!isDraggingRef.current) return;
+    isDraggingRef.current = false;
+    const diff = dragStartXRef.current - e.clientX;
+    if (diff > 35) setCoverflowActiveIndex(prev => Math.min(totalCards - 1, prev + 1));
+    else if (diff < -35) setCoverflowActiveIndex(prev => Math.max(0, prev - 1));
+  };
+
+  const handleCoverflowKeyDown = (e, totalCards) => {
+    if (['ArrowRight', 'ArrowDown'].includes(e.key)) {
+      e.preventDefault();
+      setCoverflowActiveIndex(prev => Math.min(totalCards - 1, prev + 1));
+    } else if (['ArrowLeft', 'ArrowUp'].includes(e.key)) {
+      e.preventDefault();
+      setCoverflowActiveIndex(prev => Math.max(0, prev - 1));
+    }
   };
 
   // --- Binder Grid State ---
@@ -329,8 +407,53 @@ export default function CompartmentView({
 
   if (isBinder) {
     const cols = pocketColumns(compartment.capacity);
-    const slotCount = Math.max(compartment.capacity, cardsWithGhost.length);
-    const pockets = Array.from({ length: slotCount }, (_, i) => cardsWithGhost[i] || null);
+    let maxSlotFromCards = compartment.capacity || 1;
+    cards.forEach(c => {
+      if (c && c.position > 0) {
+        const s = Math.floor(c.position / 1000);
+        if (s > maxSlotFromCards) maxSlotFromCards = s;
+      }
+    });
+    // Don't let the recommendation grow the page past capacity — that rendered a
+    // phantom extra pocket (a 10th slot on a full 9-card page). Filing into a full
+    // page shifts the others; the displaced last card moves to the next page.
+    const slotCount = Math.max(compartment.capacity || 1, maxSlotFromCards);
+    const pockets = new Array(slotCount).fill(null);
+    const unplaced = [];
+
+    cards.forEach(c => {
+      const slot = (c && c.position > 0) ? Math.floor(c.position / 1000) : null;
+      if (slot && slot >= 1 && slot <= slotCount && !pockets[slot - 1]) {
+        pockets[slot - 1] = c;
+      } else {
+        unplaced.push(c);
+      }
+    });
+
+    unplaced.forEach(c => {
+      const freeIdx = pockets.findIndex(p => p === null);
+      if (freeIdx !== -1) pockets[freeIdx] = c;
+      else pockets.push(c);
+    });
+
+    if (recommendedSpot && recommendedSpot.index >= 0) {
+      const recIdx = Math.min(recommendedSpot.index, pockets.length - 1);
+      const ghostObj = {
+        __ghost: true,
+        image_url: recommendedSpot.image_url,
+        name: recommendedSpot.name,
+        set_name: recommendedSpot.set_name
+      };
+      if (!pockets[recIdx]) {
+        pockets[recIdx] = ghostObj;
+      } else {
+        // Occupied: insert and shift the rest down, but keep the page at its slot
+        // count — the card pushed off the end belongs to the next page.
+        const cap = pockets.length;
+        pockets.splice(recIdx, 0, ghostObj);
+        if (pockets.length > cap) pockets.length = cap;
+      }
+    }
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', height: '100%' }}>
@@ -362,7 +485,7 @@ export default function CompartmentView({
             )}
 
             {onEditRules && (
-              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title="Set which cards this page accepts" style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: '#fff' } : {}) }}>
+              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title="Set which cards this page accepts" style={{ fontSize: '0.55rem', padding: '0.15rem 0.4rem', marginLeft: 'auto', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: '#fff' } : {}) }}>
                 {acceptsLabel}
               </button>
             )}
@@ -445,6 +568,7 @@ export default function CompartmentView({
               return card ? (
                 <div
                   key={card.entry_id || `slot-${i}`}
+                  id={card.entry_id ? `card-${card.entry_id}` : undefined}
                   className={`binder-pocket ${categoryStart ? 'set-start' : ''} ${card.entry_id === focusEntryId ? 'focus-flash' : ''}`}
                   style={{
                     ...getCardRarityBorder(card.rarity),
@@ -609,12 +733,13 @@ export default function CompartmentView({
         actualActiveIndex = targetIdx;
       }
     } else if (targetActiveIndex !== null && targetActiveIndex !== undefined) {
-      // Map slot index to renderedCards index
-      const targetIdx = renderedCards.findIndex(c => c.__slotNumber === targetActiveIndex + 1 && !c.__divider);
+      // Map slot index (or recommended ghost) to renderedCards index
+      const targetIdx = renderedCards.findIndex(c => c.__ghost || (c.__slotNumber === targetActiveIndex + 1 && !c.__divider));
       if (targetIdx !== -1) {
-        if (lastTargetActiveRef.current !== targetActiveIndex) {
-          lastTargetActiveRef.current = targetActiveIndex;
-          actualActiveIndex = targetIdx;
+        actualActiveIndex = targetIdx;
+        const spotKey = `${compartment.id}-${targetActiveIndex}-${recommendedSpot?.index ?? ''}`;
+        if (lastTargetActiveRef.current !== spotKey) {
+          lastTargetActiveRef.current = spotKey;
           setTimeout(() => setCoverflowActiveIndex(targetIdx), 0);
         }
       }
@@ -660,7 +785,7 @@ export default function CompartmentView({
               </strong>
             )}
             {onEditRules && (
-              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title="Set which cards this row accepts" style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: '#fff' } : {}) }}>
+              <button type="button" className="btn btn-secondary" onClick={() => onEditRules(compartment)} title="Set which cards this row accepts" style={{ fontSize: '0.6rem', padding: '0.2rem 0.5rem', marginLeft: 'auto', ...(compRuleCount > 0 ? { borderColor: 'var(--accent-red)', color: '#fff' } : {}) }}>
                 {acceptsLabel}
               </button>
             )}
@@ -680,9 +805,16 @@ export default function CompartmentView({
         ) : (
           <>
           <div
+            ref={coverflowContainerRef}
             className="box-coverflow-container"
+            tabIndex={0}
+            style={{ outline: 'none' }}
             onTouchStart={handleCoverflowTouchStart}
             onTouchEnd={(e) => handleCoverflowTouchEnd(e, renderedCards.length)}
+            onMouseDown={handleCoverflowMouseDown}
+            onMouseUp={(e) => handleCoverflowMouseUp(e, renderedCards.length)}
+            onMouseLeave={(e) => handleCoverflowMouseUp(e, renderedCards.length)}
+            onKeyDown={(e) => handleCoverflowKeyDown(e, renderedCards.length)}
           >
             <button
               type="button"
@@ -827,9 +959,9 @@ export default function CompartmentView({
 
           {(() => {
             const activeCard = renderedCards[activeCardIndex];
-            if (!activeCard || activeCard.__ghost || activeCard.__divider || activeCard.__empty) return null;
+            if (!activeCard) return null;
 
-            const moveSelect = sortOrder === 'custom' && moveTargets.length > 1 && onMoveCard ? (
+            const moveSelect = sortOrder === 'custom' && moveTargets.length > 1 && onMoveCard && !activeCard.__ghost && !activeCard.__divider && !activeCard.__empty ? (
               <select
                 className="select-control"
                 value=""
@@ -843,7 +975,7 @@ export default function CompartmentView({
               </select>
             ) : null;
 
-            return <FocusedCardInfo card={activeCard} slotNumber={activeCard.__slotNumber} moveSelect={moveSelect} />;
+            return <FocusedCardInfo card={activeCard} slotNumber={activeCard.__slotNumber || activeCardIndex + 1} moveSelect={moveSelect} />;
           })()}
           </>
         )}

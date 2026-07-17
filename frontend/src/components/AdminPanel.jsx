@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users, Globe, Database, Play, RefreshCw, AlertTriangle } from 'lucide-react';
+import { useBackGuard } from '../utils/useBackGuard';
 
 const formatBytes = (n) => {
   if (!n) return '0 B';
@@ -22,6 +23,7 @@ function AdminPanel({ showToast }) {
 
   // Change Password Modal States
   const [targetUser, setTargetUser] = useState(null);
+  useBackGuard(!!targetUser, () => setTargetUser(null));
   const [updatePassword, setUpdatePassword] = useState('');
   const [pwdLoading, setPwdLoading] = useState(false);
 
