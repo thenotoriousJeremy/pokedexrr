@@ -287,10 +287,10 @@ button, input, select, textarea {
   /* Safe-area insets so the header/content clear the notch + status bar and the
      bottom clears the pinned nav bar + home indicator (viewport-fit=cover). */
   padding:
-    calc(1rem + env(safe-area-inset-top))
-    calc(1.5rem + env(safe-area-inset-right))
-    calc(6rem + env(safe-area-inset-bottom))
-    calc(1.5rem + env(safe-area-inset-left));
+    calc(1rem + max(env(safe-area-inset-top, 0px), var(--sat, 0px)))
+    calc(1.5rem + max(env(safe-area-inset-right, 0px), var(--sar, 0px)))
+    calc(6rem + max(env(safe-area-inset-bottom, 0px), var(--sab, 0px)))
+    calc(1.5rem + max(env(safe-area-inset-left, 0px), var(--sal, 0px)));
 }
 
 @media (min-width: 769px) {
@@ -307,10 +307,10 @@ button, input, select, textarea {
 .modal-overlay {
   box-sizing: border-box;
   padding:
-    max(1rem, env(safe-area-inset-top))
-    max(1rem, env(safe-area-inset-right))
-    max(1rem, env(safe-area-inset-bottom))
-    max(1rem, env(safe-area-inset-left));
+    max(1rem, max(env(safe-area-inset-top, 0px), var(--sat, 0px)))
+    max(1rem, max(env(safe-area-inset-right, 0px), var(--sar, 0px)))
+    max(1rem, max(env(safe-area-inset-bottom, 0px), var(--sab, 0px)))
+    max(1rem, max(env(safe-area-inset-left, 0px), var(--sal, 0px)));
 }
 
 /* Glassmorphic Panel Component */
@@ -2354,9 +2354,9 @@ button, input, select, textarea {
     display: none !important;
   }
   .app-container {
-    padding-top: 0.5rem !important;
-    padding-left: 0.75rem !important;
-    padding-right: 0.75rem !important;
+    padding-top: calc(0.5rem + max(env(safe-area-inset-top, 0px), var(--sat, 0px))) !important;
+    padding-left: calc(0.75rem + max(env(safe-area-inset-left, 0px), var(--sal, 0px))) !important;
+    padding-right: calc(0.75rem + max(env(safe-area-inset-right, 0px), var(--sar, 0px))) !important;
   }
   .app-header {
     margin-bottom: 0.5rem !important;

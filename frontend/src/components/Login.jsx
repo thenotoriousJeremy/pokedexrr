@@ -82,8 +82,9 @@ function Login({ onLoginSuccess }) {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      minHeight: '80vh',
-      padding: '1rem'
+      minHeight: '100vh',
+      boxSizing: 'border-box',
+      padding: 'calc(1rem + max(env(safe-area-inset-top, 0px), var(--sat, 0px))) 1rem calc(1rem + max(env(safe-area-inset-bottom, 0px), var(--sab, 0px))) 1rem'
     }}>
       <div className="glass-panel" style={{
         maxWidth: '420px',

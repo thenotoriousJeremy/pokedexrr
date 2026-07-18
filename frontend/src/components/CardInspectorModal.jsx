@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, MapPin, Trash2, Star } from 'lucide-react';
+import { X, MapPin, Trash2, Star, Maximize2 } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
 import CardEntryFields from './CardEntryFields';
@@ -31,7 +31,10 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
   const [isTrade, setIsTrade] = useState(0);
   const [favorite, setFavorite] = useState(0);
   const [listType, setListType] = useState('collection');
+  const [isFullScreen, setIsFullScreen] = useState(false);
   const hasToggledRef = useRef(false);
+
+  useBackGuard(isFullScreen, () => setIsFullScreen(false));
 
   const targetEntryId = card?.entry_id || card?.id;
 
@@ -221,9 +224,14 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
           <X size={16} />
         </button>
 
-        {/* Left side: Card Image & Badge overlays */}
-        <div className="ci-image-col" style={{ flex: '1 1 250px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
-          <div className="ci-image-wrap" style={{ position: 'relative', width: '100%', maxWidth: '280px' }}>
+        {/* Left side: Main Card Image Focus */}
+        <div className="ci-image-col" style={{ flex: '1 1 260px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <div
+            className="ci-image-wrap"
+            onClick={() => setIsFullScreen(true)}
+            title="Click to view full screen"
+            style={{ position: 'relative', width: '100%', maxWidth: '300px', cursor: 'pointer' }}
+          >
             <img
               src={card.image_url}
               alt={card.name}
@@ -232,19 +240,30 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                 aspectRatio: 0.718,
                 objectFit: 'cover',
                 borderRadius: 'var(--radius-md)',
-                boxShadow: '0 12px 36px rgba(0,0,0,0.6), 0 0 20px rgba(255,255,255,0.05)'
+                boxShadow: '0 12px 36px rgba(0,0,0,0.6), 0 0 20px rgba(255,255,255,0.05)',
+                transition: 'transform 0.2s ease'
               }}
             />
-          </div>
-
-          {/* Quantities indicator badge */}
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-            <span className="badge" style={{ padding: '0.4rem 0.8rem', background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-sm)', color: 'var(--text-strong)', fontSize: '0.75rem', fontWeight: 700 }}>
-              Owned: x{card.quantity}
-            </span>
-            <span className="badge" style={{ padding: '0.4rem 0.8rem', background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.2)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-yellow)', fontSize: '0.75rem', fontWeight: 700 }}>
-              {card.rarity || 'Common'}
-            </span>
+            <div style={{
+              position: 'absolute',
+              bottom: '0.6rem',
+              right: '0.6rem',
+              background: 'rgba(0,0,0,0.65)',
+              backdropFilter: 'blur(6px)',
+              padding: '0.25rem 0.5rem',
+              borderRadius: 'var(--radius-sm)',
+              color: '#fff',
+              fontSize: '0.65rem',
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.3rem',
+              pointerEvents: 'none',
+              border: '1px solid rgba(255,255,255,0.15)'
+            }}>
+              <Maximize2 size={12} />
+              <span>Full Screen</span>
+            </div>
           </div>
         </div>
 
@@ -268,7 +287,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
               {getCardDisplayName(card.name, card.language)}
             </h3>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 500 }}>
-              {card.set_name}{cardNumber ? ` • Card #${cardNumber}` : ''}
+              {card.set_name}{cardNumber ? ` • #${cardNumber}` : ''}{card.rarity ? ` • ${card.rarity}` : ''} • x{card.quantity ?? 1} owned
             </p>
 
             {/* MTG cards: show color pips + type line (Pokémon energy types are
@@ -442,6 +461,53 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
           )}
         </div>
       </div>
+
+      {/* Fullscreen Image Preview */}
+      {isFullScreen && (
+        <div
+          className="modal-overlay"
+          style={{
+            position: 'fixed',
+            top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.92)',
+            backdropFilter: 'blur(12px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1100,
+            cursor: 'zoom-out',
+            padding: 'max(1rem, max(env(safe-area-inset-top, 0px), var(--sat, 0px))) 1rem max(1rem, max(env(safe-area-inset-bottom, 0px), var(--sab, 0px))) 1rem'
+          }}
+          onClick={() => setIsFullScreen(false)}
+        >
+          <button
+            className="btn btn-secondary btn-icon-only"
+            onClick={() => setIsFullScreen(false)}
+            style={{
+              position: 'absolute',
+              top: 'max(1rem, max(env(safe-area-inset-top, 0px), var(--sat, 0px)))',
+              right: '1rem',
+              borderRadius: '50%',
+              zIndex: 10,
+              background: 'rgba(0,0,0,0.6)',
+              color: '#fff'
+            }}
+          >
+            <X size={20} />
+          </button>
+          <img
+            src={card.image_url}
+            alt={card.name}
+            style={{
+              maxHeight: '88vh',
+              maxWidth: '88vw',
+              objectFit: 'contain',
+              borderRadius: 'var(--radius-lg)',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.8)'
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }

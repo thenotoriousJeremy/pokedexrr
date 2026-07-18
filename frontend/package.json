@@ -1,7 +1,7 @@
 {
   "name": "bindarr-frontend",
   "private": true,
-  "version": "0.0.1",
+  "version": "1.4.6",
   "type": "module",
   "scripts": {
     "dev": "vite",

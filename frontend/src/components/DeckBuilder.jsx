@@ -98,6 +98,7 @@ function DeckBuilder({ showToast }) {
 
   useBackGuard(showCreateModal, () => setShowCreateModal(false));
   useBackGuard(showSimulator, () => setShowSimulator(false));
+  useBackGuard(!!activeDeck, () => setActiveDeck(null));
 
   useEffect(() => {
     fetchDecks();

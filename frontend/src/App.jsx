@@ -1,4 +1,4 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { LayoutDashboard, Database, MapPin, Sparkles, Settings as SettingsIcon, LogOut, ShieldAlert, Plus, Swords } from 'lucide-react';
 import Login from './components/Login';
 import Logo from './components/Logo';
@@ -92,14 +92,23 @@ function App() {
   const [toast, setToast] = useState(null);
   const [statsTrigger, setStatsTrigger] = useState(0);
 
+  const tabGuardRef = useRef(null);
+
   // Navigate tabs through here so each change pushes a history entry: a back
   // gesture then returns to the PREVIOUS tab (not always dashboard), and modals
   // stack their own guards on top. At the dashboard root with nothing pushed,
   // back exits normally.
   const goTab = (tab) => {
     if (tab === activeTab) return;
+    if (tabGuardRef.current) {
+      tabGuardRef.current();
+      tabGuardRef.current = null;
+    }
     const prev = activeTab;
-    pushBackGuard(() => setActiveTab(prev));
+    tabGuardRef.current = pushBackGuard(() => {
+      tabGuardRef.current = null;
+      setActiveTab(prev);
+    });
     setActiveTab(tab);
   };
 

@@ -50,6 +50,8 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   useBackGuard(!!rulesComp, () => setRulesComp(null));
   useBackGuard(showRulesModal, () => setShowRulesModal(false));
   useBackGuard(!!capacityUpdatePending, () => setCapacityUpdatePending(null));
+  useBackGuard(filingMode, () => { setFilingMode(false); setFilingReadOnly(false); refreshAll(); });
+  useBackGuard(!!selectedLocationId, () => setSelectedLocationId && setSelectedLocationId(null));
   const [compRuleDraft, setCompRuleDraft] = useState([]);
 
   const [unsortedSearch, setUnsortedSearch] = useState('');
@@ -1935,7 +1937,7 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
           carries Locate / Placed / Skip. Replaces the full desktop guide so the
           container and the guide share one screen. */}
       {isStacked && filingMode && filingQueue[filingIndex] && (
-        <div style={{ position: 'fixed', left: 0, right: 0, bottom: 'calc(6rem + env(safe-area-inset-bottom, 0px))', zIndex: 90, padding: '0 0.6rem' }}>
+        <div style={{ position: 'fixed', left: 0, right: 0, bottom: 'calc(6rem + max(env(safe-area-inset-bottom, 0px), var(--sab, 0px)))', zIndex: 90, padding: '0 0.6rem' }}>
           <div className="glass-panel" style={{ padding: '0.7rem 0.8rem', display: 'flex', flexDirection: 'column', gap: '0.6rem', background: 'var(--bg-secondary)', boxShadow: '0 -6px 20px rgba(0,0,0,0.5)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
               <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700, whiteSpace: 'nowrap' }}>
