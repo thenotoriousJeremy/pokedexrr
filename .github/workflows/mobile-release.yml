@@ -77,11 +77,15 @@ jobs:
           releaseFiles: ${{ env.AAB }}
           track: internal
 
+      - name: Rename APK for release
+        if: github.ref_type == 'tag'
+        run: cp "${{ env.APK }}" "Bindarr-Android.apk"
+
       - name: Attach APK to release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.APK }}
+          files: Bindarr-Android.apk
 
   ios:
     runs-on: macos-latest
@@ -184,8 +188,12 @@ jobs:
           xcrun altool --upload-app --type ios --file "$IPA" \
             --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 
+      - name: Rename IPA for release
+        if: steps.gate.outputs.ready == 'true' && github.ref_type == 'tag'
+        run: cp "$(ls "$RUNNER_TEMP"/export/*.ipa | head -1)" "$RUNNER_TEMP/Bindarr-Apple-iOS.ipa"
+
       - name: Attach IPA to release
         if: steps.gate.outputs.ready == 'true' && github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ runner.temp }}/export/*.ipa
+          files: ${{ runner.temp }}/Bindarr-Apple-iOS.ipa

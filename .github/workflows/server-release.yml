@@ -1,13 +1,14 @@
-name: Build Server EXE
+name: Build Server Binaries
 
-# push a v* tag -> build the Windows server .exe and attach the zip to the
-# GitHub Release. workflow_dispatch -> build only, uploaded as a workflow
-# artifact (test). The exe is a Node Single Executable App (stdlib, no third-
-# party packager) whose blob is just backend/launch.js; the real server ships
-# beside it under app/ (backend src + node_modules + frontend build). Embedding
-# DBs (backend/data) and .env are gitignored, so they are NOT bundled: the
-# server runs, and card-image matching stays inert until the operator builds
-# embeddings and drops a .env in app/backend.
+# push a v* tag -> build the self-hosted server binary for Windows, Linux and
+# macOS and attach each archive to the GitHub Release. workflow_dispatch ->
+# build only, uploaded as workflow artifacts (test). Each binary is a Node
+# Single Executable App (stdlib, no third-party packager) whose blob is just
+# backend/launch.js; the real server ships beside it under app/ (backend src +
+# node_modules + frontend build). Embedding DBs (backend/data) and .env are
+# gitignored, so they are NOT bundled: the server runs, and card-image matching
+# stays inert until the operator builds embeddings and drops a .env in
+# app/backend.
 on:
   push:
     tags: [ "v*" ]
@@ -17,8 +18,27 @@ permissions:
   contents: write
 
 jobs:
-  windows-exe:
-    runs-on: windows-latest
+  server:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x64
+            exe: bindarr-server.exe
+            archive: zip
+          - os: ubuntu-latest
+            target: linux-x64
+            exe: bindarr-server
+            archive: tar
+          - os: macos-latest
+            target: macos-arm64
+            exe: bindarr-server
+            archive: tar
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -32,56 +52,78 @@ jobs:
           npm ci
           npm run build
 
-      # Prod deps only, compiled natively for win-x64 by this Windows runner.
+      # Prod deps only, compiled natively for this runner's OS/arch.
       - name: Install backend deps (prod)
         working-directory: backend
         run: npm ci --omit=dev
 
-      # Build the SEA blob from the launcher, copy node.exe, inject the blob.
-      - name: Build server exe (Node SEA)
-        shell: pwsh
+      - name: Build SEA blob
         run: |
-          $root = "build/bindarr-server"
-          New-Item -ItemType Directory -Force $root | Out-Null
-          '{ "main": "backend/launch.js", "output": "sea-prep.blob" }' | Out-File -Encoding utf8 sea-config.json
+          echo '{ "main": "backend/launch.js", "output": "sea-prep.blob" }' > sea-config.json
           node --experimental-sea-config sea-config.json
-          $exe = "$root/bindarr-server.exe"
-          Copy-Item (Get-Command node).Source $exe
-          npx --yes postject $exe NODE_SEA_BLOB sea-prep.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
 
-      # Assemble the release tree beside the exe. server.js expects
-      # app/backend/src/../../frontend/dist, so mirror that layout.
-      - name: Assemble release tree
-        shell: pwsh
+      # Copy this runner's node binary, inject the SEA blob. macOS must strip the
+      # existing signature before injection and re-sign (ad-hoc) after.
+      - name: Assemble binary + release tree
         run: |
-          $root = "build/bindarr-server"
-          New-Item -ItemType Directory -Force "$root/app/backend","$root/app/frontend" | Out-Null
-          Copy-Item backend/src          "$root/app/backend/src"          -Recurse
-          Copy-Item backend/node_modules "$root/app/backend/node_modules" -Recurse
-          Copy-Item backend/package.json "$root/app/backend/package.json"
-          Copy-Item frontend/dist        "$root/app/frontend/dist"        -Recurse
-          Copy-Item .env.example         "$root/app/backend/.env.example"
-          @"
-          Bindarr self-hosted server (Windows).
+          ROOT=build/bindarr-server
+          mkdir -p "$ROOT/app/backend" "$ROOT/app/frontend"
+          EXE="$ROOT/${{ matrix.exe }}"
+          node -e "require('fs').copyFileSync(process.execPath, process.argv[1])" "$EXE"
+          FUSE=NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            codesign --remove-signature "$EXE"
+            npx --yes postject "$EXE" NODE_SEA_BLOB sea-prep.blob --sentinel-fuse "$FUSE" --macho-segment-name NODE_SEA
+            codesign --sign - "$EXE"
+          else
+            npx --yes postject "$EXE" NODE_SEA_BLOB sea-prep.blob --sentinel-fuse "$FUSE"
+          fi
+          chmod +x "$EXE" || true
+          cp -r backend/src          "$ROOT/app/backend/src"
+          cp -r backend/node_modules "$ROOT/app/backend/node_modules"
+          cp    backend/package.json "$ROOT/app/backend/package.json"
+          cp -r frontend/dist        "$ROOT/app/frontend/dist"
+          cp    .env.example         "$ROOT/app/backend/.env.example"
 
-          Run: double-click bindarr-server.exe, then open http://localhost:3001
-          Config: copy app\backend\.env.example to app\backend\.env and edit.
-          Card-image scan matching needs embedding DBs in app\backend\data
+      - name: Write README
+        run: |
+          ROOT=build/bindarr-server
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            RUN='Run: double-click bindarr-server.exe'
+          else
+            RUN='Run: ./bindarr-server (chmod +x first if needed)'
+          fi
+          cat > "$ROOT/README.txt" <<EOF
+          Bindarr self-hosted server (${{ matrix.target }}).
+
+          $RUN
+          Then open http://localhost:3001
+          Config: copy app/backend/.env.example to app/backend/.env and edit.
+          Card-image scan matching needs embedding DBs in app/backend/data
           (built with backend/scripts/build-card-embeddings.mjs); without them
           the server runs but scan matches return nothing.
-          "@ | Out-File -Encoding utf8 "$root/README.txt"
+          EOF
 
-      - name: Zip
-        shell: pwsh
-        run: Compress-Archive -Path build/bindarr-server/* -DestinationPath build/bindarr-server-windows-x64.zip
+      # Archive the tree contents at the root (no wrapping folder), matching the
+      # original layout server.js expects.
+      - name: Package
+        run: |
+          NAME="Bindarr-Server-${{ matrix.target }}"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            ( cd build/bindarr-server && 7z a "$GITHUB_WORKSPACE/$NAME.zip" ./* >/dev/null )
+            echo "ASSET=$NAME.zip" >> "$GITHUB_ENV"
+          else
+            tar czf "$NAME.tar.gz" -C build/bindarr-server .
+            echo "ASSET=$NAME.tar.gz" >> "$GITHUB_ENV"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: bindarr-server-windows-x64
-          path: build/bindarr-server-windows-x64.zip
+          name: bindarr-server-${{ matrix.target }}
+          path: ${{ env.ASSET }}
 
       - name: Attach to release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: build/bindarr-server-windows-x64.zip
+          files: ${{ env.ASSET }}
