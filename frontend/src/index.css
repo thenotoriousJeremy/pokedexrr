@@ -585,8 +585,10 @@ button, input, select, textarea {
     background: var(--bg-glass);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    /* Clear the home indicator / gesture bar under the pinned tab bar. */
-    padding-bottom: env(safe-area-inset-bottom);
+    /* Clear the home indicator / gesture bar under the pinned tab bar. On
+       Android env(safe-area-inset-bottom) is 0, so also honor --sab (set from
+       native window insets in MainActivity). */
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--sab, 0px));
   }
 }
 
