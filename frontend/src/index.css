@@ -531,9 +531,14 @@ button, input, select, textarea {
   height: 20px;
 }
 
-.nav-tab:hover {
-  color: var(--text-primary);
-  background: var(--surface-1);
+/* hover:hover guard: on touch devices a tap leaves the button in :hover until
+   the next tap, so a back-gesture would leave the tapped tab looking selected.
+   Restrict the hover style to real pointers. */
+@media (hover: hover) {
+  .nav-tab:hover {
+    color: var(--text-primary);
+    background: var(--surface-1);
+  }
 }
 
 .nav-tab.active {

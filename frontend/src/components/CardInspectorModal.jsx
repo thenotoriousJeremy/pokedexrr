@@ -462,7 +462,9 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
         </div>
       </div>
 
-      {/* Fullscreen Image Preview */}
+      {/* Fullscreen Image Preview. stopPropagation on every click so closing the
+          zoom returns to the inspector instead of bubbling to the overlay's
+          handleClose (which would dismiss the whole popup). */}
       {isFullScreen && (
         <div
           className="modal-overlay"
@@ -478,11 +480,11 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
             cursor: 'zoom-out',
             padding: 'max(1rem, max(env(safe-area-inset-top, 0px), var(--sat, 0px))) 1rem max(1rem, max(env(safe-area-inset-bottom, 0px), var(--sab, 0px))) 1rem'
           }}
-          onClick={() => setIsFullScreen(false)}
+          onClick={(e) => { e.stopPropagation(); setIsFullScreen(false); }}
         >
           <button
             className="btn btn-secondary btn-icon-only"
-            onClick={() => setIsFullScreen(false)}
+            onClick={(e) => { e.stopPropagation(); setIsFullScreen(false); }}
             style={{
               position: 'absolute',
               top: 'max(1rem, max(env(safe-area-inset-top, 0px), var(--sat, 0px)))',
@@ -498,12 +500,15 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
           <img
             src={card.image_url}
             alt={card.name}
+            onClick={(e) => e.stopPropagation()}
             style={{
               maxHeight: '88vh',
               maxWidth: '88vw',
               objectFit: 'contain',
-              borderRadius: 'var(--radius-lg)',
-              boxShadow: '0 20px 60px rgba(0,0,0,0.8)'
+              /* No border-radius: the card art already has its own rounded
+                 corners, so a CSS radius here clips them. drop-shadow follows
+                 the image's own shape instead of a rounded box. */
+              filter: 'drop-shadow(0 20px 60px rgba(0,0,0,0.8))'
             }}
           />
         </div>
