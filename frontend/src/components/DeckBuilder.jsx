@@ -204,7 +204,8 @@ function DeckBuilder({ showToast }) {
         // Refresh details locally
         await loadDeckDetails(activeDeck.id);
       } else {
-        showToast('Failed to add card.');
+        const data = await response.json().catch(() => ({}));
+        showToast(data.error || 'Failed to add card.');
       }
     } catch (err) {
       console.error(err);

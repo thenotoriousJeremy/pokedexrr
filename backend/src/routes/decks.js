@@ -3,6 +3,7 @@ const db = require('../db');
 const tcgApi = require('../tcgApi');
 const { parseCardRow } = require('../utils/priceHelpers');
 const { compartmentLabel } = require('../utils/compartmentSort');
+const { validateDeckAddition } = require('../utils/deckRules');
 const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
@@ -284,6 +285,11 @@ router.post('/:id/cards', async (req, res) => {
         return res.status(404).json({ error: 'Card not found on Pokémon TCG API.' });
       }
     }
+
+    // Enforce deck rules (owned-copy cap + max 4 per name). quantity here is the
+    // absolute new count for this card, so validate it directly.
+    const check = await validateDeckAddition({ deckId: id, userId: req.user.id, cardId: card_id, newQty: quantity });
+    if (!check.ok) return res.status(400).json({ error: check.error });
 
     // Insert or update quantities
     await db.run(`
