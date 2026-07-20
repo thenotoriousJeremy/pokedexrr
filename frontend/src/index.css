@@ -958,7 +958,7 @@ button, input, select, textarea {
     width: 94vw !important;
     box-sizing: border-box !important;
     overflow-x: hidden !important;
-    border-radius: var(--radius-lg) !important;
+    border-radius: var(--radius-md) !important;
   }
   .card-inspector .ci-image-col {
     flex: 0 0 auto !important;

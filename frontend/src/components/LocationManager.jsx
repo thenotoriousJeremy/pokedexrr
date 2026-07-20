@@ -45,6 +45,16 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
   const [storageSelectMode, setStorageSelectMode] = useState(false);
   const [storageSelectedIds, setStorageSelectedIds] = useState(() => new Set());
 
+  // Binder "sorting renumbers pockets" heads-up: dismissible, and stays dismissed
+  // across sessions so it doesn't permanently occupy screen space.
+  const [binderTipDismissed, setBinderTipDismissed] = useState(
+    () => localStorage.getItem('bindarr_binder_tip_dismissed') === '1'
+  );
+  const dismissBinderTip = () => {
+    localStorage.setItem('bindarr_binder_tip_dismissed', '1');
+    setBinderTipDismissed(true);
+  };
+
   // Per-compartment filing-rule editor.
   const [rulesComp, setRulesComp] = useState(null);
   useBackGuard(!!rulesComp, () => setRulesComp(null));
@@ -1217,9 +1227,14 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
               </div>
             )}
 
-            {isBinderType && !isCustom && (
-              <div style={{ background: 'rgba(255, 170, 0, 0.1)', border: '1px solid #d97706', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', color: 'var(--text-primary)', lineHeight: 1.4 }}>
-                <strong>Heads up:</strong> Sorting &amp; filing renumber pocket positions, so a new card shifts every card after it and your physical binder drifts out of sync. For a fixed pocket layout, open <strong>Container Settings</strong> and remove all sort rules to switch this binder to <strong>Custom</strong> order, then use <strong>Arrange</strong> to place and swap cards by hand.
+            {isBinderType && !isCustom && !binderTipDismissed && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.6rem', background: 'rgba(255, 170, 0, 0.1)', border: '1px solid #d97706', padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-sm)', fontSize: '0.72rem', color: 'var(--text-primary)', lineHeight: 1.4 }}>
+                <span style={{ flex: 1 }}>
+                  <strong>Heads up:</strong> Sorting &amp; filing renumber pocket positions, so a new card shifts every card after it and your physical binder drifts out of sync. For a fixed pocket layout, open <strong>Container Settings</strong> and remove all sort rules to switch this binder to <strong>Custom</strong> order, then use <strong>Arrange</strong> to place and swap cards by hand.
+                </span>
+                <button type="button" onClick={dismissBinderTip} title="Dismiss" aria-label="Dismiss" style={{ flexShrink: 0, background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.1rem', lineHeight: 0 }}>
+                  <X size={15} />
+                </button>
               </div>
             )}
 
