@@ -258,7 +258,7 @@ function App() {
   return (
     <div className="app-container">
       {/* Premium Header */}
-      <header className="app-header" style={{ position: 'relative' }}>
+      <header className="app-header">
         <div className="logo-section">
           <div className="logo-icon">
             <Logo />

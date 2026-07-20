@@ -543,7 +543,9 @@ button, input, select, textarea {
 
 .nav-tab.active {
   color: var(--text-primary);
-  background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-glass) 100%);
+  /* Opaque fill so the selected tab reads as solid, not see-through over the
+     content scrolling behind the bar. */
+  background: var(--bg-secondary);
   border: 1px solid var(--border-glass-hover);
   box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
@@ -582,7 +584,8 @@ button, input, select, textarea {
     border-right: none;
     border-bottom: none;
     z-index: 1000;
-    background: var(--bg-glass);
+    /* Opaque bar so content scrolling underneath doesn't show through the nav. */
+    background: var(--bg-primary);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     /* Clear the home indicator / gesture bar under the pinned tab bar. On
@@ -942,60 +945,44 @@ button, input, select, textarea {
 }
 
 @media (max-width: 768px) {
-  /* Keep the card image beside the info (row, not stacked) so the popup is
-     short enough to fit without the whole card height adding to the dialog. */
+  /* Stacked on mobile: card image on top (the focus), details below full-width.
+     Roomier than the old side-by-side squeeze; the dialog scrolls if tall. */
   .card-inspector {
-    padding: 1rem 0.9rem !important;
-    gap: 0.9rem !important;
-    max-height: 92vh !important;
-    flex-direction: row !important;
+    padding: 1.25rem 1.1rem !important;
+    gap: 1.1rem !important;
+    max-height: 90vh !important;
+    flex-direction: column !important;
     flex-wrap: nowrap !important;
-    align-items: flex-start !important;
-    max-width: 460px !important;
+    align-items: stretch !important;
+    max-width: 440px !important;
     width: 94vw !important;
     box-sizing: border-box !important;
     overflow-x: hidden !important;
-    border-radius: var(--radius-md) !important;
+    border-radius: var(--radius-lg) !important;
   }
   .card-inspector .ci-image-col {
-    flex: 0 0 38% !important;
-    max-width: 150px !important;
+    flex: 0 0 auto !important;
+    width: 100% !important;
     align-items: center !important;
-    gap: 0.5rem !important;
+    gap: 0.6rem !important;
   }
   .card-inspector .ci-image-wrap {
-    max-width: 140px !important;
-    width: 100% !important;
+    max-width: 200px !important;
+    width: 62% !important;
   }
   .card-inspector .ci-info-col {
     flex: 1 1 auto !important;
     min-width: 0 !important; /* let the column shrink instead of overflowing */
-    width: auto !important;
-    gap: 0.7rem !important;
+    width: 100% !important;
+    gap: 0.9rem !important;
   }
   .card-inspector .ci-info-col h3 {
-    font-size: 1.2rem !important;
+    font-size: 1.4rem !important;
     line-height: 1.2 !important;
   }
   .card-entry-fields-row-3 {
     grid-template-columns: repeat(2, 1fr) !important;
     gap: 0.5rem !important;
-  }
-}
-
-/* Very narrow phones: fall back to stacked so the info column isn't crushed. */
-@media (max-width: 400px) {
-  .card-inspector {
-    flex-direction: column !important;
-    align-items: center !important;
-  }
-  .card-inspector .ci-image-col {
-    flex: 0 0 auto !important;
-    width: 100% !important;
-  }
-  .card-inspector .ci-info-col h3,
-  .card-inspector .ci-info-col p {
-    text-align: center !important;
   }
 }
 
@@ -2361,12 +2348,26 @@ button, input, select, textarea {
     display: none !important;
   }
   .app-container {
-    padding-top: calc(0.5rem + max(env(safe-area-inset-top, 0px), var(--sat, 0px))) !important;
+    /* header owns the top inset now (it's sticky and covers the status bar) */
+    padding-top: 0 !important;
     padding-left: calc(0.75rem + max(env(safe-area-inset-left, 0px), var(--sal, 0px))) !important;
     padding-right: calc(0.75rem + max(env(safe-area-inset-right, 0px), var(--sar, 0px))) !important;
   }
+  /* Sticky opaque header: stays put while content scrolls beneath it, and its
+     background extends up through the status-bar inset so page text never shows
+     behind the status bar. Full-bleed via negative margins that cancel the
+     container's horizontal padding. */
   .app-header {
+    position: sticky;
+    top: 0;
+    z-index: 900;
+    background: var(--bg-primary);
+    margin-left: calc(-1 * (0.75rem + max(env(safe-area-inset-left, 0px), var(--sal, 0px)))) !important;
+    margin-right: calc(-1 * (0.75rem + max(env(safe-area-inset-right, 0px), var(--sar, 0px)))) !important;
     margin-bottom: 0.5rem !important;
+    padding-left: calc(0.75rem + max(env(safe-area-inset-left, 0px), var(--sal, 0px))) !important;
+    padding-right: calc(0.75rem + max(env(safe-area-inset-right, 0px), var(--sar, 0px))) !important;
+    padding-top: calc(0.5rem + max(env(safe-area-inset-top, 0px), var(--sat, 0px))) !important;
     padding-bottom: 0.5rem !important;
   }
   main {
