@@ -2364,11 +2364,20 @@ button, input, select, textarea {
     background: var(--bg-primary);
     margin-left: calc(-1 * (0.75rem + max(env(safe-area-inset-left, 0px), var(--sal, 0px)))) !important;
     margin-right: calc(-1 * (0.75rem + max(env(safe-area-inset-right, 0px), var(--sar, 0px)))) !important;
-    margin-bottom: 0.5rem !important;
+    margin-bottom: 0.35rem !important;
     padding-left: calc(0.75rem + max(env(safe-area-inset-left, 0px), var(--sal, 0px))) !important;
     padding-right: calc(0.75rem + max(env(safe-area-inset-right, 0px), var(--sar, 0px))) !important;
-    padding-top: calc(0.5rem + max(env(safe-area-inset-top, 0px), var(--sat, 0px))) !important;
-    padding-bottom: 0.5rem !important;
+    padding-top: calc(0.2rem + max(env(safe-area-inset-top, 0px), var(--sat, 0px))) !important;
+    padding-bottom: 0.3rem !important;
+  }
+  /* Compact the header on mobile so it doesn't eat vertical space. */
+  .logo-icon {
+    width: 28px !important;
+    height: 28px !important;
+    animation: none !important;
+  }
+  .logo-text {
+    font-size: 1.15rem !important;
   }
   main {
     margin-top: 0.25rem !important;
