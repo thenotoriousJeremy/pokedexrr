@@ -10,8 +10,8 @@ const path = require('path');
 const axios = require('axios');
 const sharp = require('sharp');
 const { cv } = require('opencv-wasm');
-const scryfallApi = require('./scryfallApi');
-const tcgApi = require('./tcgApi');
+// scryfallApi/tcgApi are lazy-required inside the build/preview paths only — they
+// pull in the DB module, which verify-only worker threads must not load.
 
 const SETS_DIR = path.join(__dirname, '..', 'data', 'sets');
 const DESC_BYTES = 32, CAP = 500, REF_WIDTH = 500, RATIO = 0.75, RANSAC_PX = 5.0;
@@ -46,6 +46,7 @@ function orbExtract(orb, rgba, w, h) {
 
 // MTG: page Scryfall by set code. Returns [{ name, set, number, img }].
 async function fetchMtgSet(set) {
+  const scryfallApi = require('./scryfallApi');
   let url = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(`set:${set} unique:prints`)}&order=set`;
   const cards = [];
   while (url) {
@@ -112,8 +113,8 @@ async function buildSet(game, set) {
     // Cache full card data now so the post-match /api/search is an instant local
     // card_cache hit instead of a live (throttled) provider fetch per scan.
     try {
-      if (game === 'mtg') await scryfallApi.cacheCards(cards.map(c => scryfallApi.normalizeCard(c.raw)));
-      else await tcgApi.cacheCards(cards.map(c => c.raw));
+      if (game === 'mtg') { const scryfallApi = require('./scryfallApi'); await scryfallApi.cacheCards(cards.map(c => scryfallApi.normalizeCard(c.raw))); }
+      else { const tcgApi = require('./tcgApi'); await tcgApi.cacheCards(cards.map(c => c.raw)); }
     } catch (e) { console.warn(`setIndex: caching ${set} cards failed: ${e.message}`); }
 
     const p = paths(game, set);
@@ -208,6 +209,7 @@ function deleteBuild(game, set) {
 // warn about size before committing to a full build.
 async function previewSet(game, set) {
   if (game === 'mtg') {
+    const scryfallApi = require('./scryfallApi');
     const r = await scryfallApi.scryGetRetried(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(`set:${set} unique:prints`)}`);
     return r.data.total_cards || (r.data.data ? r.data.data.length : 0);
   }
@@ -241,12 +243,14 @@ function inliers(bf, qDescFull, qKp, refDesc, refKp, count) {
   const src = [], dst = [];
   for (let i = 0; i < knn.size(); i++) {
     const m = knn.get(i);
-    if (m.size() < 2) continue;
-    const a = m.get(0), b = m.get(1);
-    if (a.distance < RATIO * b.distance) {
-      src.push(qKp[a.queryIdx * 2], qKp[a.queryIdx * 2 + 1]);
-      dst.push(refKp[a.trainIdx * 2], refKp[a.trainIdx * 2 + 1]);
+    if (m.size() >= 2) {
+      const a = m.get(0), b = m.get(1);
+      if (a.distance < RATIO * b.distance) {
+        src.push(qKp[a.queryIdx * 2], qKp[a.queryIdx * 2 + 1]);
+        dst.push(refKp[a.trainIdx * 2], refKp[a.trainIdx * 2 + 1]);
+      }
     }
+    m.delete(); // embind DMatchVector wrapper; leaks the wasm heap if not freed
   }
   knn.delete(); cand.delete();
   const good = src.length / 2;
@@ -260,22 +264,57 @@ function inliers(bf, qDescFull, qKp, refDesc, refKp, count) {
   return inl;
 }
 
-// Match query ORB features against every card in a set. q = { desc:Mat, kp:Float32Array }.
-function matchSet(q, game, set, topK = 8) {
+// Verify cards [start, end) of a set against query ORB features. Runs in a worker
+// thread (see scanWorker.js); qDesc is the raw query descriptor bytes (Uint8Array,
+// qRows x DESC_BYTES), qKp the query keypoints. Returns scored[] for the slice.
+function verifySlice(game, set, qDesc, qRows, qKp, start, end) {
   const idx = loadSet(game, set);
-  if (!idx) return null;
+  if (!idx) return [];
+  const qMat = new cv.Mat(qRows, DESC_BYTES, cv.CV_8U);
+  qMat.data.set(qDesc);
   const bf = new cv.BFMatcher(cv.NORM_HAMMING, false);
   const scored = [];
   try {
-    for (const [name, s, number, offset, count] of idx.meta) {
+    const lim = Math.min(end, idx.meta.length);
+    for (let i = start; i < lim; i++) {
+      const [name, s, number, offset, count] = idx.meta[i];
       const refDesc = idx.desc.subarray(offset * DESC_BYTES, (offset + count) * DESC_BYTES);
       const refKp = new Float32Array(idx.kp.buffer, idx.kp.byteOffset + offset * 2 * 4, count * 2);
-      const inl = inliers(bf, q.desc, q.kp, refDesc, refKp, count);
-      scored.push({ name, set: s, number, inliers: inl, score: 0 });
+      scored.push({ name, set: s, number, inliers: inliers(bf, qMat, qKp, refDesc, refKp, count), score: 0 });
     }
-  } finally { bf.delete(); }
+  } finally { bf.delete(); qMat.delete(); }
+  return scored;
+}
+
+// Match query ORB features against every card in a set. q = { desc:Mat, kp:Float32Array }.
+// Fans the per-card verify out to the worker pool; falls back to inline if the
+// pool is disabled (SCAN_WORKERS=0) or errors. Result identical either way.
+async function matchSet(q, game, set, topK = 8) {
+  const idx = loadSet(game, set);
+  if (!idx) return null;
+  const total = idx.meta.length;
+  // Copy the query descriptors off the cv heap so they survive + are cloneable.
+  const qDesc = new Uint8Array(q.desc.data.subarray(0, q.desc.rows * DESC_BYTES));
+
+  let scored = null;
+  try {
+    scored = await require('./scanPool').verify(game, set, qDesc, q.desc.rows, q.kp, total);
+  } catch (e) {
+    console.warn(`setIndex: pool verify failed, running inline: ${e.message}`);
+  }
+  if (!scored) {
+    scored = [];
+    const bf = new cv.BFMatcher(cv.NORM_HAMMING, false);
+    try {
+      for (const [name, s, number, offset, count] of idx.meta) {
+        const refDesc = idx.desc.subarray(offset * DESC_BYTES, (offset + count) * DESC_BYTES);
+        const refKp = new Float32Array(idx.kp.buffer, idx.kp.byteOffset + offset * 2 * 4, count * 2);
+        scored.push({ name, set: s, number, inliers: inliers(bf, q.desc, q.kp, refDesc, refKp, count), score: 0 });
+      }
+    } finally { bf.delete(); }
+  }
   scored.sort((a, b) => b.inliers - a.inliers);
   return scored.slice(0, topK);
 }
 
-module.exports = { ensureSet, isReady, matchSet, listBuilds, getProgress, setProgress, deleteBuild, previewSet, startBuild };
+module.exports = { ensureSet, isReady, matchSet, verifySlice, listBuilds, getProgress, setProgress, deleteBuild, previewSet, startBuild };

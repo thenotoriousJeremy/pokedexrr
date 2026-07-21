@@ -216,4 +216,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Bindarr Server running on port ${PORT}`);
   console.log(`Access local: http://localhost:${PORT}`);
   console.log(`=========================================`);
+  // Warm the scan worker pool so the first set-scoped scan doesn't pay worker
+  // spawn + opencv-wasm load. No-op when SCAN_WORKERS=0.
+  try { require('./scanPool').getPool(); } catch (e) { console.warn('scanPool warmup skipped:', e.message); }
 });

@@ -152,7 +152,8 @@ function readOrb(db, offset, count) {
   fs.readSync(db.descFd, descBuf, 0, descBuf.length, offset * DESC_BYTES);
   const kpBuf = Buffer.alloc(count * 2 * 4);
   fs.readSync(db.kpFd, kpBuf, 0, kpBuf.length, offset * 2 * 4);
-  const desc = cv.matFromArray(count, DESC_BYTES, cv.CV_8U, Array.from(descBuf));
+  const desc = new cv.Mat(count, DESC_BYTES, cv.CV_8U);
+  desc.data.set(descBuf); // faster than matFromArray(Array.from(buf)); same bytes
   const kp = new Float32Array(kpBuf.buffer, kpBuf.byteOffset, count * 2);
   return { desc, kp };
 }
@@ -180,12 +181,14 @@ function inlierCount(bf, qDesc, qKp, cand) {
   const src = [], dst = [];
   for (let i = 0; i < knn.size(); i++) {
     const m = knn.get(i);
-    if (m.size() < 2) continue;
-    const m0 = m.get(0), m1 = m.get(1);
-    if (m0.distance < RATIO * m1.distance) {
-      src.push(qKp[m0.queryIdx * 2], qKp[m0.queryIdx * 2 + 1]);
-      dst.push(cand.kp[m0.trainIdx * 2], cand.kp[m0.trainIdx * 2 + 1]);
+    if (m.size() >= 2) {
+      const m0 = m.get(0), m1 = m.get(1);
+      if (m0.distance < RATIO * m1.distance) {
+        src.push(qKp[m0.queryIdx * 2], qKp[m0.queryIdx * 2 + 1]);
+        dst.push(cand.kp[m0.trainIdx * 2], cand.kp[m0.trainIdx * 2 + 1]);
+      }
     }
+    m.delete(); // embind DMatchVector wrapper; leaks the wasm heap if not freed
   }
   knn.delete();
   const good = src.length / 2;
@@ -217,7 +220,16 @@ function verifyGame(cardBuf, game, q, bf, recall, topK) {
     scored.push({ name: cand.name, set: cand.set, number: cand.number, score: cand.score, inliers });
   }
   scored.sort((a, b) => (b.inliers - a.inliers) || (b.score - a.score));
-  return { verified: true, candidates: scored.slice(0, topK), top: scored[0] ? scored[0].inliers : 0 };
+  const top = scored[0];
+  // SCAN_RANK_LOG=1: measure where the ORB winner sat in the CLIP recall list.
+  // 0-indexed rank; if these stay well below K, RECALL_K can be lowered losslessly.
+  // Appended to a file (flushed) instead of stdout, which block-buffers through pipes.
+  if (process.env.SCAN_RANK_LOG && top && top.inliers > 0) {
+    const rank = recall.findIndex(r => r.set === top.set && r.number === top.number);
+    fs.appendFileSync(path.join(__dirname, '..', 'scan-rank.log'),
+      `game=${game} K=${recall.length} winnerClipRank=${rank} inliers=${top.inliers} name=${top.name}\n`);
+  }
+  return { verified: true, candidates: scored.slice(0, topK), top: top ? top.inliers : 0 };
 }
 
 // Identify a card image. Auto-detects the game: verifies the requested game
@@ -241,7 +253,7 @@ async function match(imageBuffer, requestedGame, topK = 8, setCode = '', opts = 
     // Set-scoped fast path: if the user gave a set code and that set's index is
     // built, match only within it (~300 cards) — accurate, no global recall.
     if (setCode && setIndex.isReady(requestedGame, setCode)) {
-      const candidates = setIndex.matchSet(q, requestedGame, setCode, topK);
+      const candidates = await setIndex.matchSet(q, requestedGame, setCode, topK);
       if (candidates) return { game: requestedGame, verified: true, candidates, crop, scoped: true };
     }
 

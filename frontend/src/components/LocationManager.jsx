@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Trash2, X, MoreVertical, Settings, LayoutList, RefreshCw, Lock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp, Edit3 } from 'lucide-react';
+import { Plus, Trash2, X, MoreVertical, Settings, RefreshCw, Lock, LayoutGrid, List, MousePointerClick, ChevronDown, ChevronUp, Edit3 } from 'lucide-react';
 import { sortCardsByOrder } from '../utils/cardSort';
 import { getFoilOverlayClass, getPrintingBadgeLabel, getPrintingBadgeStyle } from '../utils/cardPrinting';
 import { getCardRarityBorder, getRarityBadgeStyle, getRarityBadgeLabel } from '../utils/cardRarity';
 import CardInspectorModal from './CardInspectorModal';
 import { useMultiSelect } from '../utils/useMultiSelect';
 import { isBinderType as computeIsBinder } from '../utils/cardOptions';
-import CompartmentView, { getPrimaryCategory, FocusedCardInfo } from './CompartmentView';
+import CompartmentView, { FocusedCardInfo } from './CompartmentView';
 import { SortBuilder, FilterBuilder } from './SortFilterBuilder';
 import CreateContainerModal from './CreateContainerModal';
 import { useBackGuard } from '../utils/useBackGuard';
@@ -31,7 +31,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
 
   const [capacityUpdatePending, setCapacityUpdatePending] = useState(null);
   const [showKebabMenu, setShowKebabMenu] = useState(false);
-  const [showCategoryMap, setShowCategoryMap] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
   const [sortDraft, setSortDraft] = useState([]);
   const [filterDraft, setFilterDraft] = useState([]);
@@ -366,15 +365,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
     return sortCardsByOrder([...cards], unsortedSort, selectedLoc?.foil_sorting, setsList);
   }, [allCards, unsortedSearch, unsortedSort, selectedLoc, setsList]);
 
-  const availableCategories = useMemo(() => {
-    const cats = new Set();
-    allCards.forEach(c => {
-      const cat = getPrimaryCategory(c, selectedLoc?.sort_order, setsList);
-      if (cat) cats.add(cat);
-    });
-    return Array.from(cats).sort();
-  }, [allCards, selectedLoc?.sort_order, setsList]);
-
   // Distinct values per filterable field from the cards actually owned, so the
   // FilterBuilder value box suggests real options (e.g. subtypes like "Basic")
   // instead of only a hardcoded list.
@@ -578,32 +568,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
       await fetch(`/api/compartments/${compartmentId}${updateAll ? '?updateAll=true' : ''}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ capacity }) });
       await fetchCompartments(activeLocationId);
     } catch (err) { console.error(err); showToast('Error resizing compartment.'); }
-  };
-
-  // Files one sorting category to exactly one page: add it to the target page
-  // and strip it from any other page that had it. Empty target = unassign.
-  const handleAssignCategoryToPage = async (filterVal, compartmentId) => {
-    if (selectedLoc?.locked) {
-      showToast('Container is locked. Unlock it first to change category assignments.');
-      return;
-    }
-    const updates = [];
-    for (const c of compartments) {
-      const has = (c.assignedFilters || []).includes(filterVal);
-      if (compartmentId && String(c.id) === String(compartmentId)) {
-        if (!has) updates.push({ id: c.id, filters: [...(c.assignedFilters || []), filterVal] });
-      } else if (has) {
-        updates.push({ id: c.id, filters: (c.assignedFilters || []).filter(f => f !== filterVal) });
-      }
-    }
-    if (!updates.length) return;
-    try {
-      await Promise.all(updates.map(u => fetch(`/api/compartments/${u.id}/filters`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filters: u.filters })
-      })));
-      showToast('Category assignment updated.');
-      await fetchCompartments(activeLocationId);
-    } catch (err) { console.error(err); showToast('Error assigning category.'); }
   };
 
   const handleMoveCard = async (entryId, compartmentId) => {
@@ -1209,43 +1173,6 @@ function LocationManager({ statsTrigger, onUpdate, showToast, selectedLocationId
                 {pickedEntryId
                   ? (isBinderType ? 'Now tap a pocket to place it (tap a filled pocket to swap).' : 'Now tap a card to drop it in front of, or an empty slot.')
                   : 'Tap a card here or in Unsorted to pick it up.'}
-              </div>
-            )}
-
-            {isBinderType && compartments.length > 0 && availableCategories.length > 0 && (
-              <div style={{ background: 'rgba(0,0,0,0.1)', padding: '0.4rem 0.6rem', borderRadius: 'var(--radius-sm)' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => setShowCategoryMap(s => !s)}
-                  style={{ fontSize: '0.72rem', padding: '0.25rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                >
-                  <LayoutList size={13} /> Category to Page map {showCategoryMap ? '▾' : '▸'}
-                </button>
-                {showCategoryMap && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', marginTop: '0.5rem' }}>
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                      Pick which page each sorting category files onto. Unset pages accept any category.
-                    </span>
-                    {availableCategories.map(cat => {
-                      const owner = compartments.find(c => (c.assignedFilters || []).includes(cat));
-                      return (
-                        <div key={cat} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <span style={{ fontSize: '0.72rem', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cat}</span>
-                          <select
-                            className="select-control"
-                            value={owner ? owner.id : ''}
-                            onChange={(e) => handleAssignCategoryToPage(cat, e.target.value)}
-                            style={{ fontSize: '0.7rem', padding: '0.15rem 0.3rem', width: '140px' }}
-                          >
-                            <option value="">Any page</option>
-                            {compartments.map(c => <option key={c.id} value={c.id}>{c.display_label}</option>)}
-                          </select>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
               </div>
             )}
 

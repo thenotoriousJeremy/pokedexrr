@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.18] - 2026-07-20
+
+### Fixed
+- **Scanning died after ~67 cards** with `preprocessCard failed: undefined` / `scan-match failed: undefined`, permanently until the backend restarted. Root cause: the ORB verify loops (`inlierCount` in `scanMatch.js`, `inliers` in `setIndex.js`) leaked an embind `DMatchVector` wrapper (`knn.get(i)`) on every match row — it was never `.delete()`d. The opencv-wasm heap grows and never shrinks, so the leak ratcheted memory up (128 MB → 1 GB+) until `memory.grow()` failed and OpenCV aborted with a numeric error (hence the `undefined` message). Every subsequent OpenCV call then failed instantly, and since the backend process held the dead heap, restarting the app didn't help. Fixed by deleting the wrapper each iteration; the heap now stays flat.
+
+### Performance
+- **Set-scoped scan verification is now parallel** across a warmed worker-thread pool (`backend/src/scanPool.js`, `scanWorker.js`), each worker holding its own opencv-wasm instance. The independent per-printing ORB verifies are sharded across cores; results are identical to the previous single-threaded ranking (lossless). Measured on a 771-card set: **7079 ms → 2306 ms (4 workers) → 1457 ms (8 workers)**. Configurable via the new `SCAN_WORKERS` env var (default `min(4, cores-1)`, `0` disables). `matchSet` is now async; the pool is warmed at server startup so the first scan doesn't pay worker spawn + wasm load.
+- Faster candidate feature loading in the global path: `readOrb` builds descriptor Mats via `Mat.data.set()` instead of `matFromArray(Array.from(buf))` (~53 ms/scan saved on 250 candidates; identical bytes).
+- Worker threads no longer open a SQLite connection each: `scryfallApi`/`tcgApi` (which pull in the DB) are lazy-required inside the build/preview paths only, keeping the verify path DB-free.
+
+### Diagnostics
+- Opt-in `SCAN_RANK_LOG=1` appends one line per confident scan to `backend/scan-rank.log` recording where the winning card sat in the CLIP recall list — for measuring whether the global-path `RECALL_K` (250) can be lowered. Off by default, zero overhead.
+
+### Storage
+- Removed the category-map filing feature from the storage view (`showCategoryMap` / category-to-page filing) in `LocationManager.jsx`.
+
 ## [1.4.0] - 2026-07-15
 
 ### Features
