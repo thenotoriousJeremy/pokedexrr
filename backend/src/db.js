@@ -434,6 +434,7 @@ async function createCompartments(locationId, count, capacity) {
 
 module.exports = {
   dbConnection,
+  dbPath,
   run,
   get,
   all,

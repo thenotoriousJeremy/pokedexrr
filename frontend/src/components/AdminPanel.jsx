@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users, Globe, Database, Play, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Shield, UserPlus, Key, Trash2, ToggleLeft, ToggleRight, Search, Users, Globe, Database, Play, RefreshCw, AlertTriangle, HardDriveDownload, Download } from 'lucide-react';
 import { useBackGuard } from '../utils/useBackGuard';
 
 const formatBytes = (n) => {
@@ -40,9 +40,14 @@ function AdminPanel({ showToast }) {
   const [previewLoading, setPreviewLoading] = useState(false);
   const pollRef = useRef(null);
 
+  // Database backup states
+  const [backups, setBackups] = useState([]);
+  const [backupLoading, setBackupLoading] = useState(false);
+
   useEffect(() => {
     fetchUsers();
     fetchSettings();
+    fetchBackups();
     fetchBuilds().then((active) => { if (active) startPolling(); });
     return stopPolling;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -148,6 +153,56 @@ function AdminPanel({ showToast }) {
     } catch (err) {
       console.error(err);
       showToast("Error seeding database.");
+    }
+  };
+
+  const fetchBackups = async () => {
+    try {
+      const res = await fetch('/api/admin/backups');
+      if (res.ok) {
+        const data = await res.json();
+        setBackups(data.backups || []);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDownloadBackup = async (file) => {
+    try {
+      const res = await fetch(`/api/admin/backups/${encodeURIComponent(file)}/download`);
+      if (!res.ok) { showToast('Download failed.'); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      showToast('Error downloading backup.');
+    }
+  };
+
+  const handleBackup = async () => {
+    setBackupLoading(true);
+    try {
+      const res = await fetch('/api/admin/backups', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(`Backup created: ${data.file} (${formatBytes(data.size)}).`);
+        fetchBackups();
+      } else {
+        showToast(data.error || 'Backup failed.');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error creating backup.');
+    } finally {
+      setBackupLoading(false);
     }
   };
 
@@ -566,6 +621,66 @@ function AdminPanel({ showToast }) {
                       );
                     });
                   })()}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Database Backup Panel */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <HardDriveDownload size={18} style={{ color: 'var(--accent-red)' }} />
+              Database Backup
+            </h3>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleBackup}
+              disabled={backupLoading}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', height: '34px' }}
+            >
+              {backupLoading ? <div className="spinner" style={{ width: '14px', height: '14px', margin: 0, borderWidth: '2px' }}></div> : <><HardDriveDownload size={14} /> Back Up Now</>}
+            </button>
+          </div>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: 0, lineHeight: 1.4 }}>
+            Writes a consistent snapshot of the entire database (users, collections, tags, decks, storage, settings) to a file on the server. The newest {10} are kept. Download one to keep it off-server. To restore: stop the server, replace <code>pokemon_cards.db</code> with a backup file, and restart.
+          </p>
+
+          {backups.length === 0 ? (
+            <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+              No backups yet.
+            </div>
+          ) : (
+            <div className="collection-table-wrapper" style={{ overflowX: 'auto' }}>
+              <table className="collection-table">
+                <thead>
+                  <tr>
+                    <th>File</th>
+                    <th>Created</th>
+                    <th>Size</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {backups.map(b => (
+                    <tr key={b.file}>
+                      <td style={{ fontWeight: 600, color: 'var(--text-strong)', fontFamily: 'monospace', fontSize: '0.78rem' }}>{b.file}</td>
+                      <td style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{new Date(b.created_at).toLocaleString()}</td>
+                      <td style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{formatBytes(b.size)}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-icon-only"
+                          title="Download backup"
+                          onClick={() => handleDownloadBackup(b.file)}
+                        >
+                          <Download size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

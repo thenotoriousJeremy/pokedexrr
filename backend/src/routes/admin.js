@@ -1,11 +1,14 @@
 const express = require('express');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const db = require('../db');
 const tcgApi = require('../tcgApi');
 const scryfallApi = require('../scryfallApi');
 const setIndex = require('../setIndex');
 const { parseCardRow } = require('../utils/priceHelpers');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { BACKUP_DIR, listBackups, createBackup } = require('../backup');
 
 const router = express.Router();
 
@@ -317,6 +320,31 @@ router.delete('/set-indexes/:game/:set', (req, res) => {
   if (!isGame(game)) return res.status(400).json({ error: 'invalid game' });
   setIndex.deleteBuild(game, set);
   res.json({ message: `Removed ${game} ${set} index` });
+});
+
+// --- Database backup --- (see ../backup.js)
+
+router.get('/backups', (req, res) => {
+  res.json({ dir: BACKUP_DIR, backups: listBackups() });
+});
+
+router.post('/backups', async (req, res) => {
+  try {
+    const meta = await createBackup();
+    res.status(201).json(meta);
+  } catch (error) {
+    console.error('BACKUP ERROR:', error);
+    res.status(500).json({ error: 'Backup failed', message: error.message });
+  }
+});
+
+router.get('/backups/:file/download', (req, res) => {
+  const name = path.basename(req.params.file); // strip any path traversal
+  const full = path.join(BACKUP_DIR, name);
+  if (!name.endsWith('.bak') || !fs.existsSync(full)) {
+    return res.status(404).json({ error: 'Backup not found' });
+  }
+  res.download(full);
 });
 
 module.exports = router;

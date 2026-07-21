@@ -153,6 +153,9 @@ db.initDb()
         console.error('Failed to purge expired sessions:', err);
       });
     }, 1000 * 60 * 60 * 24);
+
+    // Periodic auto-backup (BACKUP_INTERVAL_HOURS, default 24; 0 disables)
+    require('./backup').startAutoBackup();
   })
   .catch(err => {
     console.error('Failed to initialize database:', err);
