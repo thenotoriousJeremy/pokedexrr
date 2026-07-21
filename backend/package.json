@@ -1,6 +1,6 @@
 {
   "name": "bindarr-backend",
-  "version": "1.4.21",
+  "version": "1.4.22",
   "description": "Backend API for Bindarr",
   "main": "src/server.js",
   "scripts": {
