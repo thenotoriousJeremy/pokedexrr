@@ -87,24 +87,31 @@ function CameraScanner({ onAddSuccess, showToast }) {
   // Which game the current layout belongs to. 'mtg' is its own layout; every
   // other layout value is a Pokémon sub-layout.
   const scanGame = cardLayout === 'mtg' ? 'mtg' : 'pokemon';
-  // Set code for set-scoped scanning (both games). Persisted per game so
-  // switching Pokémon<->MTG restores that game's remembered set.
-  const [scanSetCode, setScanSetCodeState] = useState('');
-  const setScanSetCode = (v) => { const val = v || ''; setScanSetCodeState(val); localStorage.setItem(`scanner_set_${scanGame}`, val); };
+  // Set-scoped scanning across one OR MORE sets (both games). Persisted per game
+  // as a comma-joined code list so switching Pokémon<->MTG restores that game's
+  // sets. Scanning within the chosen sets (~300 cards each) is far more accurate
+  // than a global search.
+  const [scanSetCodes, setScanSetCodesState] = useState([]);
+  const persistSets = (arr) => { setScanSetCodesState(arr); localStorage.setItem(`scanner_set_${scanGame}`, arr.join(',')); };
+  const addSetCode = (code) => { const c = (code || '').trim(); if (c && !scanSetCodes.some(x => x.toLowerCase() === c.toLowerCase())) persistSets([...scanSetCodes, c]); };
+  const removeSetCode = (code) => persistSets(scanSetCodes.filter(c => c !== code));
+  const scanSetParam = scanSetCodes.join(',');
+  const [setInput, setSetInput] = useState('');
   const [setList, setSetList] = useState([]);        // {id,name,...} for the active game
   const [setSearchOpen, setSetSearchOpen] = useState(false);
   // Code fed to the scanner: pokemontcg.io set id as-is; for MTG the bare
   // Scryfall code (sets.id is stored prefixed as "mtg-<code>").
   const setScanCode = (s) => scanGame === 'mtg' ? (s.ptcgo_code || (s.id || '').replace(/^mtg-/, '')) : s.id;
-  const setQuery = scanSetCode.trim().toLowerCase();
+  const setQuery = setInput.trim().toLowerCase();
   const setSuggestions = setQuery
-    ? setList.filter(s => [s.id, s.ptcgo_code, s.name].some(v => (v || '').toLowerCase().includes(setQuery))).slice(0, 8)
+    ? setList.filter(s => !scanSetCodes.some(c => c.toLowerCase() === (setScanCode(s) || '').toLowerCase())
+        && [s.id, s.ptcgo_code, s.name].some(v => (v || '').toLowerCase().includes(setQuery))).slice(0, 8)
     : [];
-  // Resolve the entered code to its set record so the UI can show the full name
-  // next to the id (e.g. "Foundations (FDN)"). Falls back to the bare code for
+  // Resolve a code to its set record so the UI can show the full name next to
+  // the code (e.g. "Foundations (FDN)"). Falls back to the bare code for
   // free-typed sets not in the cached list.
-  const currentSet = setList.find(s => (setScanCode(s) || '').toLowerCase() === setQuery);
-  const setLabel = currentSet ? `${currentSet.name} (${setScanCode(currentSet)})` : scanSetCode;
+  const labelForCode = (code) => { const m = setList.find(s => (setScanCode(s) || '').toLowerCase() === code.toLowerCase()); return m ? `${m.name} (${setScanCode(m)})` : code; };
+  const setLabelJoined = scanSetCodes.map(labelForCode).join(', ');
 
   const [debugHashImg, setDebugHashImg] = useState('');
   const [debugCandidates, setDebugCandidates] = useState([]);
@@ -265,7 +272,8 @@ function CameraScanner({ onAddSuccess, showToast }) {
   // On game switch: restore that game's remembered set and load its set list
   // (for the search autocomplete).
   useEffect(() => {
-    setScanSetCodeState(localStorage.getItem(`scanner_set_${scanGame}`) || '');
+    setScanSetCodesState((localStorage.getItem(`scanner_set_${scanGame}`) || '').split(',').map(s => s.trim()).filter(Boolean));
+    setSetInput('');
     setSetSearchOpen(false);
     fetch(`/api/sets?game=${scanGame}`).then(r => r.ok ? r.json() : []).then(setSetList).catch(() => setSetList([]));
   }, [scanGame]);
@@ -274,13 +282,13 @@ function CameraScanner({ onAddSuccess, showToast }) {
   // match within just that set (~300 cards) — accurate and fast. Polls until the
   // one-time build finishes.
   useEffect(() => {
-    if (!scanSetCode) { setSetPrep('idle'); setSetBuildProgress(null); return; }
+    if (!scanSetParam) { setSetPrep('idle'); setSetBuildProgress(null); return; }
     let cancelled = false, timer, debounce;
     const poll = async () => {
       try {
         const r = await fetch('/api/prepare-set', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ game: scanGame, set: scanSetCode }),
+          body: JSON.stringify({ game: scanGame, set: scanSetParam }),
         });
         const d = await r.json();
         if (cancelled) return;
@@ -295,7 +303,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
     // Scryfall into 429s). Wait for a typing pause, then prepare once.
     debounce = setTimeout(() => { setSetPrep('building'); poll(); }, 600);
     return () => { cancelled = true; clearTimeout(debounce); if (timer) clearTimeout(timer); };
-  }, [scanGame, scanSetCode]);
+  }, [scanGame, scanSetParam]);
 
   // Detect manual-exposure support on the live track. Present on most Android
   // Chrome back cameras; absent on iOS Safari and many desktop webcams (slider
@@ -723,14 +731,14 @@ function CameraScanner({ onAddSuccess, showToast }) {
             const resp = await fetch('/api/scan-match', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ game: scanGame, image: imageData, set: scanSetCode, recallK: profile.recallK, orb: profile.orb }),
+              body: JSON.stringify({ game: scanGame, image: imageData, set: scanSetParam, recallK: profile.recallK, orb: profile.orb }),
             });
             if (scanId !== currentScanId.current) return;
             if (resp.ok) {
               const { game: matchGame, verified, candidates, crop, scoped } = await resp.json();
-              console.log('Scan candidates:', matchGame, scoped ? `(set-scoped ${scanSetCode})` : '(GLOBAL)', verified ? 'ORB' : 'CLIP', candidates);
+              console.log('Scan candidates:', matchGame, scoped ? `(set-scoped ${scanSetParam})` : '(GLOBAL)', verified ? 'ORB' : 'CLIP', candidates);
               if (crop) setDebugHashImg(crop); // show the server's auto-cropped card
-              setDebugScoped(scoped ? scanSetCode : false);
+              setDebugScoped(scoped ? scanSetParam : false);
               setDebugCandidates((candidates || []).map(c => ({ ...c, verified })));
               const top = candidates && candidates[0];
               const confident = top && (verified ? top.inliers >= SCAN_MATCH_MIN_INLIERS : top.score >= SCAN_MATCH_MIN_SCORE);
@@ -1073,20 +1081,20 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 const bp = setBuildProgress;
                 const pct = bp && bp.total > 0 ? Math.round((bp.done / bp.total) * 100) : null;
                 let text;
-                if (!scanSetCode) {
-                  text = 'Highly recommended: pick your set below. Scans are far more accurate scoped to one set — without it we search every set and may misidentify the card.';
+                if (!scanSetCodes.length) {
+                  text = 'Highly recommended: pick your set(s) below. Scans are far more accurate scoped to your sets — without it we search every set and may misidentify the card.';
                 } else if (setPrep === 'building') {
                   text = pct === null
-                    ? `Preparing set ${setLabel}… fetching card list (one-time). Scans work meanwhile.`
-                    : `Building set ${setLabel}: ${bp.done}/${bp.total} cards (${pct}%). One-time; scans work meanwhile.`;
+                    ? `Preparing ${setLabelJoined}… fetching card list (one-time). Scans work meanwhile.`
+                    : `Building ${setLabelJoined}: ${bp.done}/${bp.total} cards (${pct}%). One-time; scans work meanwhile.`;
                 } else if (setPrep === 'ready') {
-                  text = `Set ${setLabel} ready: exact matches, no set to pick.`;
+                  text = `${setLabelJoined} ready: exact matches within your set${scanSetCodes.length > 1 ? 's' : ''}.`;
                 } else {
-                  text = `Set ${setLabel}.`;
+                  text = setLabelJoined;
                 }
                 return (
                   <>
-                    <p style={{ fontSize: '0.7rem', color: !scanSetCode ? 'var(--accent-yellow)' : setPrep === 'ready' ? 'var(--type-grass)' : 'var(--text-secondary)', margin: 0, textAlign: 'center', fontWeight: 600 }}>
+                    <p style={{ fontSize: '0.7rem', color: !scanSetCodes.length ? 'var(--accent-yellow)' : setPrep === 'ready' ? 'var(--type-grass)' : 'var(--text-secondary)', margin: 0, textAlign: 'center', fontWeight: 600 }}>
                       {text}
                     </p>
                     {setPrep === 'building' && pct !== null && (
@@ -1097,27 +1105,47 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   </>
                 );
               })()}
+              {scanSetCodes.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                  {scanSetCodes.map((code) => (
+                    <span key={code} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.2rem 0.5rem', fontSize: '0.7rem', fontWeight: 600, background: 'rgba(255,255,255,0.06)', border: '1px solid var(--type-grass)', borderRadius: '999px', color: 'var(--text-strong)' }}>
+                      {labelForCode(code)}
+                      <button type="button" onClick={() => removeSetCode(code)} aria-label={`Remove ${code}`} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 0, lineHeight: 1, fontSize: '0.85rem' }}>&times;</button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Set</label>
+                <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Add set</label>
                 <input
                   type="text"
-                  value={scanSetCode}
-                  onChange={(e) => { setScanSetCode(e.target.value); setSetSearchOpen(true); }}
+                  value={setInput}
+                  onChange={(e) => { setSetInput(e.target.value); setSetSearchOpen(true); }}
                   onFocus={() => setSetSearchOpen(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const q = setInput.trim().toLowerCase();
+                      if (!q) return;
+                      // Snap a typed name/code to the canonical dropdown code so
+                      // "Foundations" and "FDN" don't build twice; else add as-is.
+                      const m = setList.find(s => [s.id, s.ptcgo_code, s.name].some(v => (v || '').toLowerCase() === q));
+                      addSetCode(m ? setScanCode(m) : setInput.trim());
+                      setSetInput(''); setSetSearchOpen(false);
+                    }
+                  }}
                   onBlur={() => setTimeout(() => {
                     setSetSearchOpen(false);
-                    // Snap typed name/code to the same canonical code the dropdown
-                    // produces, so "Foundations" and "FDN" don't build twice.
-                    const q = scanSetCode.trim().toLowerCase();
+                    const q = setInput.trim().toLowerCase();
                     if (!q) return;
                     const m = setList.find(s => [s.id, s.ptcgo_code, s.name].some(v => (v || '').toLowerCase() === q));
-                    if (m) { const code = setScanCode(m); if (code && code !== scanSetCode) setScanSetCode(code); }
+                    if (m) { addSetCode(setScanCode(m)); setSetInput(''); }
                   }, 150)}
                   placeholder={scanGame === 'mtg' ? 'Search set name or code (e.g. Foundations, FDN)' : 'Search set name or id (e.g. Surging Sparks, sv8)'}
-                  style={{ flex: 1, padding: '0.3rem 0.5rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.06)', border: `1px solid ${scanSetCode ? 'var(--type-grass)' : 'var(--border-glass)'}`, borderRadius: 'var(--radius-sm)', color: 'var(--text-strong)' }}
+                  style={{ flex: 1, padding: '0.3rem 0.5rem', fontSize: '0.75rem', background: 'rgba(255,255,255,0.06)', border: `1px solid ${scanSetCodes.length ? 'var(--type-grass)' : 'var(--border-glass)'}`, borderRadius: 'var(--radius-sm)', color: 'var(--text-strong)' }}
                 />
-                {scanSetCode && (
-                  <button type="button" className="btn btn-secondary" style={{ fontSize: '0.6rem', padding: '0.2rem 0.4rem' }} onClick={() => { setScanSetCode(''); setSetSearchOpen(false); }}>Clear</button>
+                {scanSetCodes.length > 0 && (
+                  <button type="button" className="btn btn-secondary" style={{ fontSize: '0.6rem', padding: '0.2rem 0.4rem' }} onClick={() => { persistSets([]); setSetInput(''); setSetSearchOpen(false); }}>Clear</button>
                 )}
               </div>
               {setSearchOpen && setSuggestions.length > 0 && (
@@ -1126,7 +1154,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
                     <button
                       key={s.id}
                       type="button"
-                      onMouseDown={() => { setScanSetCode(setScanCode(s)); setSetSearchOpen(false); }}
+                      onMouseDown={() => { addSetCode(setScanCode(s)); setSetInput(''); setSetSearchOpen(false); }}
                       style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', width: '100%', padding: '0.4rem 0.6rem', background: 'none', border: 'none', color: 'var(--text-strong)', fontSize: '0.75rem', textAlign: 'left', cursor: 'pointer' }}
                     >
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
@@ -1273,7 +1301,7 @@ function CameraScanner({ onAddSuccess, showToast }) {
               style={{ flexShrink: 0, padding: '0 0.7rem', position: 'relative' }}
             >
               <Settings size={16} />
-              {!scanSetCode && <span style={{ position: 'absolute', top: 4, right: 4, width: 7, height: 7, borderRadius: '50%', background: 'var(--accent-yellow)' }} />}
+              {!scanSetCodes.length && <span style={{ position: 'absolute', top: 4, right: 4, width: 7, height: 7, borderRadius: '50%', background: 'var(--accent-yellow)' }} />}
             </button>
           </div>
         </div>

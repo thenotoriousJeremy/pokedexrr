@@ -1,6 +1,7 @@
 const axios = require('axios');
 const db = require('./db');
 const { parseCardRow } = require('./utils/priceHelpers');
+const { parseSetList, setSqlFilter } = require('./utils/setQuery');
 
 // Scryfall needs no API key but asks callers to identify themselves and accept
 // JSON. See https://scryfall.com/docs/api. IDs from Scryfall are UUIDs / set-num
@@ -142,7 +143,10 @@ async function fetchFromScryfall(q, lang, retries = 3) {
 async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scope = 'database', userId = null, lang = null, allPrints = false) {
   const cleanName = (nameQuery || '').trim();
   const cleanNumber = (numberQuery || '').trim();
-  const cleanSet = (setQuery || '').trim();
+  // Set field may list several sets ("ltr, ltc") — match any of them. Scryfall
+  // uses `(set:ltr or set:ltc)`; a single set stays the plain `set:ltr` form.
+  const setList = parseSetList(setQuery);
+  const scrySet = setList.length === 1 ? `set:${setList[0]}` : `(${setList.map(s => `set:${s}`).join(' or ')})`;
 
   // Scanner path: identify-by-image knows the card but not the printing, so it
   // asks for every printing of an exact name (Scryfall collapses to one printing
@@ -151,7 +155,7 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
     try {
       // A set code narrows to that printing (exact, usually one result -> fast
       // path in the scanner); without it, return every printing to pick from.
-      const q = cleanSet ? `!"${cleanName}" set:${cleanSet} unique:prints` : `!"${cleanName}" unique:prints`;
+      const q = setList.length ? `!"${cleanName}" ${scrySet} unique:prints` : `!"${cleanName}" unique:prints`;
       const raw = await fetchFromScryfall(q, lang);
       if (raw.length) {
         const cards = raw.map(c => normalizeCard(c, lang)).slice(0, 60);
@@ -178,7 +182,8 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
     const params = [userId];
     if (cleanName) { sql += ` AND cc.name LIKE ?`; params.push(`%${cleanName}%`); }
     if (cleanNumber) { sql += ` AND (cc.number = ? OR CAST(cc.number AS INTEGER) = CAST(? AS INTEGER))`; params.push(cleanNumber, cleanNumber); }
-    if (cleanSet) { sql += ` AND (cc.set_name LIKE ? OR cc.set_id = ?)`; params.push(`%${cleanSet}%`, cleanSet); }
+    const collSetFilter = setSqlFilter(setList, 'cc');
+    if (collSetFilter) { sql += ` AND ${collSetFilter.clause}`; params.push(...collSetFilter.params); }
     sql += ` GROUP BY cc.id LIMIT 50`;
     return (await db.all(sql, params)).map(parseCardRow);
   }
@@ -190,7 +195,8 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
     const params = [];
     if (cleanName) { sql += ` AND name LIKE ?`; params.push(`%${cleanName}%`); }
     if (cleanNumber) { sql += ` AND (number = ? OR CAST(number AS INTEGER) = CAST(? AS INTEGER))`; params.push(cleanNumber, cleanNumber); }
-    if (cleanSet) { sql += ` AND (set_name LIKE ? OR set_id = ?)`; params.push(`%${cleanSet}%`, cleanSet); }
+    const localSetFilter = setSqlFilter(setList);
+    if (localSetFilter) { sql += ` AND ${localSetFilter.clause}`; params.push(...localSetFilter.params); }
     sql += ` LIMIT 50`;
 
     localResults = await db.all(sql, params);
@@ -222,13 +228,17 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', scop
   // Run specific query (set+cn or name+cn) AND the broad name-only query, then
   // merge results: exact matches first, remaining alternatives sorted by cn.
   // This way the user always sees the likely match at top with other printings below.
-  const specificQuery = (cleanSet && strippedNumber) ? `set:${cleanSet} cn:${strippedNumber}`
+  const specificQuery = (setList.length && strippedNumber) ? `${scrySet} cn:${strippedNumber}`
     : (cleanName && strippedNumber) ? `${cleanName} cn:${strippedNumber}`
     : null;
-  const broadQuery = cleanName || null;
+  // Constrain the name search to the chosen set(s) so a multi-set search
+  // ("ltr, ltc") returns only those sets, not every printing. Set-only (no
+  // name) falls back to browsing the set(s).
+  const setConstraint = setList.length ? ` ${scrySet}` : '';
+  const broadQuery = cleanName ? `${cleanName}${setConstraint}` : (setList.length ? scrySet : null);
   // Last resort: first word only (e.g. "Adamant" from "Adamant Will")
   const firstWord = cleanName.split(/\s+/)[0];
-  const fallbackQuery = (firstWord && firstWord !== cleanName) ? firstWord : null;
+  const fallbackQuery = (firstWord && firstWord !== cleanName) ? `${firstWord}${setConstraint}` : null;
 
   // Helper: try a Scryfall query, return [] on 404/error.
   const tryQuery = async (q) => {

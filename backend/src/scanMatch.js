@@ -12,6 +12,7 @@ const sharp = require('sharp');
 const { cv } = require('opencv-wasm');
 const embedMatch = require('./embedMatch');
 const setIndex = require('./setIndex');
+const { parseSetList } = require('./utils/setQuery');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const RECALL_K = 250;      // CLIP candidates to geometrically verify
@@ -250,11 +251,14 @@ async function match(imageBuffer, requestedGame, topK = 8, setCode = '', opts = 
   const bf = new cv.BFMatcher(cv.NORM_HAMMING, false);
   const q = await queryOrb(orb, cardBuf);
   try {
-    // Set-scoped fast path: if the user gave a set code and that set's index is
-    // built, match only within it (~300 cards) — accurate, no global recall.
-    if (setCode && setIndex.isReady(requestedGame, setCode)) {
-      const candidates = await setIndex.matchSet(q, requestedGame, setCode, topK);
-      if (candidates) return { game: requestedGame, verified: true, candidates, crop, scoped: true };
+    // Set-scoped fast path: if the user gave set code(s) and their index is
+    // built, match only within them (~300 cards each) — accurate, no global
+    // recall. Multiple sets ("ltr,ltc") match each ready set and merge by inliers.
+    const readySets = parseSetList(setCode).filter(s => setIndex.isReady(requestedGame, s));
+    if (readySets.length) {
+      const perSet = await Promise.all(readySets.map(s => setIndex.matchSet(q, requestedGame, s, topK)));
+      const merged = perSet.filter(Boolean).flat().sort((a, b) => b.inliers - a.inliers).slice(0, topK);
+      if (merged.length) return { game: requestedGame, verified: true, candidates: merged, crop, scoped: true };
     }
 
     const order = requestedGame === 'pokemon' ? ['pokemon', 'mtg'] : ['mtg', 'pokemon'];

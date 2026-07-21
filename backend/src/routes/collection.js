@@ -6,6 +6,7 @@ const scanMatch = require('../scanMatch');
 const setIndex = require('../setIndex');
 const { authenticateToken, searchLimiter } = require('../middleware/auth');
 const { resolveCardPrice, parseCardRow } = require('../utils/priceHelpers');
+const { parseSetList } = require('../utils/setQuery');
 const { compartmentLabel, isBinderType, rebalanceCompartmentByScheme } = require('../utils/compartmentSort');
 const { checkedOutAllocation, resolveCompartmentAndPosition, describePlacement } = require('../utils/collectionHelpers');
 const { validateDeckAddition } = require('../utils/deckRules');
@@ -58,10 +59,13 @@ router.post('/prepare-set', searchLimiter, async (req, res) => {
   try {
     const { game = 'mtg', set } = req.body || {};
     const supported = game === 'mtg' || game === 'pokemon';
-    if (!supported || !set) return res.json({ ready: false, supported });
-    if (setIndex.isReady(game, set)) return res.json({ ready: true });
-    setIndex.ensureSet(game, set).catch(() => {});
-    res.json({ ready: false, building: true, progress: setIndex.setProgress(game, set) });
+    const sets = parseSetList(set);
+    if (!supported || !sets.length) return res.json({ ready: false, supported });
+    const pending = sets.filter(s => !setIndex.isReady(game, s));
+    if (pending.length === 0) return res.json({ ready: true });
+    pending.forEach(s => setIndex.ensureSet(game, s).catch(() => {}));
+    // Report the first still-building set's progress for the UI bar.
+    res.json({ ready: false, building: true, progress: setIndex.setProgress(game, pending[0]), pending });
   } catch (error) {
     console.error('prepare-set failed:', error.message);
     res.status(500).json({ error: 'Prepare set failed' });

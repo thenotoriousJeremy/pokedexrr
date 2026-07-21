@@ -284,11 +284,11 @@ function CardSearch({ onAddSuccess, showToast, setActiveTab }) {
               />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>SET NAME/ID (OPTIONAL)</label>
-              <input 
-                type="text" 
-                className="input-control" 
-                placeholder={game === 'mtg' ? 'e.g. eld, m10, Throne of Eldraine' : 'e.g. Base, Jungle, sv3pt5'}
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>SET(S) - COMMA FOR MULTIPLE (OPTIONAL)</label>
+              <input
+                type="text"
+                className="input-control"
+                placeholder={game === 'mtg' ? 'e.g. ltr  or  ltr, ltc' : 'e.g. Base  or  sv1, sv2'}
                 value={setCodeQuery}
                 onChange={(e) => setSetCodeQuery(e.target.value)}
               />

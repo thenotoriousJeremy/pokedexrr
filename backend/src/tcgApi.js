@@ -1,6 +1,7 @@
 const axios = require('axios');
 const db = require('./db');
 const { parseCardRow } = require('./utils/priceHelpers');
+const { parseSetList, setSqlFilter } = require('./utils/setQuery');
 
 const API_BASE_URL = 'https://api.pokemontcg.io/v2';
 const API_KEY = process.env.POKEMON_TCG_API_KEY || ''; // Optional user key
@@ -230,6 +231,8 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
   // Preserve leading zeroes while keeping a stripped version for fallback matching
   const cleanNumber = numberQuery ? numberQuery.trim() : '';
   const strippedNumber = cleanNumber.replace(/^0+/, '');
+  // Set field may list several sets ("ltr, ltc") — match any of them.
+  const setList = parseSetList(setQuery);
 
   // 1. Collection-only search
   if (scope === 'collection') {
@@ -255,9 +258,10 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
         collParams.push(cleanNumber, cleanNumber);
       }
     }
-    if (setQuery) {
-      collSql += ` AND (cc.set_name LIKE ? OR cc.set_id = ?)`;
-      collParams.push(`%${setQuery}%`, setQuery);
+    const collSetFilter = setSqlFilter(setList, 'cc');
+    if (collSetFilter) {
+      collSql += ` AND ${collSetFilter.clause}`;
+      collParams.push(...collSetFilter.params);
     }
 
     collSql += ` GROUP BY cc.id LIMIT 50`;
@@ -284,9 +288,10 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
         localParams.push(cleanNumber, cleanNumber);
       }
     }
-    if (setQuery) {
-      localSql += ` AND (set_name LIKE ? OR set_id = ?)`;
-      localParams.push(`%${setQuery}%`, setQuery);
+    const localSetFilter = setSqlFilter(setList);
+    if (localSetFilter) {
+      localSql += ` AND ${localSetFilter.clause}`;
+      localParams.push(...localSetFilter.params);
     }
 
     localSql += ` LIMIT 50`;
@@ -350,8 +355,9 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
     const words = cleanName ? cleanName.split(/\s+/).filter(w => w.length > 2) : [];
     if (words.length > 0) {
       let queryStr = words.map(w => `name:"${w}"`).join(' OR ');
-      if (setQuery) {
-        queryStr = `(${queryStr}) AND (set.name:"${setQuery}" OR set.id:"${setQuery}")`;
+      if (setList.length) {
+        const setClause = setList.map(s => `set.name:"${s}" OR set.id:"${s}"`).join(' OR ');
+        queryStr = `(${queryStr}) AND (${setClause})`;
       }
       
       console.log(`Querying Pokémon TCG API (Name-first): q='${queryStr}'`);
@@ -362,8 +368,9 @@ async function searchCards(nameQuery = '', numberQuery = '', setQuery = '', apiK
     // Pure number-only search returns every set's card with that number (~50 junk
     // results), so skip it — a number without a set almost never finds the right card.
     const isNumNoise = !cleanNumber || cleanNumber === '0' || cleanNumber === '00' || cleanNumber === '000';
-    if (cards.length === 0 && cleanNumber && !isNumNoise && setQuery) {
-      const queryStr = `number:"${cleanNumber}" AND (set.name:"${setQuery}" OR set.id:"${setQuery}")`;
+    if (cards.length === 0 && cleanNumber && !isNumNoise && setList.length) {
+      const setClause = setList.map(s => `set.name:"${s}" OR set.id:"${s}"`).join(' OR ');
+      const queryStr = `number:"${cleanNumber}" AND (${setClause})`;
       console.log(`No name results. Querying TCG API (Number+set): q='${queryStr}'`);
       cards = await fetchCardsFromAPI(queryStr);
     }
