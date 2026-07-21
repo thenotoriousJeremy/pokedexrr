@@ -294,11 +294,15 @@ async function runTests() {
       const res = await fetch(`http://localhost:${port}/api/search?game=mtg&name=Lightning`, { headers: authHeaders });
       assert.strictEqual(res.status, 200);
       
-      // Wait a moment for background refresh
-      await new Promise(resolve => setTimeout(resolve, 800));
-      const cached = await db.get(`SELECT last_updated FROM card_cache WHERE id = ?`, ['mtg-54321']);
-      const lastUpdated = new Date(cached.last_updated);
-      assert.ok(Date.now() - lastUpdated.getTime() < 10000, 'Background refresh should update last_updated to now');
+      // Poll for the background refresh: it runs detached after the response, so a
+      // single fixed wait is flaky under CI load. Check freshness for up to ~5s.
+      let fresh = false;
+      for (let i = 0; i < 25 && !fresh; i++) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        const cached = await db.get(`SELECT last_updated FROM card_cache WHERE id = ?`, ['mtg-54321']);
+        fresh = Date.now() - new Date(cached.last_updated).getTime() < 10000;
+      }
+      assert.ok(fresh, 'Background refresh should update last_updated to now');
       console.log('PASS: F3-TC8');
       await stopServer(serverExp, port);
     } catch (err) {
