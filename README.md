@@ -15,7 +15,7 @@ Identify physical cards with your phone's camera, track real-time market valuati
 [![Issues](https://img.shields.io/github/issues/thenotoriousJeremy/bindarr)](https://github.com/thenotoriousJeremy/bindarr/issues)
 [![Last commit](https://img.shields.io/github/last-commit/thenotoriousJeremy/bindarr)](https://github.com/thenotoriousJeremy/bindarr/commits/main)
 
-[Quick Start](#quick-start-development) · [Run with Docker](#docker-deployment-production) · [Features](#features) · [How Scanning Works](#card-scanning--match-data) · [Report a Bug](https://github.com/thenotoriousJeremy/bindarr/issues/new)
+**[Live Demo](https://thenotoriousjeremy.github.io/bindarr/)** · [Download & Run](#download--run-easiest) · [Run with Docker](#docker-deployment) · [Quick Start (Dev)](#quick-start-development) · [Features](#features) · [How Scanning Works](#card-scanning--match-data) · [Report a Bug](https://github.com/thenotoriousJeremy/bindarr/issues/new)
 
 </div>
 
@@ -35,18 +35,28 @@ Identify physical cards with your phone's camera, track real-time market valuati
 
 ---
 
+## Live Demo
+
+Try it in your browser, no install: **[thenotoriousjeremy.github.io/bindarr](https://thenotoriousjeremy.github.io/bindarr/)**
+
+The demo runs the real frontend against baked-in sample data (no backend) so you can click through the dashboard, collection, storage, and decks. It's read-only: edits are accepted but not saved ("Demo mode: changes are not saved."), and camera scanning is disabled (it needs a server). For the full app, [download and run it](#download--run-easiest).
+
+---
+
 ## Table of Contents
 
+- [Live Demo](#live-demo)
 - [Features](#features)
-- [ Tech Stack](#tech-stack)
-- [ Run with Docker (fastest)](#docker-deployment-production)
-- [ Quick Start (Development)](#quick-start-development)
-- [ First-Time Sign In](#first-time-sign-in)
-- [ Deck Checkout & Check-In](#deck-checkout--check-in)
-- [ Card Scanning & Match Data](#card-scanning--match-data)
-- [ Backup, Restore & Recovery](#backup-restore--recovery)
-- [ Project Structure](#project-structure)
-- [ License](#license)
+- [Tech Stack](#tech-stack)
+- [Download & Run (easiest)](#download--run-easiest)
+- [Run with Docker](#docker-deployment)
+- [Quick Start (Development)](#quick-start-development)
+- [First-Time Sign In](#first-time-sign-in)
+- [Deck Checkout & Check-In](#deck-checkout--check-in)
+- [Card Scanning & Match Data](#card-scanning--match-data)
+- [Backup, Restore & Recovery](#backup-restore--recovery)
+- [Project Structure](#project-structure)
+- [License](#license)
 
 ---
 
@@ -59,7 +69,6 @@ Identify physical cards with your phone's camera, track real-time market valuati
   - **Binders**: Maps by Binder Name, Page Number, and Slot (1-9). Features a double-page book view with 3D page-flip animations and multi-card slot stacking.
   - **Storage Boxes**: Maps by Box Name, Row ID/Letter, and Divider Section.
 - **Deck Checkout & Check-In**: Reserve the physical cards for a deck and find them fast. Checking a deck out "for play" opens a locator that groups every card by **container → page → slot** and highlights each one in its compartment grid; while checked out, those cards are greyed and badged **In Play** in Storage. Checking the deck back in reverses the flow, guiding each card back to its slot. Select-all by page, container, or the whole deck.
-- **Japanese Card Support**: Stores and displays cards under their native Japanese names (hiragana, katakana, kanji) and auto-translates them to English for API lookups.
 - **Universal Database Exports**: One-click downloads of your complete database in CSV (TCGplayer format compatible) or JSON.
 - **Multi-User Auth**: Session-token authentication (opaque random tokens stored in a server-side `sessions` table, sent as a `Bearer` header) with admin controls for managing users and roles.
 - **100% Self-Hostable & Portable**: Single-container Docker build with a local SQLite database that mounts to a persistent volume.
@@ -74,6 +83,32 @@ Identify physical cards with your phone's camera, track real-time market valuati
 - **Card image ID**: `@huggingface/transformers` (CLIP embeddings via ONNX), `opencv-wasm` (ORB + homography), `sharp` (image processing)
 - **Card data**: Pokémon TCG API (Pokémon), Scryfall (Magic)
 - **Deployment**: Docker, Docker Compose, GitHub Actions
+
+---
+
+## Download & Run (easiest)
+
+No Docker, no clone, no build. Every release ships a self-contained server you download, unzip, and double-click. Grab the file for your OS from the **[latest release](https://github.com/thenotoriousJeremy/bindarr/releases/latest)**:
+
+| OS | Download | Run |
+|----|----------|-----|
+| **Windows** | `Bindarr-Server-windows-x64.zip` | Unzip, double-click **`bindarr-server.exe`** |
+| **Linux** | `Bindarr-Server-linux-x64.tar.gz` | `tar xzf` it, then `chmod +x bindarr-server && ./bindarr-server` |
+| **macOS** (Apple Silicon) | `Bindarr-Server-macos-arm64.tar.gz` | `tar xzf` it, then `chmod +x bindarr-server && ./bindarr-server` |
+
+Then open **`http://localhost:3001`**.
+
+The bundle is a Node Single Executable App with the backend, frontend, and dependencies inside. Your data (a SQLite file) is created next to the binary on first run.
+
+**First login:** on first startup a default `admin` account is created and its password is printed **once** to the console window. To pin a known password instead, copy `app/backend/.env.example` to `app/backend/.env` and set `DEFAULT_ADMIN_PASSWORD=` before first run. See [First-Time Sign In](#first-time-sign-in).
+
+> [!NOTE]
+> **Scanning out of the box:** set-scoped Magic matching works immediately (it builds a set's index on demand the first time you scan it). Code-free matching and Pokémon/Magic game auto-detection need the pre-built embedding databases, which are **not** bundled (they're large). Build them once into `app/backend/data/` — see [Card Scanning & Match Data](#card-scanning--match-data).
+
+> [!TIP]
+> **Phones:** grab **`Bindarr-Android.apk`** from the same release and install it (allow "install from unknown sources"). iOS is distributed via TestFlight. The mobile apps talk to a Bindarr server, so run one of the options above (or Docker) and point the app at it.
+
+Prefer containers, or running as a background service? Use [Docker](#docker-deployment). Want to hack on the code? See [Quick Start (Development)](#quick-start-development).
 
 ---
 
@@ -118,7 +153,7 @@ If you prefer not to use self-signed HTTPS in development:
 
 ## First-Time Sign In
 
-On its **first startup**, Bindarr creates a default administrator account and prints the credentials to the server console (the terminal running `npm run dev` / `npm start`, or `docker-compose logs`).
+On its **first startup**, Bindarr creates a default administrator account and prints the credentials to the server console (the terminal running `npm run dev` / `npm start`, the console window of the downloaded `bindarr-server` binary, or `docker compose logs`).
 
 Look for these lines in the startup logs:
 ```text
@@ -161,9 +196,9 @@ While a deck is checked out, its cards show **greyed with an "In Play" badge** i
 
 ---
 
-## Docker Deployment (Production)
+## Docker Deployment
 
-Bindarr ships as a single container (multi-stage build, serves the compiled frontend from the Node server) published to GitHub Container Registry. **No clone or build needed** — copy the compose file below and run.
+Prefer containers, or want it running as a restart-on-boot background service? Bindarr also ships as a single container (multi-stage build, serves the compiled frontend from the Node server) published to GitHub Container Registry. **No clone or build needed** — copy the compose file below and run.
 
 ### Run with the prebuilt image (copy-paste)
 

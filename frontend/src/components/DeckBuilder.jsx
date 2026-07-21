@@ -5,6 +5,7 @@ import { shuffleArray } from '../utils/shuffle';
 import { translateJapaneseName } from '../utils/langHelper';
 import CheckoutWizardModal from './CheckoutWizardModal';
 import { useBackGuard } from '../utils/useBackGuard';
+import { buildDeckExport, parseDeckLine } from '../utils/deckText';
 
 // Basic Energy (Pokémon) & Basic Lands (MTG) are exempt from the "max 4 of a card" deck rule.
 const isBasicEnergyOrLand = (card, game = 'pokemon') => {
@@ -80,6 +81,7 @@ function DeckBuilder({ showToast }) {
   // Import / Export Modals
   const [showImportModal, setShowImportModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [exportFormat, setExportFormat] = useState(null); // null = auto by deck game
   const [importText, setImportText] = useState('');
   const [importComparison, setImportComparison] = useState(null);
   const [comparingImport, setComparingImport] = useState(false);
@@ -485,9 +487,11 @@ function DeckBuilder({ showToast }) {
   };
 
   // --- EXPORT & IMPORT LOGIC ---
+  const effectiveExportFormat = exportFormat || ((activeDeck?.game === 'mtg') ? 'mtga' : 'ptcgl');
+
   const handleExportDeckText = () => {
     if (!activeDeck) return '';
-    return activeDeck.cards.map(c => `${c.quantity} ${c.name} (${c.set_code || c.set_name || ''}) #${c.number || ''}`.trim()).join('\n');
+    return buildDeckExport(activeDeck.cards, effectiveExportFormat);
   };
 
   const handleCopyExportText = () => {
@@ -497,6 +501,18 @@ function DeckBuilder({ showToast }) {
       .catch(() => showToast('Copy failed.'));
   };
 
+  // Copy the buylist and open TCGplayer Mass Entry — user pastes (their mass
+  // entry page has no documented prefill URL param, so clipboard + open is the
+  // reliable path).
+  const handleOpenMassEntry = () => {
+    const text = buildDeckExport(activeDeck?.cards, 'buylist');
+    if (!text) { showToast('Nothing to buy — you own every card in this deck.'); return; }
+    const line = (activeDeck?.game === 'mtg') ? 'Magic' : 'Pokemon';
+    navigator.clipboard.writeText(text).catch(() => {});
+    window.open(`https://www.tcgplayer.com/massentry?productline=${line}`, '_blank', 'noopener');
+    showToast('Buylist copied — paste it into TCGplayer Mass Entry.');
+  };
+
   const handleCompareImport = async () => {
     if (!importText.trim() || !activeDeck) return;
     setComparingImport(true);
@@ -504,10 +520,9 @@ function DeckBuilder({ showToast }) {
     const results = [];
 
     for (const line of lines) {
-      const match = line.match(/^(\d+)x?\s+(.+)$/i);
-      if (!match) continue;
-      const qty = parseInt(match[1], 10);
-      const rawName = match[2].replace(/\s*\([^)]*\)/g, '').replace(/#\d+/g, '').trim();
+      const parsed = parseDeckLine(line);
+      if (!parsed) continue;
+      const { qty, name: rawName } = parsed;
 
       try {
         const res = await fetch(`/api/search?name=${encodeURIComponent(rawName)}&scope=collection&game=${activeDeck.game || 'pokemon'}`);
@@ -571,10 +586,9 @@ function DeckBuilder({ showToast }) {
     } else {
       const lines = importText.split('\n').map(l => l.trim()).filter(Boolean);
       for (const line of lines) {
-        const match = line.match(/^(\d+)x?\s+(.+)$/i);
-        if (!match) continue;
-        const qty = parseInt(match[1], 10);
-        const rawName = match[2].replace(/\s*\([^)]*\)/g, '').replace(/#\d+/g, '').trim();
+        const parsed = parseDeckLine(line);
+        if (!parsed) continue;
+        const { qty, name: rawName } = parsed;
 
         try {
           const res = await fetch(`/api/search?name=${encodeURIComponent(rawName)}&scope=collection&game=${activeDeck.game || 'pokemon'}`);
@@ -2021,6 +2035,22 @@ function DeckBuilder({ showToast }) {
             </button>
             <h3 style={{ fontSize: '1.2rem', color: 'var(--text-strong)', marginBottom: '0.5rem' }}>Export Decklist</h3>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>Standard deck text format ready for sharing or PTCGO / MTGA import.</p>
+            <select
+              className="input-control"
+              style={{ width: '100%', marginBottom: '1rem', fontSize: '0.85rem' }}
+              value={effectiveExportFormat}
+              onChange={e => setExportFormat(e.target.value)}
+            >
+              <option value="ptcgl">Pokémon TCG Live (grouped)</option>
+              <option value="mtga">MTG Arena</option>
+              <option value="plain">Plain text (qty + name)</option>
+              <option value="buylist">Buylist – cards you still need</option>
+            </select>
+            {effectiveExportFormat === 'buylist' && (
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '-0.5rem', marginBottom: '1rem' }}>
+                Only copies this deck needs beyond what you own. Paste into TCGplayer Mass Entry.
+              </p>
+            )}
             <textarea
               readOnly
               className="input-control"
@@ -2030,6 +2060,9 @@ function DeckBuilder({ showToast }) {
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
               <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowExportModal(false)}>Close</button>
               <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleCopyExportText}>Copy to Clipboard</button>
+              {effectiveExportFormat === 'buylist' && (
+                <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleOpenMassEntry}>Copy & Open TCGplayer</button>
+              )}
             </div>
           </div>
         </div>

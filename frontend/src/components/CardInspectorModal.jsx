@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, MapPin, Trash2, Star, Maximize2 } from 'lucide-react';
+import { X, MapPin, Trash2, Star, Maximize2, ExternalLink } from 'lucide-react';
 import { getCardDisplayName } from '../utils/langHelper';
 import { formatPrice } from '../utils/formatPrice';
+import { tcgplayerUrl, cardmarketUrl } from '../utils/marketplaceLinks';
 import CardEntryFields from './CardEntryFields';
 import PriceHistoryChart from './PriceHistoryChart';
 import AddToDeckSelect from './AddToDeckSelect';
@@ -362,6 +363,24 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                     ${formatPrice(card.purchase_price)}
                   </div>
                 </div>
+              </div>
+
+              {/* Marketplace links — where the price is sourced */}
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <a
+                  href={tcgplayerUrl(card)} target="_blank" rel="noopener noreferrer"
+                  className="btn btn-secondary"
+                  style={{ flex: 1, minWidth: '140px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem', fontSize: '0.75rem' }}
+                >
+                  <ExternalLink size={13} /> View on TCGplayer
+                </a>
+                <a
+                  href={cardmarketUrl(card)} target="_blank" rel="noopener noreferrer"
+                  className="btn btn-secondary"
+                  style={{ flex: 1, minWidth: '140px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem', fontSize: '0.75rem' }}
+                >
+                  <ExternalLink size={13} /> Cardmarket
+                </a>
               </div>
 
               {/* Price History Area Chart */}
