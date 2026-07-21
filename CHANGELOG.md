@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.21] - 2026-07-21
+
+### Fixed
+- **Sign Up button never appeared in the native app** even when the server had registration enabled. The login screen fetches `/api/auth/config` once on mount, but on a native cold start the WebView renders before the CapacitorHttp bridge/network is ready, so that fetch failed and `registrationEnabled` stayed `false` with no retry. The config check now retries on failure (up to 5x, 1.5s apart), refetches when the app resumes, and is debounced so a freshly-typed server address is checked once it settles. A genuine `200 {registrationEnabled:false}` still stops immediately, so invite-only servers are unaffected.
+
 ## [1.4.20] - 2026-07-21
 
 ### Fixed

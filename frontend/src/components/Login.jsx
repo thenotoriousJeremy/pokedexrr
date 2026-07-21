@@ -19,10 +19,23 @@ function Login({ onLoginSuccess }) {
 
   useEffect(() => {
     if (isNative && !server) return; // wait until user sets their server URL
-    fetch('/api/auth/config')
-      .then(res => res.ok ? res.json() : { registrationEnabled: false })
-      .then(data => setRegistrationEnabled(!!data.registrationEnabled))
-      .catch(() => setRegistrationEnabled(false));
+    let cancelled = false, tries = 0;
+    // Cold start on native: the WebView renders before the CapacitorHttp bridge /
+    // network is ready, so this fetch can fail and the Sign Up button would stay
+    // hidden forever. Retry on failure (a real 200 {registrationEnabled:false}
+    // stops immediately) and refetch on resume so the button self-heals.
+    const load = () => {
+      fetch('/api/auth/config')
+        .then(res => res.ok ? res.json() : Promise.reject(new Error('config unreachable')))
+        .then(data => { if (!cancelled) setRegistrationEnabled(!!data.registrationEnabled); })
+        .catch(() => { if (!cancelled && tries++ < 5) setTimeout(load, 1500); });
+    };
+    // Debounce so a freshly-typed server address is checked once it settles,
+    // not against every half-typed URL keystroke.
+    const debounce = setTimeout(load, server ? 400 : 0);
+    const onVis = () => { if (document.visibilityState === 'visible') { tries = 0; load(); } };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { cancelled = true; clearTimeout(debounce); document.removeEventListener('visibilitychange', onVis); };
   }, [server]);
 
   const handleSubmit = async (e) => {
