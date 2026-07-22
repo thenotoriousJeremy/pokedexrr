@@ -753,6 +753,13 @@ function CameraScanner({ onAddSuccess, showToast }) {
                 && (verified ? second.inliers >= top.inliers * 0.7 : second.score >= top.score - 0.02);
               if (candidates && candidates.length > 0) {
                 if (confident && !ambiguousPrinting) {
+                  // Instant path: if scan-match pre-hydrated the card from local card_cache,
+                  // apply it directly without waiting for a second /api/search HTTP round-trip!
+                  if (top.card) {
+                    await applyMatches([top.card], '', true);
+                    return;
+                  }
+
                   // Uses the DETECTED game (auto-detect may override the UI mode).
                   // Query the MATCHED card's exact set + number (top.set/top.number),
                   // not just its name — otherwise search returns some other printing
@@ -778,10 +785,18 @@ function CameraScanner({ onAddSuccess, showToast }) {
                   if (matches.length) { await applyMatches(matches, '', true); return; }
                 }
 
-                // If not confident (or multiple printings), fetch full card info for candidates and show the picker.
+                // If not confident (or multiple printings), check if candidates are pre-hydrated
+                const preHydrated = candidates.slice(0, 8).map(c => c.card).filter(Boolean);
+                if (preHydrated.length === candidates.slice(0, 8).length) {
+                  await applyMatches(preHydrated, 'No matching cards found.');
+                  return;
+                }
+
+                // Fallback: fetch full card info for candidates and show the picker.
                 setScanStatus('Fetching candidate cards...');
                 const fullCandidates = await Promise.all(
                   candidates.slice(0, 8).map(async cand => {
+                    if (cand.card) return cand.card;
                     const p = new URLSearchParams({ game: matchGame });
                     if (cand.set) p.append('set', cand.set);
                     if (cand.number) p.append('number', cand.number);

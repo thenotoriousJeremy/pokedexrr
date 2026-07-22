@@ -47,6 +47,25 @@ router.post('/scan-match', searchLimiter, async (req, res) => {
     const buf = Buffer.from(base64, 'base64');
     if (buf.length < 100) return res.status(400).json({ error: 'Invalid image data' });
     const result = await scanMatch.match(buf, game, 8, set, { recallK, orb });
+    if (result.candidates && result.candidates.length > 0) {
+      const hydrated = await Promise.all(result.candidates.map(async (cand) => {
+        let row = null;
+        if (cand.set && cand.number) {
+          row = await db.get(
+            `SELECT * FROM card_cache WHERE game = ? AND (set_id = ? OR LOWER(set_name) = LOWER(?)) AND number = ? LIMIT 1`,
+            [result.game, cand.set, cand.set, cand.number]
+          );
+        }
+        if (!row && cand.name) {
+          row = await db.get(
+            `SELECT * FROM card_cache WHERE game = ? AND LOWER(name) = LOWER(?) LIMIT 1`,
+            [result.game, cand.name]
+          );
+        }
+        return row ? { ...cand, card: parseCardRow(row) } : cand;
+      }));
+      result.candidates = hydrated;
+    }
     res.json(result);
   } catch (error) {
     console.error('scan-match failed:', error.message);
