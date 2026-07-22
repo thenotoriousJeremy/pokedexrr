@@ -67,6 +67,13 @@ function SharedCollection({ shareToken }) {
   useBackGuard(!!activeCard, () => setActiveCard(null));
 
   useEffect(() => {
+    const urlTheme = new URLSearchParams(window.location.search).get('theme');
+    if (urlTheme) {
+      document.documentElement.setAttribute('data-theme', urlTheme);
+    }
+  }, []);
+
+  useEffect(() => {
     const fetchSharedData = async () => {
       try {
         setLoading(true);
@@ -170,7 +177,9 @@ function SharedCollection({ shareToken }) {
 
   const handleTabChange = (type) => {
     setListType(type);
-    const newUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?list=${type}`;
+    const themeParam = new URLSearchParams(window.location.search).get('theme');
+    const qTheme = themeParam ? `&theme=${encodeURIComponent(themeParam)}` : '';
+    const newUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?list=${type}${qTheme}`;
     window.history.pushState({ path: newUrl }, '', newUrl);
   };
 
@@ -408,7 +417,9 @@ function SharedCollection({ shareToken }) {
                       {getPrintingBadgeLabel(card.printing)}
                     </span>
                   )}
-                  <div className="tcg-card-quantity-tag">x{card.quantity}</div>
+                  {card.quantity > 1 && (
+                    <div className="tcg-card-quantity-tag">x{card.quantity}</div>
+                  )}
                 </div>
                 <div className="tcg-card-info">
                   <div className="tcg-card-name">{card.name}</div>
