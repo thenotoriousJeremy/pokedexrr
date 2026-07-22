@@ -1,6 +1,71 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Plus, Pin, Trash2, Search } from 'lucide-react';
 
+function NoteItem({ note, onSave, onTogglePin, onDelete }) {
+  const [title, setTitle] = useState(note.title || '');
+  const [body, setBody] = useState(note.body || '');
+
+  useEffect(() => {
+    setTitle(note.title || '');
+  }, [note.title]);
+
+  useEffect(() => {
+    setBody(note.body || '');
+  }, [note.body]);
+
+  const handleTitleBlur = () => {
+    if (title !== (note.title || '')) {
+      onSave(note.id, 'title', title);
+    }
+  };
+
+  const handleBodyBlur = () => {
+    if (body !== (note.body || '')) {
+      onSave(note.id, 'body', body);
+    }
+  };
+
+  return (
+    <div className="glass-panel" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <input
+          value={title}
+          placeholder="Title"
+          onChange={e => setTitle(e.target.value)}
+          onBlur={handleTitleBlur}
+          style={{ flex: 1, background: 'transparent', border: 'none', color: 'var(--text-strong)', fontWeight: 600, fontSize: '1rem', outline: 'none' }}
+        />
+        <button
+          className="btn btn-secondary btn-icon-only"
+          title={note.pinned ? 'Unpin' : 'Pin'}
+          aria-label={note.pinned ? 'Unpin' : 'Pin'}
+          onClick={() => onTogglePin(note)}
+          style={{ padding: '0.3rem', color: note.pinned ? 'var(--accent-yellow)' : 'var(--text-secondary)' }}
+        >
+          <Pin size={14} fill={note.pinned ? 'currentColor' : 'none'} />
+        </button>
+        <button
+          className="btn btn-secondary btn-icon-only"
+          title="Delete"
+          aria-label="Delete"
+          onClick={() => onDelete(note.id)}
+          style={{ padding: '0.3rem', color: 'var(--accent-red)' }}
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+      <textarea
+        value={body}
+        placeholder="Write something..."
+        onChange={e => setBody(e.target.value)}
+        onBlur={handleBodyBlur}
+        rows={5}
+        style={{ resize: 'vertical', background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', color: 'var(--text-strong)', padding: '0.5rem', fontSize: '0.9rem', outline: 'none', fontFamily: 'inherit' }}
+      />
+    </div>
+  );
+}
+
 // Standalone scratchpad notebook, separate from card entries. Notes are
 // per-user (auth via the global fetch token interceptor). Editing saves on
 // blur; pin keeps a note at the top.
@@ -12,9 +77,12 @@ function Notes({ showToast }) {
 
   useEffect(() => {
     fetch('/api/notes')
-      .then(r => r.json())
-      .then(d => setNotes(d.notes || []))
-      .catch(() => showToast('Failed to load notes'))
+      .then(r => (r.ok ? r.json() : { notes: [] }))
+      .then(d => {
+        const list = Array.isArray(d.notes) ? d.notes : (Array.isArray(d) ? d : []);
+        setNotes(list);
+      })
+      .catch(() => showToast?.('Failed to load notes'))
       .finally(() => setLoading(false));
   }, [showToast]);
 
@@ -25,10 +93,14 @@ function Notes({ showToast }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: 'Untitled', body: '' }),
       });
+      if (!r.ok) {
+        showToast?.('Failed to create note');
+        return;
+      }
       const d = await r.json();
       if (d.note) setNotes(prev => [d.note, ...prev]);
     } catch {
-      showToast('Failed to create note');
+      showToast?.('Failed to create note');
     }
   };
 
@@ -36,13 +108,14 @@ function Notes({ showToast }) {
   const saveField = async (id, field, value) => {
     setNotes(prev => prev.map(n => (n.id === id ? { ...n, [field]: value } : n)));
     try {
-      await fetch(`/api/notes/${id}`, {
+      const r = await fetch(`/api/notes/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ [field]: value }),
       });
+      if (!r.ok) showToast?.('Failed to save note');
     } catch {
-      showToast('Failed to save note');
+      showToast?.('Failed to save note');
     }
   };
 
@@ -51,10 +124,14 @@ function Notes({ showToast }) {
   const deleteNote = async (id) => {
     if (!window.confirm('Delete this note?')) return;
     try {
-      await fetch(`/api/notes/${id}`, { method: 'DELETE' });
+      const r = await fetch(`/api/notes/${id}`, { method: 'DELETE' });
+      if (!r.ok) {
+        showToast?.('Failed to delete note');
+        return;
+      }
       setNotes(prev => prev.filter(n => n.id !== id));
     } catch {
-      showToast('Failed to delete note');
+      showToast?.('Failed to delete note');
     }
   };
 
@@ -70,7 +147,7 @@ function Notes({ showToast }) {
       created: (a, b) => (b.created_at || '').localeCompare(a.created_at || ''),
       title: (a, b) => (a.title || '').localeCompare(b.title || ''),
     }[sort];
-    return [...filtered].sort((a, b) => (b.pinned - a.pinned) || cmp(a, b));
+    return [...filtered].sort((a, b) => ((b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)) || (cmp ? cmp(a, b) : 0));
   }, [notes, query, sort]);
 
   if (loading) return <div className="spinner" aria-label="Loading" style={{ margin: '4rem auto' }} />;
@@ -115,41 +192,13 @@ function Notes({ showToast }) {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
           {visible.map(note => (
-            <div key={note.id} className="glass-panel" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <input
-                  defaultValue={note.title}
-                  placeholder="Title"
-                  onBlur={e => e.target.value !== note.title && saveField(note.id, 'title', e.target.value)}
-                  style={{ flex: 1, background: 'transparent', border: 'none', color: 'var(--text-strong)', fontWeight: 600, fontSize: '1rem', outline: 'none' }}
-                />
-                <button
-                  className="btn btn-secondary btn-icon-only"
-                  title={note.pinned ? 'Unpin' : 'Pin'}
-                  aria-label={note.pinned ? 'Unpin' : 'Pin'}
-                  onClick={() => togglePin(note)}
-                  style={{ padding: '0.3rem', color: note.pinned ? 'var(--accent-yellow)' : 'var(--text-secondary)' }}
-                >
-                  <Pin size={14} fill={note.pinned ? 'currentColor' : 'none'} />
-                </button>
-                <button
-                  className="btn btn-secondary btn-icon-only"
-                  title="Delete"
-                  aria-label="Delete"
-                  onClick={() => deleteNote(note.id)}
-                  style={{ padding: '0.3rem', color: 'var(--accent-red)' }}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-              <textarea
-                defaultValue={note.body}
-                placeholder="Write something..."
-                onBlur={e => e.target.value !== note.body && saveField(note.id, 'body', e.target.value)}
-                rows={5}
-                style={{ resize: 'vertical', background: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', color: 'var(--text-strong)', padding: '0.5rem', fontSize: '0.9rem', outline: 'none', fontFamily: 'inherit' }}
-              />
-            </div>
+            <NoteItem
+              key={note.id}
+              note={note}
+              onSave={saveField}
+              onTogglePin={togglePin}
+              onDelete={deleteNote}
+            />
           ))}
         </div>
       )}

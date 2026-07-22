@@ -33,10 +33,34 @@ window.fetch = (input, opts = {}) => {
 
   if (method === 'GET' && routes[path]) return Promise.resolve(json(routes[path]));
 
+  if (method === 'POST' && path === '/api/notes') {
+    const body = opts.body ? JSON.parse(opts.body) : {};
+    return Promise.resolve(json({
+      note: {
+        id: Date.now(),
+        user_id: 1,
+        title: body.title || 'Untitled',
+        body: body.body || '',
+        pinned: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }
+    }, 201));
+  }
+  if (method === 'PUT' && path.startsWith('/api/notes/')) {
+    const id = parseInt(path.split('/').pop(), 10);
+    const body = opts.body ? JSON.parse(opts.body) : {};
+    return Promise.resolve(json({ note: { id, ...body } }));
+  }
+  if (method === 'DELETE' && path.startsWith('/api/notes/')) {
+    return Promise.resolve(json({ success: true }));
+  }
+
   // Writes and un-captured GETs: never persist. Return a benign empty shape so
   // views render instead of crashing. List-ish paths get [], everything else {}.
   if (method === 'GET') {
-    const listish = /\/(collection|locations|decks|sets|search|users|compartments)/.test(path);
+    if (path === '/api/notes') return Promise.resolve(json({ notes: [] }));
+    const listish = /\/(collection|locations|decks|sets|search|users|compartments|notes)/.test(path);
     return Promise.resolve(json(listish ? [] : {}));
   }
   return Promise.resolve(json({ message: 'Demo mode: changes are not saved.' }));
