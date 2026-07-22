@@ -66,42 +66,40 @@ function findCardQuad(c) {
 
 function detectCard(rgbaData, w, h) {
   const src = cv.matFromImageData({ data: rgbaData, width: w, height: h });
-  const gray = new cv.Mat(), blur = new cv.Mat(), edges = new cv.Mat();
+  const gray = new cv.Mat(), blur = new cv.Mat(), thresh = new cv.Mat(), closed = new cv.Mat();
   const contours = new cv.MatVector(), hier = new cv.Mat();
   let out = null;
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-    
-    // Higher Canny thresholds (60, 160) catch the sharp physical card border while ignoring soft drop shadows
-    cv.Canny(blur, edges, 60, 160);
-    const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-    cv.dilate(edges, edges, k); k.delete();
+    cv.threshold(blur, thresh, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
 
-    // RETR_EXTERNAL retrieves outer card boundary
-    cv.findContours(edges, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    // Large Morphological Close (3.5% of min dimension) erases all internal text, art, and symbols
+    const kSize = Math.max(15, Math.round(Math.min(w, h) * 0.035));
+    const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(kSize, kSize));
+    cv.morphologyEx(thresh, closed, cv.MORPH_CLOSE, k);
+    k.delete();
+
+    // RETR_EXTERNAL retrieves only the outer card boundary
+    cv.findContours(closed, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
     const imgArea = w * h, cx = w / 2, cy = h / 2, halfDiag = Math.hypot(w, h) / 2;
     let best = null; // { score, pts }
+
     for (let i = 0; i < contours.size(); i++) {
       const c = contours.get(i);
       const area = cv.contourArea(c);
-      // Cap max area at 0.70 to reject giant outer container/lightbox frames
-      if (area >= 0.04 * imgArea && area <= 0.70 * imgArea) {
+      if (area >= 0.15 * imgArea && area <= 0.85 * imgArea) {
         const rect = cv.minAreaRect(c);
         let rw = rect.size.width;
         let rh = rect.size.height;
         if (rw > rh) { const tmp = rw; rw = rh; rh = tmp; } // ensure portrait
         const ar = rw / rh; // ideal card aspect = 0.714
 
-        // Trading cards are ~0.714 aspect ratio (allow 0.58 to 0.85)
-        if (ar >= 0.58 && ar <= 0.85) {
+        if (ar >= 0.55 && ar <= 0.88) {
           const rcx = rect.center.x, rcy = rect.center.y;
           const centrality = 1 - Math.min(1, Math.hypot(rcx - cx, rcy - cy) / halfDiag);
-          // Strong penalty for aspect ratio deviation from CARD_ASPECT (0.7159)
           const aspectFit = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.15);
-          // Target cards filling ~20% to 50% of the cropped frame area
-          const sizeFit = 1 - Math.min(1, Math.abs(area / imgArea - 0.35) / 0.35);
 
           const perspectiveQuad = findCardQuad(c);
           let pts = perspectiveQuad;
@@ -117,7 +115,7 @@ function detectCard(rgbaData, w, h) {
             ptsMat.delete();
           }
 
-          const score = (aspectFit * aspectFit) * (sizeFit) * (0.4 + 0.6 * centrality);
+          const score = (area / imgArea) * (aspectFit * aspectFit) * (0.4 + 0.6 * centrality) * (perspectiveQuad ? 1.2 : 1.0);
           if (!best || score > best.score) {
             best = { score, pts };
           }
@@ -137,14 +135,23 @@ function detectCard(rgbaData, w, h) {
       srcTri.delete(); dstTri.delete(); M.delete(); warped.delete();
     }
   } finally {
-    src.delete(); gray.delete(); blur.delete(); edges.delete(); contours.delete(); hier.delete();
+    src.delete(); gray.delete(); blur.delete(); thresh.delete(); closed.delete(); contours.delete(); hier.delete();
   }
   return out;
 }
 
-// Produce the card image to match on: use the client's guide box capture directly so
-// the card framed by the user is matched 100% intact without unpredictable server-side chopping.
+// Produce the card image to match on: auto-cropped+deskewed if a valid card outline is
+// found, else use the client's framed image directly.
 async function preprocessCard(imageBuffer) {
+  try {
+    const { data, info } = await sharp(imageBuffer).resize({ width: 1200, withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const card = detectCard(new Uint8ClampedArray(data), info.width, info.height);
+    if (card) {
+      return await sharp(card.data, { raw: { width: card.width, height: card.height, channels: 4 } }).png().toBuffer();
+    }
+  } catch (e) {
+    console.warn('preprocessCard failed:', e.message);
+  }
   return await sharp(imageBuffer).png().toBuffer();
 }
 
