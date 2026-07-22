@@ -25,6 +25,7 @@ const SORT_CRITERIA = {
   'price-asc': [{ by: 'price', dir: 'asc' }],
   'set-asc': [{ by: 'set', dir: 'asc' }, { by: 'number', dir: 'asc' }],
   'number-asc': [{ by: 'number', dir: 'asc' }, { by: 'name', dir: 'asc' }],
+  'rarity-desc': [{ by: 'rarity', dir: 'desc' }, { by: 'name', dir: 'asc' }],
   'rarity-asc': [{ by: 'rarity', dir: 'asc' }, { by: 'name', dir: 'asc' }],
   'type-asc': [{ by: 'type', dir: 'asc' }, { by: 'name', dir: 'asc' }],
   'language-asc': [{ by: 'language', dir: 'asc' }, { by: 'name', dir: 'asc' }],
@@ -81,8 +82,8 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
   const [tradeOnly, setTradeOnly] = useState(false);
   const [favoriteOnly, setFavoriteOnly] = useState(false);
 
-  // Stacking state
-  const [stackCards, setStackCards] = useState(false);
+  // Stacking state (default to stacked)
+  const [stackCards, setStackCards] = useState(true);
   const [stackByCondition, setStackByCondition] = useState(false);
   const [stackByPrinting, setStackByPrinting] = useState(false);
 
@@ -383,7 +384,8 @@ function CollectionList({ statsTrigger, onUpdate, showToast, selectedCardFilter,
               <option value="set-asc">Set</option>
               <option value="number-asc">Card Number</option>
               <option value="type-asc">Type / Color</option>
-              <option value="rarity-asc">Rarity</option>
+              <option value="rarity-desc">Rarity (High-Low)</option>
+              <option value="rarity-asc">Rarity (Low-High)</option>
               <option value="language-asc">Language</option>
               <option value="favorite-first">Favorites First</option>
             </select>

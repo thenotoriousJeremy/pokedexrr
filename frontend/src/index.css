@@ -2530,3 +2530,21 @@ button, input, select, textarea {
   box-shadow: 0 0 15px rgba(250, 204, 21, 0.7) !important;
   z-index: 100 !important;
 }
+
+/* Recharts Tooltip styling across all themes (Dark, LCARS, Light, Cyberpunk) */
+.recharts-default-tooltip {
+  background-color: var(--bg-secondary) !important;
+  border-color: var(--border-glass) !important;
+  border-radius: var(--radius-sm, 8px) !important;
+  color: var(--text-strong) !important;
+  box-shadow: var(--shadow-glow, 0 4px 12px rgba(0, 0, 0, 0.5)) !important;
+}
+
+.recharts-tooltip-label,
+.recharts-tooltip-item,
+.recharts-tooltip-item-name,
+.recharts-tooltip-item-separator,
+.recharts-tooltip-item-value {
+  color: var(--text-strong) !important;
+}
+

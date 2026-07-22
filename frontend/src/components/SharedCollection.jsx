@@ -32,6 +32,7 @@ const SORT_CRITERIA = {
   'price-asc': [{ by: 'price', dir: 'asc' }],
   'set-asc': [{ by: 'set', dir: 'asc' }, { by: 'number', dir: 'asc' }],
   'number-asc': [{ by: 'number', dir: 'asc' }, { by: 'name', dir: 'asc' }],
+  'rarity-desc': [{ by: 'rarity', dir: 'desc' }, { by: 'name', dir: 'asc' }],
   'rarity-asc': [{ by: 'rarity', dir: 'asc' }, { by: 'name', dir: 'asc' }],
   'type-asc': [{ by: 'type', dir: 'asc' }, { by: 'name', dir: 'asc' }],
   'language-asc': [{ by: 'language', dir: 'asc' }, { by: 'name', dir: 'asc' }],
@@ -56,6 +57,11 @@ function SharedCollection({ shareToken }) {
   const [typeFilter, setTypeFilter] = useState('');
   const [sortBy, setSortBy] = useState('added-newest');
   const [showFilters, setShowFilters] = useState(false);
+
+  // Stacking state (default to stacked)
+  const [stackCards, setStackCards] = useState(true);
+  const [stackByCondition, setStackByCondition] = useState(false);
+  const [stackByPrinting, setStackByPrinting] = useState(false);
 
   const [activeCard, setActiveCard] = useState(null);
   useBackGuard(!!activeCard, () => setActiveCard(null));
@@ -109,6 +115,25 @@ function SharedCollection({ shareToken }) {
     if (sortBy === 'qty-desc') return result.sort((a, b) => (b.quantity || 0) - (a.quantity || 0));
     return sortCardsByOrder(result, SORT_CRITERIA[sortBy] || SORT_CRITERIA['added-newest']);
   }, [collection, searchFilter, rarityFilter, printingFilter, typeFilter, sortBy]);
+
+  // Group duplicate cards if stack option is active (default true)
+  const processedCollection = useMemo(() => {
+    if (!stackCards) return filteredCollection;
+
+    const groups = {};
+    filteredCollection.forEach(item => {
+      let key = item.card_id;
+      if (stackByCondition) key += `-${item.condition}`;
+      if (stackByPrinting) key += `-${item.printing}`;
+
+      if (!groups[key]) {
+        groups[key] = { ...item };
+      } else {
+        groups[key].quantity = (groups[key].quantity || 1) + (item.quantity || 1);
+      }
+    });
+    return Object.values(groups);
+  }, [filteredCollection, stackCards, stackByCondition, stackByPrinting]);
 
   if (loading) {
     return (
@@ -168,7 +193,7 @@ function SharedCollection({ shareToken }) {
               <Pie data={chartData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value">
                 {chartData.map((entry, i) => <Cell key={i} fill={entry[colorKey]} />)}
               </Pie>
-              <Tooltip contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }} formatter={(v) => [v, 'Cards']} />
+              <Tooltip contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }} itemStyle={{ color: 'var(--text-strong)' }} labelStyle={{ color: 'var(--text-strong)' }} formatter={(v) => [v, 'Cards']} />
               <Legend verticalAlign="bottom" height={36} iconSize={10} style={{ fontSize: '0.75rem' }}
                 formatter={(value) => <span style={{ color: 'var(--text-secondary)' }}>{value}</span>} />
             </PieChart>
@@ -239,7 +264,7 @@ function SharedCollection({ shareToken }) {
                   <BarChart data={sets} layout="vertical" margin={{ left: 10, right: 30, top: 10, bottom: 10 }}>
                     <XAxis type="number" stroke="var(--text-secondary)" tickFormatter={(v) => `$${v}`} />
                     <YAxis dataKey="name" type="category" width={120} stroke="var(--text-secondary)" tickLine={false} axisLine={false} style={{ fontSize: '0.8rem' }} />
-                    <Tooltip contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }} formatter={(v) => [`$${v}`, 'Value']} />
+                    <Tooltip contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }} itemStyle={{ color: 'var(--text-strong)' }} labelStyle={{ color: 'var(--text-strong)' }} formatter={(v) => [`$${v}`, 'Value']} />
                     <Bar dataKey="value" fill="var(--accent-red)" radius={[0, 4, 4, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -297,7 +322,8 @@ function SharedCollection({ shareToken }) {
               <option value="set-asc">Set</option>
               <option value="number-asc">Card Number</option>
               <option value="type-asc">Type / Color</option>
-              <option value="rarity-asc">Rarity</option>
+              <option value="rarity-desc">Rarity (High-Low)</option>
+              <option value="rarity-asc">Rarity (Low-High)</option>
               <option value="language-asc">Language</option>
             </select>
           </div>
@@ -308,40 +334,66 @@ function SharedCollection({ shareToken }) {
         </div>
 
         {showFilters && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem', marginTop: '1rem' }}>
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Type</label>
-              <select className="select-control" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-                <option value="">All Types</option>
-                {uniqueTypes.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
+          <div style={{ marginTop: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Type</label>
+                <select className="select-control" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+                  <option value="">All Types</option>
+                  {uniqueTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Rarity</label>
+                <select className="select-control" value={rarityFilter} onChange={(e) => setRarityFilter(e.target.value)}>
+                  <option value="">All Rarities</option>
+                  {uniqueRarities.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Printing</label>
+                <select className="select-control" value={printingFilter} onChange={(e) => setPrintingFilter(e.target.value)}>
+                  <option value="">All Printings</option>
+                  {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
             </div>
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Rarity</label>
-              <select className="select-control" value={rarityFilter} onChange={(e) => setRarityFilter(e.target.value)}>
-                <option value="">All Rarities</option>
-                {uniqueRarities.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
-            </div>
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Printing</label>
-              <select className="select-control" value={printingFilter} onChange={(e) => setPrintingFilter(e.target.value)}>
-                <option value="">All Printings</option>
-                {PRINTINGS.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-glass)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <input type="checkbox" id="stackCardsSharedOpt" checked={stackCards} onChange={(e) => setStackCards(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
+                <label htmlFor="stackCardsSharedOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-strong)' }}>
+                  Stack duplicate cards
+                </label>
+              </div>
+              {stackCards && (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <input type="checkbox" id="stackByConditionSharedOpt" checked={stackByCondition} onChange={(e) => setStackByCondition(e.target.checked)} style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
+                    <label htmlFor="stackByConditionSharedOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      Separate by condition
+                    </label>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <input type="checkbox" id="stackByPrintingSharedOpt" checked={stackByPrinting} onChange={(e) => setStackByPrinting(e.target.checked)} style={{ width: '14px', height: '14px', cursor: 'pointer' }} />
+                    <label htmlFor="stackByPrintingSharedOpt" style={{ cursor: 'pointer', margin: 0, fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      Separate by printing
+                    </label>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
       </div>
 
       {/* Card grid */}
-      {filteredCollection.length === 0 ? (
+      {processedCollection.length === 0 ? (
         <div className="glass-panel" style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
           No cards matched your filters.
         </div>
       ) : (
         <div className="card-grid">
-          {filteredCollection.map(card => {
+          {processedCollection.map(card => {
             const rarity = (card.rarity || '').toLowerCase();
             const isUltra = rarity.includes('rare') || rarity.includes('secret') || rarity.includes('promo') || rarity.includes('ultra');
             return (

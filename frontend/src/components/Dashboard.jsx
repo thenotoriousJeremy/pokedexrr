@@ -356,6 +356,8 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
                     </Pie>
                     <Tooltip 
                       contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
+                      itemStyle={{ color: 'var(--text-strong)' }}
+                      labelStyle={{ color: 'var(--text-strong)' }}
                       formatter={(v) => [v, 'Cards']}
                     />
                     <Legend 
@@ -395,6 +397,8 @@ function Dashboard({ statsTrigger, onNavigate, setSelectedLocationId, setFocusEn
                     </Pie>
                     <Tooltip 
                       contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-glass)' }}
+                      itemStyle={{ color: 'var(--text-strong)' }}
+                      labelStyle={{ color: 'var(--text-strong)' }}
                       formatter={(v) => [v, 'Cards']}
                     />
                     <Legend 
