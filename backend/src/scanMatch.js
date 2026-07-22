@@ -142,22 +142,9 @@ function detectCard(rgbaData, w, h) {
   return out;
 }
 
-// Produce the card image to match on: auto-cropped+deskewed if an outline is
-// found, else a centered card-aspect crop of the frame (user aims the card in
-// the guide box, so center is a safe fallback). Returns a PNG Buffer.
+// Produce the card image to match on: use the client's guide box capture directly so
+// the card framed by the user is matched 100% intact without unpredictable server-side chopping.
 async function preprocessCard(imageBuffer) {
-  try {
-    const { data, info } = await sharp(imageBuffer).resize({ width: 1200, withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    const card = detectCard(new Uint8ClampedArray(data), info.width, info.height);
-    if (card) {
-      return await sharp(card.data, { raw: { width: card.width, height: card.height, channels: 4 } }).png().toBuffer();
-    }
-  } catch (e) {
-    console.warn('preprocessCard failed, using center crop:', e.message);
-  }
-  // Fallback: if no distinct card contour is detected, use the framed image directly.
-  // The client already cropped to the guide box + padding, so keeping 100% of the frame
-  // preserves card numbers, symbols, and borders.
   return await sharp(imageBuffer).png().toBuffer();
 }
 
