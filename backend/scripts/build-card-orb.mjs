@@ -26,7 +26,9 @@ const { cv } = pkg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+// INDEX_OUT_DIR lets an in-app rebuild write to a staging dir, then swap the
+// files into place — so live scans keep using the old DB until the build finishes.
+const DATA_DIR = process.env.INDEX_OUT_DIR || path.join(__dirname, '..', 'data');
 const CAP = 500;          // max descriptors kept per card
 const REF_WIDTH = 500;    // resize reference images to this width (match query side)
 const DESC_BYTES = 32;    // ORB descriptor size

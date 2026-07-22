@@ -30,7 +30,9 @@ dotenv.config({ path: path.join(__dirname, '..', '.env') });
 // model so the vectors are comparable.
 export const MODEL = 'Xenova/clip-vit-base-patch32';
 const DIM = 512;
-const DATA_DIR = path.join(__dirname, '..', 'data');
+// INDEX_OUT_DIR lets an in-app rebuild write to a staging dir, then swap the
+// files into place — so live scans keep using the old DB until the build finishes.
+const DATA_DIR = process.env.INDEX_OUT_DIR || path.join(__dirname, '..', 'data');
 
 function arg(flag, def) { const i = process.argv.indexOf(flag); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : def; }
 const hasFlag = (f) => process.argv.includes(f);

@@ -6,6 +6,7 @@ const db = require('../db');
 const tcgApi = require('../tcgApi');
 const scryfallApi = require('../scryfallApi');
 const setIndex = require('../setIndex');
+const globalIndex = require('../globalIndex');
 const { parseCardRow } = require('../utils/priceHelpers');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { BACKUP_DIR, listBackups, createBackup } = require('../backup');
@@ -320,6 +321,31 @@ router.delete('/set-indexes/:game/:set', (req, res) => {
   if (!isGame(game)) return res.status(400).json({ error: 'invalid game' });
   setIndex.deleteBuild(game, set);
   res.json({ message: `Removed ${game} ${set} index` });
+});
+
+// --- Global scan index build management ---
+
+// On-disk status of the whole-game CLIP+ORB indexes plus any in-flight build.
+router.get('/global-indexes', (req, res) => {
+  res.json({ games: globalIndex.listGlobals(), progress: globalIndex.getProgress() });
+});
+
+// Start (or restart) a full rebuild of a game's global indexes. Background;
+// poll GET for progress. Heavy: tens of thousands of images, ~1GB, hours.
+router.post('/global-indexes', (req, res) => {
+  const { game } = req.body;
+  if (!isGame(game)) return res.status(400).json({ error: 'game (mtg|pokemon) is required' });
+  const started = globalIndex.startBuild(game);
+  if (!started) return res.status(409).json({ error: `A ${game} build is already running` });
+  res.status(202).json({ message: `Global build started for ${game}` });
+});
+
+// Stop an in-flight global build (the live index is left untouched).
+router.delete('/global-indexes/:game', (req, res) => {
+  const { game } = req.params;
+  if (!isGame(game)) return res.status(400).json({ error: 'invalid game' });
+  const stopped = globalIndex.stopBuild(game);
+  res.json({ message: stopped ? `Stopped ${game} build` : `No ${game} build running` });
 });
 
 // --- Database backup --- (see ../backup.js)

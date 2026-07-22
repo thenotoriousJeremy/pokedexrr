@@ -169,7 +169,14 @@ function loadOrbDb(game) {
   if (!fs.existsSync(descPath) || !fs.existsSync(kpPath) || !fs.existsSync(metaPath)) { orbDbs[game] = null; return null; }
   const meta = JSON.parse(fs.readFileSync(metaPath));
   const map = new Map();
-  for (const c of meta.cards) map.set(key(c[1], c[2]), { name: c[0], offset: c[3], count: c[4] });
+  // A double-faced card has multiple rows under one set|number (one per face).
+  // Store them as a list so verify can test each face and keep the best.
+  for (const c of meta.cards) {
+    const k = key(c[1], c[2]);
+    const face = { name: c[0], offset: c[3], count: c[4] };
+    const arr = map.get(k);
+    if (arr) arr.push(face); else map.set(k, [face]);
+  }
   orbDbs[game] = { map, descFd: fs.openSync(descPath, 'r'), kpFd: fs.openSync(kpPath, 'r') };
   console.log(`scanMatch: loaded ${game} ORB DB (${meta.cards.length} cards)`);
   return orbDbs[game];
@@ -238,13 +245,20 @@ function verifyGame(cardBuf, game, q, bf, recall, topK) {
   const db = loadOrbDb(game);
   if (!db) return { verified: false, candidates: recall.slice(0, topK), top: 0 };
   const scored = [];
+  const seen = new Set(); // recall may list both faces of a DFC; verify each card once
   for (const cand of recall) {
-    const slice = db.map.get(key(cand.set, cand.number));
+    const k = key(cand.set, cand.number);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const faces = db.map.get(k);
     let inliers = 0;
-    if (slice) {
-      const ref = readOrb(db, slice.offset, slice.count);
-      inliers = inlierCount(bf, q.desc, q.kp, ref);
-      ref.desc.delete();
+    if (faces) {
+      for (const face of faces) {
+        const ref = readOrb(db, face.offset, face.count);
+        const inl = inlierCount(bf, q.desc, q.kp, ref);
+        ref.desc.delete();
+        if (inl > inliers) inliers = inl; // best-matching face wins
+      }
     }
     scored.push({ name: cand.name, set: cand.set, number: cand.number, score: cand.score, inliers });
   }
@@ -305,4 +319,12 @@ async function match(imageBuffer, requestedGame, topK = 8, setCode = '', opts = 
   }
 }
 
-module.exports = { match };
+// Evict a game's cached ORB DB (closing its file descriptors) so the next match
+// reloads from disk. Called after a global rebuild swaps in fresh files.
+function reload(game) {
+  const db = orbDbs[game];
+  if (db) { try { fs.closeSync(db.descFd); fs.closeSync(db.kpFd); } catch { /* already closed */ } }
+  delete orbDbs[game];
+}
+
+module.exports = { match, reload };

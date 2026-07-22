@@ -23,11 +23,25 @@ async function gatherMtg(http) {
   const bulkResp = await http.get(entry.download_uri, { responseType: 'json' });
   const cards = bulkResp.data;
   console.log(`Bulk contains ${cards.length} cards.`);
-  const imgOf = (c) => c.image_uris?.normal || c.card_faces?.[0]?.image_uris?.normal
-    || c.image_uris?.small || c.card_faces?.[0]?.image_uris?.small || null;
-  return cards.filter(imgOf).map(c => ({
-    name: c.name || '', set: c.set || '', number: c.collector_number || '', img: imgOf(c),
-  }));
+  // One image per scannable face: single-image layouts give one; double-faced
+  // cards (transform, modal DFC, art series, reversible) give one per face so
+  // scanning either side matches. Dedupe by image URL (unique_artwork already
+  // yields one card per illustration, but a DFC may surface once per face).
+  const faceImgs = (c) => {
+    const top = c.image_uris?.normal || c.image_uris?.small;
+    if (top) return [top];
+    return (c.card_faces || []).map(f => f.image_uris?.normal || f.image_uris?.small).filter(Boolean);
+  };
+  const seen = new Set();
+  const out = [];
+  for (const c of cards) {
+    for (const img of faceImgs(c)) {
+      if (seen.has(img)) continue;
+      seen.add(img);
+      out.push({ name: c.name || '', set: c.set || '', number: c.collector_number || '', img });
+    }
+  }
+  return out;
 }
 
 // Pokémon: page pokemontcg.io /cards (no bulk file). Uses POKEMON_TCG_API_KEY

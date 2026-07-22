@@ -95,4 +95,8 @@ async function match(imageBuffer, game, topK = 8) {
   return best.reverse(); // descending: closest first
 }
 
-module.exports = { match };
+// Evict a game's cached embedding DB so the next match reloads from disk.
+// Called after a global rebuild swaps in fresh files.
+function reload(game) { delete dbs[game]; }
+
+module.exports = { match, reload };

@@ -9,6 +9,7 @@ const formatBytes = (n) => {
   return `${(n / Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${u[i]}`;
 };
 const isActive = (p) => p && (p.status === 'fetching' || p.status === 'indexing');
+const isGlobalActive = (p) => p && p.status === 'running';
 
 function AdminPanel({ showToast }) {
   const [users, setUsers] = useState([]);
@@ -40,6 +41,10 @@ function AdminPanel({ showToast }) {
   const [previewLoading, setPreviewLoading] = useState(false);
   const pollRef = useRef(null);
 
+  // Global scan index states
+  const [globals, setGlobals] = useState([]);
+  const [globalProgress, setGlobalProgress] = useState({});
+
   // Database backup states
   const [backups, setBackups] = useState([]);
   const [backupLoading, setBackupLoading] = useState(false);
@@ -48,7 +53,7 @@ function AdminPanel({ showToast }) {
     fetchUsers();
     fetchSettings();
     fetchBackups();
-    fetchBuilds().then((active) => { if (active) startPolling(); });
+    Promise.all([fetchBuilds(), fetchGlobals()]).then(([a, b]) => { if (a || b) startPolling(); });
     return stopPolling;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -59,9 +64,54 @@ function AdminPanel({ showToast }) {
   const startPolling = () => {
     if (pollRef.current) return;
     pollRef.current = setInterval(async () => {
-      const active = await fetchBuilds();
-      if (!active) stopPolling();
+      const [a, b] = await Promise.all([fetchBuilds(), fetchGlobals()]);
+      if (!a && !b) stopPolling();
     }, 1500);
+  };
+
+  // Returns whether a global build is in flight (drives polling).
+  const fetchGlobals = async () => {
+    try {
+      const res = await fetch('/api/admin/global-indexes');
+      if (!res.ok) return false;
+      const data = await res.json();
+      setGlobals(data.games || []);
+      setGlobalProgress(data.progress || {});
+      return Object.values(data.progress || {}).some(isGlobalActive);
+    } catch (err) {
+      console.error(err);
+      return false;
+    }
+  };
+
+  const handleBuildGlobal = async (game) => {
+    if (!window.confirm(`Rebuild the GLOBAL ${game.toUpperCase()} scan index? This re-downloads every card image (tens of thousands), runs them through the CLIP model, and can take HOURS and ~1GB of disk. The current index keeps serving scans until the rebuild finishes.`)) return;
+    try {
+      const res = await fetch('/api/admin/global-indexes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ game }),
+      });
+      const data = await res.json();
+      if (res.ok) { showToast(data.message); await fetchGlobals(); startPolling(); }
+      else showToast(data.error || 'Failed to start global build.');
+    } catch (err) {
+      console.error(err);
+      showToast('Error starting global build.');
+    }
+  };
+
+  const handleStopGlobal = async (game) => {
+    if (!window.confirm(`Stop the running ${game.toUpperCase()} global build? The existing index is left as-is.`)) return;
+    try {
+      const res = await fetch(`/api/admin/global-indexes/${game}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) { showToast(data.message); fetchGlobals(); }
+      else showToast(data.error || 'Failed to stop build.');
+    } catch (err) {
+      console.error(err);
+      showToast('Error stopping build.');
+    }
   };
 
   // Returns whether any build is currently in flight (drives polling).
@@ -625,6 +675,77 @@ function AdminPanel({ showToast }) {
               </table>
             </div>
           )}
+        </div>
+
+        {/* Global Scan Index Panel */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <h3 style={{ color: 'var(--text-strong)', fontSize: '1.1rem', borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Globe size={18} style={{ color: 'var(--accent-red)' }} />
+            Global Scan Indexes
+          </h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: 0, lineHeight: 1.4 }}>
+            Whole-game image indexes power scanning when no set is selected. Rebuilding pulls every card (both faces of double-faced cards), so newly released sets and card backs become scannable. This is <strong>heavy</strong>: tens of thousands of images, the CLIP model on CPU, ~1GB on disk, and can run for hours. The existing index keeps serving scans until a rebuild finishes.
+          </p>
+          <div className="collection-table-wrapper" style={{ overflowX: 'auto' }}>
+            <table className="collection-table">
+              <thead>
+                <tr>
+                  <th>Game</th>
+                  <th>Cards</th>
+                  <th>Size</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {globals.map((g) => {
+                  const p = globalProgress[g.game];
+                  const active = isGlobalActive(p);
+                  const pct = p && p.total ? Math.round((p.done / p.total) * 100) : 0;
+                  const cards = g.embed.cards || g.orb.cards || 0;
+                  const bytes = (g.embed.bytes || 0) + (g.orb.bytes || 0);
+                  return (
+                    <tr key={g.game}>
+                      <td style={{ textTransform: 'uppercase', fontWeight: 700, color: 'var(--text-strong)' }}>{g.game}</td>
+                      <td>{cards ? cards.toLocaleString() : '-'}</td>
+                      <td style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{bytes ? formatBytes(bytes) : '-'}</td>
+                      <td style={{ minWidth: '180px' }}>
+                        {active ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <div style={{ height: '6px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${pct}%`, background: 'var(--accent-red)', transition: 'width 0.4s ease' }}></div>
+                            </div>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                              {p.phase === 'orb' ? 'ORB' : 'Embeddings'} {p.done}/{p.total || '?'} ({pct}%)
+                            </span>
+                          </div>
+                        ) : p && p.status === 'error' ? (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--accent-red)' }} title={p.error}>Failed</span>
+                        ) : p && p.status === 'stopped' ? (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Stopped</span>
+                        ) : g.embed.present && g.orb.present ? (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--accent-green, #4ade80)' }}>Ready</span>
+                        ) : (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--accent-yellow)' }}>Not built</span>
+                        )}
+                      </td>
+                      <td>
+                        {active ? (
+                          <button className="btn btn-danger btn-icon-only" title="Stop build" onClick={() => handleStopGlobal(g.game)}>
+                            <AlertTriangle size={14} />
+                          </button>
+                        ) : (
+                          <button className="btn btn-secondary btn-icon-only" title="Rebuild global index" onClick={() => handleBuildGlobal(g.game)}>
+                            <RefreshCw size={14} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* Database Backup Panel */}

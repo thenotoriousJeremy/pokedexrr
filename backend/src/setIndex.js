@@ -70,7 +70,17 @@ async function mtgSetFamilyQuery(set) {
   return `(${sets}) include:extras unique:prints -is:digital`;
 }
 
-// MTG: page Scryfall for a set family. Returns [{ name, set, number, img }].
+// Scannable face image(s) for a Scryfall card. Single-image layouts (normal,
+// split, flip, adventure, saga) carry one top-level image. Double-faced cards
+// (transform, modal DFC, art series, reversible) have no top-level image and one
+// distinct image per face — index every face so scanning either side matches.
+function mtgCardImages(c) {
+  if (c.image_uris?.normal) return [c.image_uris.normal];
+  return (c.card_faces || []).map(f => f.image_uris?.normal).filter(Boolean);
+}
+
+// MTG: page Scryfall for a set family. Returns [{ name, set, number, img, raw }],
+// one entry per scannable face (double-faced cards yield two, same name/number).
 async function fetchMtgSet(set) {
   const scryfallApi = require('./scryfallApi');
   let url = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(await mtgSetFamilyQuery(set))}&order=set`;
@@ -78,8 +88,9 @@ async function fetchMtgSet(set) {
   while (url) {
     const r = await scryfallApi.scryGetRetried(url);
     for (const c of r.data.data || []) {
-      const img = c.image_uris?.normal || c.card_faces?.[0]?.image_uris?.normal;
-      if (img) cards.push({ name: c.name || '', set: c.set || set, number: c.collector_number || '', img, raw: c });
+      for (const img of mtgCardImages(c)) {
+        cards.push({ name: c.name || '', set: c.set || set, number: c.collector_number || '', img, raw: c });
+      }
     }
     url = r.data.has_more ? r.data.next_page : null;
     await sleep(120);
@@ -139,7 +150,7 @@ async function buildSet(game, set) {
     // Cache full card data now so the post-match /api/search is an instant local
     // card_cache hit instead of a live (throttled) provider fetch per scan.
     try {
-      if (game === 'mtg') { const scryfallApi = require('./scryfallApi'); await scryfallApi.cacheCards(cards.map(c => scryfallApi.normalizeCard(c.raw))); }
+      if (game === 'mtg') { const scryfallApi = require('./scryfallApi'); const seen = new Set(); const rows = cards.filter(c => c.raw?.id && (seen.has(c.raw.id) ? false : seen.add(c.raw.id))); await scryfallApi.cacheCards(rows.map(c => scryfallApi.normalizeCard(c.raw))); }
       else { const tcgApi = require('./tcgApi'); await tcgApi.cacheCards(cards.map(c => c.raw)); }
     } catch (e) { console.warn(`setIndex: caching ${set} cards failed: ${e.message}`); }
 
@@ -354,7 +365,11 @@ async function matchSet(q, game, set, topK = 8) {
     } finally { bf.delete(); }
   }
   scored.sort((a, b) => b.inliers - a.inliers);
-  return scored.slice(0, topK);
+  // A double-faced card is indexed once per face (same set|number). Collapse to
+  // its best-scoring face so one card can't occupy two result slots.
+  const seen = new Set();
+  const uniq = scored.filter(c => { const k = `${c.set}|${c.number}`; return seen.has(k) ? false : seen.add(k); });
+  return uniq.slice(0, topK);
 }
 
 module.exports = { ensureSet, isReady, matchSet, verifySlice, extractCard, listBuilds, getProgress, setProgress, deleteBuild, previewSet, startBuild };
