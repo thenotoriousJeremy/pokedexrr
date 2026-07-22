@@ -66,21 +66,19 @@ function findCardQuad(c) {
 
 function detectCard(rgbaData, w, h) {
   const src = cv.matFromImageData({ data: rgbaData, width: w, height: h });
-  const gray = new cv.Mat(), blur = new cv.Mat(), thresh = new cv.Mat(), edges = new cv.Mat();
+  const gray = new cv.Mat(), blur = new cv.Mat(), edges = new cv.Mat();
   const contours = new cv.MatVector(), hier = new cv.Mat();
   let out = null;
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-    cv.Canny(blur, edges, 20, 100);
-    cv.threshold(blur, thresh, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+    
+    // Higher Canny thresholds (60, 160) catch the sharp physical card border while ignoring soft drop shadows
+    cv.Canny(blur, edges, 60, 160);
+    const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+    cv.dilate(edges, edges, k); k.delete();
 
-    const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-    cv.dilate(edges, edges, k);
-    cv.bitwise_or(edges, thresh, edges);
-    k.delete();
-
-    // RETR_EXTERNAL retrieves only the outer card boundary, ignoring internal artwork/text
+    // RETR_EXTERNAL retrieves outer card boundary
     cv.findContours(edges, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
     const imgArea = w * h, cx = w / 2, cy = h / 2, halfDiag = Math.hypot(w, h) / 2;
@@ -88,22 +86,22 @@ function detectCard(rgbaData, w, h) {
     for (let i = 0; i < contours.size(); i++) {
       const c = contours.get(i);
       const area = cv.contourArea(c);
-      if (area >= 0.03 * imgArea && area <= 0.98 * imgArea) {
+      if (area >= 0.05 * imgArea && area <= 0.98 * imgArea) {
         const rect = cv.minAreaRect(c);
         let rw = rect.size.width;
         let rh = rect.size.height;
-        if (rw > rh) { const tmp = rw; rw = rh; rh = tmp; } // ensure portrait aspect ratio
-        const ar = rw / rh; // portrait card ~0.71 aspect
-        if (ar >= 0.45 && ar <= 1.05) {
+        if (rw > rh) { const tmp = rw; rw = rh; rh = tmp; } // ensure portrait
+        const ar = rw / rh; // ideal card aspect = 0.714
+
+        // Tight aspect ratio window: trading cards are 0.714 aspect ratio (allow 0.62 to 0.82)
+        if (ar >= 0.62 && ar <= 0.82) {
           const rcx = rect.center.x, rcy = rect.center.y;
           const centrality = 1 - Math.min(1, Math.hypot(rcx - cx, rcy - cy) / halfDiag);
-          const aspectFit = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.35);
+          // Strong penalty for aspect ratio deviation from CARD_ASPECT (0.7159)
+          const aspectFit = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.10);
 
-          // 1. Try to find the exact 4 perspective corners of the card polygon (perspective quad)
           const perspectiveQuad = findCardQuad(c);
           let pts = perspectiveQuad;
-
-          // 2. Fallback to minAreaRect points if exact 4-point quad wasn't found
           if (!pts) {
             const ptsMat = new cv.Mat();
             cv.boxPoints(rect, ptsMat);
@@ -116,7 +114,7 @@ function detectCard(rgbaData, w, h) {
             ptsMat.delete();
           }
 
-          const score = (area / imgArea) * (0.3 + 0.7 * aspectFit) * (0.4 + 0.6 * centrality) * (perspectiveQuad ? 1.2 : 1.0);
+          const score = (area / imgArea) * (aspectFit * aspectFit) * (0.5 + 0.5 * centrality);
           if (!best || score > best.score) {
             best = { score, pts };
           }
@@ -136,7 +134,7 @@ function detectCard(rgbaData, w, h) {
       srcTri.delete(); dstTri.delete(); M.delete(); warped.delete();
     }
   } finally {
-    src.delete(); gray.delete(); blur.delete(); thresh.delete(); edges.delete(); contours.delete(); hier.delete();
+    src.delete(); gray.delete(); blur.delete(); edges.delete(); contours.delete(); hier.delete();
   }
   return out;
 }
