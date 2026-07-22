@@ -141,72 +141,18 @@ function detectCard(rgbaData, w, h) {
   return out;
 }
 
-// Extremely fast (<2ms) card bounding-box crop for flat cards on a white/light background.
-// Scans raw pixel buffer to find the bounding rectangle of non-white card content.
-async function fastWhiteBackgroundCrop(imageBuffer) {
-  const { data, info } = await sharp(imageBuffer)
-    .resize({ width: 600, withoutEnlargement: true })
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const { width: w, height: h, channels } = info;
-  let minX = w, maxX = 0, minY = h, maxY = 0;
-  let nonWhitePixels = 0;
-
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const idx = (y * w + x) * channels;
-      const r = data[idx], g = data[idx + 1], b = data[idx + 2];
-      // A background pixel is near-white (R>225 & G>225 & B>225)
-      const isWhite = r > 225 && g > 225 && b > 225;
-      if (!isWhite) {
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-        nonWhitePixels++;
-      }
-    }
-  }
-
-  // If a valid non-white card region was detected (filling 10% to 95% of frame)
-  const widthSpan = maxX - minX;
-  const heightSpan = maxY - minY;
-  const area = widthSpan * heightSpan;
-  if (nonWhitePixels > 0.10 * w * h && area > 0.10 * w * h && minX < maxX && minY < maxY) {
-    const padX = Math.round(0.01 * w);
-    const padY = Math.round(0.01 * h);
-    const left = Math.max(0, minX - padX);
-    const top = Math.max(0, minY - padY);
-    const width = Math.min(w - left, widthSpan + 2 * padX);
-    const height = Math.min(h - top, heightSpan + 2 * padY);
-
-    return await sharp(data, { raw: { width: w, height: h, channels } })
-      .extract({ left, top, width, height })
-      .png()
-      .toBuffer();
-  }
-
-  return null;
-}
-
 // Produce the card image to match on: auto-cropped+deskewed if an outline is
 // found, else a centered card-aspect crop of the frame (user aims the card in
 // the guide box, so center is a safe fallback). Returns a PNG Buffer.
 async function preprocessCard(imageBuffer) {
   try {
-    // 1. Instant white background bounding box crop (<2ms)
-    const fastCrop = await fastWhiteBackgroundCrop(imageBuffer);
-    if (fastCrop) return fastCrop;
-
-    // 2. OpenCV contour detection fallback
     const { data, info } = await sharp(imageBuffer).resize({ width: 1200, withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     const card = detectCard(new Uint8ClampedArray(data), info.width, info.height);
     if (card) {
       return await sharp(card.data, { raw: { width: card.width, height: card.height, channels: 4 } }).png().toBuffer();
     }
   } catch (e) {
-    console.warn('preprocessCard failed:', e.message);
+    console.warn('preprocessCard failed, using center crop:', e.message);
   }
   // Fallback: if no distinct card contour is detected, use the framed image directly.
   // The client already cropped to the guide box + padding, so keeping 100% of the frame
