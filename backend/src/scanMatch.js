@@ -47,41 +47,46 @@ function detectCard(rgbaData, w, h) {
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
-    cv.Canny(gray, edges, 50, 150);
+    cv.Canny(gray, edges, 30, 120);
     const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
     cv.dilate(edges, edges, k); k.delete();
     cv.findContours(edges, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
     const imgArea = w * h, cx = w / 2, cy = h / 2, halfDiag = Math.hypot(w, h) / 2;
-    // A whole card is a PORTRAIT rectangle at ~0.71 aspect. Requiring that reject
-    // internal blocks (art window, type line, mana-symbol row) that otherwise win
-    // as "large central rectangles". Score = size x aspect-fit x centrality.
-    let best = null; // { score, isQuad, pts, br }
+    let best = null; // { score, pts }
     for (let i = 0; i < contours.size(); i++) {
       const c = contours.get(i);
       const area = cv.contourArea(c);
       if (area >= 0.04 * imgArea) {
-        const br = cv.boundingRect(c);
-        const ar = br.width / br.height; // portrait card ~0.71; internal blocks are wide (>1)
-        if (ar >= 0.55 && ar <= 0.95) {
-          const rcx = br.x + br.width / 2, rcy = br.y + br.height / 2;
+        const rect = cv.minAreaRect(c);
+        let rw = rect.size.width;
+        let rh = rect.size.height;
+        if (rw > rh) { const tmp = rw; rw = rh; rh = tmp; } // ensure portrait aspect ratio
+        const ar = rw / rh; // portrait card ~0.71 aspect
+        if (ar >= 0.50 && ar <= 0.95) {
+          const rcx = rect.center.x, rcy = rect.center.y;
           const centrality = 1 - Math.min(1, Math.hypot(rcx - cx, rcy - cy) / halfDiag);
           const aspectFit = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.25);
-          const peri = cv.arcLength(c, true);
-          const approx = new cv.Mat();
-          cv.approxPolyDP(c, approx, 0.02 * peri, true);
-          const isQuad = approx.rows === 4 && cv.isContourConvex(approx);
-          const pts = isQuad ? Array.from({ length: 4 }, (_, j) => ({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })) : null;
-          // Quads get a small edge (clean outline -> deskew); require decent aspect.
-          const score = (area / imgArea) * (0.4 + 0.6 * aspectFit) * (0.5 + 0.5 * centrality) * (isQuad ? 1.1 : 1);
-          if (!best || score > best.score) best = { score, isQuad, pts, br };
-          approx.delete();
+          const score = (area / imgArea) * (0.4 + 0.6 * aspectFit) * (0.5 + 0.5 * centrality);
+
+          if (!best || score > best.score) {
+            const ptsMat = new cv.Mat();
+            cv.boxPoints(rect, ptsMat);
+            const pts = [
+              { x: ptsMat.data32F[0], y: ptsMat.data32F[1] },
+              { x: ptsMat.data32F[2], y: ptsMat.data32F[3] },
+              { x: ptsMat.data32F[4], y: ptsMat.data32F[5] },
+              { x: ptsMat.data32F[6], y: ptsMat.data32F[7] }
+            ];
+            ptsMat.delete();
+            best = { score, pts };
+          }
         }
       }
       c.delete();
     }
 
-    if (best && best.isQuad) {
+    if (best && best.pts) {
       const [tl, tr, brc, bl] = orderQuad(best.pts);
       const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x, tl.y, tr.x, tr.y, brc.x, brc.y, bl.x, bl.y]);
       const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, WARP_W, 0, WARP_W, WARP_H, 0, WARP_H]);
@@ -90,14 +95,6 @@ function detectCard(rgbaData, w, h) {
       cv.warpPerspective(src, warped, M, new cv.Size(WARP_W, WARP_H));
       out = { data: Buffer.from(warped.data), width: WARP_W, height: WARP_H, channels: 4 };
       srcTri.delete(); dstTri.delete(); M.delete(); warped.delete();
-    } else if (best) {
-      const b = best.br;
-      const pad = Math.round(0.03 * Math.max(b.width, b.height));
-      const x = Math.max(0, b.x - pad), y = Math.max(0, b.y - pad);
-      const rw = Math.min(w - x, b.width + 2 * pad), rh = Math.min(h - y, b.height + 2 * pad);
-      const roi = src.roi(new cv.Rect(x, y, rw, rh)).clone();
-      out = { data: Buffer.from(roi.data), width: rw, height: rh, channels: 4 };
-      roi.delete();
     }
   } finally {
     src.delete(); gray.delete(); edges.delete(); contours.delete(); hier.delete();
