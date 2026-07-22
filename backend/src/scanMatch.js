@@ -118,13 +118,10 @@ async function preprocessCard(imageBuffer) {
   } catch (e) {
     console.warn('preprocessCard failed, using center crop:', e.message);
   }
-  // Fallback: centered card-aspect crop.
-  const meta = await sharp(imageBuffer).metadata();
-  const ch = Math.round(Math.min(meta.height, meta.width / CARD_ASPECT) * 0.92);
-  const cw = Math.round(ch * CARD_ASPECT);
-  const left = Math.max(0, Math.round((meta.width - cw) / 2));
-  const top = Math.max(0, Math.round((meta.height - ch) / 2));
-  return sharp(imageBuffer).extract({ left, top, width: Math.min(cw, meta.width), height: Math.min(ch, meta.height) }).png().toBuffer();
+  // Fallback: if no distinct card contour is detected, use the framed image directly.
+  // The client already cropped to the guide box + padding, so keeping 100% of the frame
+  // preserves card numbers, symbols, and borders.
+  return await sharp(imageBuffer).png().toBuffer();
 }
 
 const orbDbs = {};         // game -> { map: Map(key->{name,offset,count}), descFd, kpFd } | null
