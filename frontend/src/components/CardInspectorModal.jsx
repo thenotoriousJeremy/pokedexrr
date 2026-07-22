@@ -16,6 +16,18 @@ const MTG_COLOR_FG = {
   White: '#3a3520', Blue: '#fff', Black: '#fff', Red: '#fff', Green: '#fff'
 };
 
+function getSlotNumber(c) {
+  if (!c) return null;
+  if (c.slot != null) return c.slot;
+  if (c.slot_number != null) return c.slot_number;
+  if (c.__slotNumber != null) return c.__slotNumber;
+  if (typeof c.position === 'number') {
+    if (c.position >= 1000) return Math.floor(c.position / 1000);
+    return Math.floor(c.position) + 1;
+  }
+  return null;
+}
+
 // Shared card detail popup used by Dashboard, CollectionList and LocationManager.
 // Self-contained: owns its edit form (PUT) and delete (DELETE) so every screen
 // gets the same rich view + edit without duplicating the form. onUpdate() lets
@@ -432,7 +444,7 @@ function CardInspectorModal({ card, onClose, onUpdate, onDeleted, showToast, onV
                     {card.location_name && card.compartment_display_label && (
                       <span style={{ color: 'var(--text-secondary)' }}>
                         {` • ${card.compartment_display_label}`}
-                        {card.position > 0 ? ` • Slot ${Math.floor(card.position / 1000)}` : ''}
+                        {getSlotNumber(card) !== null ? ` • Slot ${getSlotNumber(card)}` : ''}
                       </span>
                     )}
                   </div>
