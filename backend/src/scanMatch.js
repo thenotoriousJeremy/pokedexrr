@@ -39,6 +39,31 @@ function orderQuad(pts) {
 // Both prefer the region nearest the frame center (the card the user aimed at).
 // The area floor is low (4%) so distant cards are still detected instead of
 // falling back to a background-dominated center crop.
+// Finds the 4 true perspective corners of a card contour by dynamically stepping
+// epsilon on its convex hull to simplify rounded corners into exactly 4 primary vertices.
+function findCardQuad(c) {
+  const hull = new cv.Mat();
+  cv.convexHull(c, hull);
+  const peri = cv.arcLength(hull, true);
+  let quad = null;
+
+  for (let epsScale = 0.015; epsScale <= 0.12; epsScale += 0.005) {
+    const approx = new cv.Mat();
+    cv.approxPolyDP(hull, approx, epsScale * peri, true);
+    if (approx.rows === 4 && cv.isContourConvex(approx)) {
+      quad = Array.from({ length: 4 }, (_, j) => ({
+        x: approx.data32S[j * 2],
+        y: approx.data32S[j * 2 + 1]
+      }));
+      approx.delete();
+      break;
+    }
+    approx.delete();
+  }
+  hull.delete();
+  return quad;
+}
+
 function detectCard(rgbaData, w, h) {
   const src = cv.matFromImageData({ data: rgbaData, width: w, height: h });
   const gray = new cv.Mat(), blur = new cv.Mat(), thresh = new cv.Mat(), edges = new cv.Mat();
@@ -73,18 +98,26 @@ function detectCard(rgbaData, w, h) {
           const rcx = rect.center.x, rcy = rect.center.y;
           const centrality = 1 - Math.min(1, Math.hypot(rcx - cx, rcy - cy) / halfDiag);
           const aspectFit = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.35);
-          const score = (area / imgArea) * (0.3 + 0.7 * aspectFit) * (0.4 + 0.6 * centrality);
 
-          if (!best || score > best.score) {
+          // 1. Try to find the exact 4 perspective corners of the card polygon (perspective quad)
+          const perspectiveQuad = findCardQuad(c);
+          let pts = perspectiveQuad;
+
+          // 2. Fallback to minAreaRect points if exact 4-point quad wasn't found
+          if (!pts) {
             const ptsMat = new cv.Mat();
             cv.boxPoints(rect, ptsMat);
-            const pts = [
+            pts = [
               { x: ptsMat.data32F[0], y: ptsMat.data32F[1] },
               { x: ptsMat.data32F[2], y: ptsMat.data32F[3] },
               { x: ptsMat.data32F[4], y: ptsMat.data32F[5] },
               { x: ptsMat.data32F[6], y: ptsMat.data32F[7] }
             ];
             ptsMat.delete();
+          }
+
+          const score = (area / imgArea) * (0.3 + 0.7 * aspectFit) * (0.4 + 0.6 * centrality) * (perspectiveQuad ? 1.2 : 1.0);
+          if (!best || score > best.score) {
             best = { score, pts };
           }
         }
