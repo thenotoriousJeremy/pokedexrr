@@ -9,7 +9,8 @@
     <script>
       (function () {
         try {
-          document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+          const urlTheme = new URLSearchParams(window.location.search).get('theme');
+          document.documentElement.setAttribute('data-theme', urlTheme || localStorage.getItem('theme') || 'dark');
         } catch (e) { /* private mode / storage blocked: stay on dark */ }
       })();
     </script>

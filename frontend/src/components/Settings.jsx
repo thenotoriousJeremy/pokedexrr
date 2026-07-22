@@ -254,9 +254,11 @@ function Settings({ user, onUpdateUser, showToast }) {
   };
 
   const origin = publicBaseUrl || `${window.location.protocol}//${window.location.host}`;
-  const shareUrl = `${origin}/share/${user?.share_token}`;
-  const tradeUrl = `${origin}/share/${user?.share_token}?list=trade`;
-  const wishlistUrl = `${origin}/share/${user?.share_token}?list=wishlist`;
+  const activeTheme = theme || localStorage.getItem('theme') || 'dark';
+  const themeQuery = activeTheme !== 'dark' ? `&theme=${encodeURIComponent(activeTheme)}` : '';
+  const shareUrl = `${origin}/share/${user?.share_token}${activeTheme !== 'dark' ? `?theme=${encodeURIComponent(activeTheme)}` : ''}`;
+  const tradeUrl = `${origin}/share/${user?.share_token}?list=trade${themeQuery}`;
+  const wishlistUrl = `${origin}/share/${user?.share_token}?list=wishlist${themeQuery}`;
 
   const [copiedType, setCopiedType] = useState(''); // 'collection', 'trade', 'wishlist'
 
@@ -373,6 +375,10 @@ function Settings({ user, onUpdateUser, showToast }) {
                     <span>Copy</span>
                   </button>
                 </div>
+              </div>
+
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                💡 <strong>Tip:</strong> Share links automatically use your current active theme ({activeTheme}). You can also force a specific theme for visitors by adding <code>?theme=lcars</code>, <code>?theme=light</code>, or <code>?theme=dark</code> to the end of any share link.
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.01)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-glass)' }}>
