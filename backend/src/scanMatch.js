@@ -298,7 +298,8 @@ async function match(imageBuffer, requestedGame, topK = 8, setCode = '', opts = 
     // recall. Multiple sets ("ltr,ltc") match each ready set and merge by inliers.
     const readySets = parseSetList(setCode).filter(s => setIndex.isReady(requestedGame, s));
     if (readySets.length) {
-      const perSet = await Promise.all(readySets.map(s => setIndex.matchSet(q, requestedGame, s, topK)));
+      const qHash = await setIndex.dhash(cardBuf); // cheap recall pre-filter within the set
+      const perSet = await Promise.all(readySets.map(s => setIndex.matchSet(q, requestedGame, s, topK, qHash)));
       const merged = perSet.filter(Boolean).flat().sort((a, b) => b.inliers - a.inliers).slice(0, topK);
       if (merged.length) return { game: requestedGame, verified: true, candidates: merged, crop, scoped: true };
     }

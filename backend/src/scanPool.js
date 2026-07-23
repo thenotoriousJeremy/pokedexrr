@@ -58,19 +58,19 @@ async function extract(rgba, width, height) {
   return job(w, { type: 'extract', rgba, width, height });
 }
 
-// Verify all `total` cards of a set across the pool. qDesc/qKp are plain typed
-// arrays (structured-cloned to each worker). Returns merged scored[] (unsorted),
-// or null if the pool is disabled so the caller can run inline.
-async function verify(game, set, qDesc, qRows, qKp, total) {
+// Verify the given card `indices` of a set across the pool. qDesc/qKp are plain
+// typed arrays (structured-cloned to each worker). Returns merged scored[]
+// (unsorted), or null if the pool is disabled so the caller can run inline.
+async function verify(game, set, qDesc, qRows, qKp, indices) {
   const workers = getPool();
   if (workers.length === 0) return null;
   const n = workers.length;
-  const per = Math.ceil(total / n);
+  const per = Math.ceil(indices.length / n);
   const jobs = [];
   for (let i = 0; i < n; i++) {
-    const start = i * per, end = Math.min(total, start + per);
-    if (start >= end) break;
-    jobs.push(job(workers[i], { game, set, qDesc, qRows, qKp, start, end }));
+    const chunk = indices.slice(i * per, i * per + per);
+    if (chunk.length === 0) break;
+    jobs.push(job(workers[i], { game, set, qDesc, qRows, qKp, indices: chunk }));
   }
   const results = await Promise.all(jobs);
   return results.flat();

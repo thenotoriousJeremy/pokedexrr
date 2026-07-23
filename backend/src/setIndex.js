@@ -50,6 +50,32 @@ function extractCard(rgba, w, h) {
   return orbExtract(sharedOrb, rgba, w, h);
 }
 
+// 64-bit dHash of an image buffer: 9x8 grayscale, each pixel brighter than its
+// right neighbour -> 1 bit. Cheap, rotation-sensitive but robust to scale/JPEG,
+// so it's a fast recall pre-filter for the expensive ORB verify. Returned as two
+// 32-bit halves { hi, lo } so Hamming distance is a pair of popcounts.
+async function dhash(buf) {
+  const { data } = await sharp(buf).resize(9, 8, { fit: 'fill' }).grayscale().raw().toBuffer({ resolveWithObject: true });
+  let hi = 0, lo = 0, bit = 0;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const b = data[r * 9 + c] < data[r * 9 + c + 1] ? 1 : 0;
+      if (bit < 32) hi = (hi << 1) | b; else lo = (lo << 1) | b;
+      bit++;
+    }
+  }
+  return { hi: hi >>> 0, lo: lo >>> 0 };
+}
+
+function popcount(x) {
+  x = x - ((x >>> 1) & 0x55555555);
+  x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
+  x = (x + (x >>> 4)) & 0x0f0f0f0f;
+  return (x * 0x01010101) >>> 24;
+}
+
+const hamming = (a, b) => popcount((a.hi ^ b.hi) >>> 0) + popcount((a.lo ^ b.lo) >>> 0);
+
 // A Scryfall release is split into a parent expansion plus child sets — tokens,
 // promos, art series, Commander — each with its own set code (tecl, pecl, ...),
 // linked by parent_set_code. Build a query spanning the whole family so "ecl"
@@ -171,7 +197,8 @@ async function buildSet(game, set) {
           const raw = new Uint8ClampedArray(data);
           let f = await scanPool.extract(raw, info.width, info.height);
           if (!f) f = extractCard(raw, info.width, info.height);
-          return { card: c, f };
+          const h = await dhash(buf); // recall pre-filter hash, same image as the features
+          return { card: c, f, h };
         } catch {
           return null;
         }
@@ -180,15 +207,15 @@ async function buildSet(game, set) {
       for (const res of results) {
         progress[k].done++;
         if (!res || !res.f) continue;
-        const { card: c, f } = res;
+        const { card: c, f, h } = res;
         fs.writeSync(descFd, Buffer.from(f.desc.buffer, 0, f.desc.length), 0, f.desc.length, offset * DESC_BYTES);
         fs.writeSync(kpFd, Buffer.from(f.kp.buffer, 0, f.kp.byteLength), 0, f.kp.byteLength, offset * 2 * 4);
-        meta.push([c.name, c.set, c.number, offset, f.count]);
+        meta.push([c.name, c.set, c.number, offset, f.count, h.hi, h.lo]);
         offset += f.count;
       }
     }
     fs.closeSync(descFd); fs.closeSync(kpFd);
-    fs.writeFileSync(p.meta, JSON.stringify({ set, cards: meta }));
+    fs.writeFileSync(p.meta, JSON.stringify({ set, hashed: true, cards: meta }));
     console.log(`setIndex: ${set} indexed ${meta.length} cards`);
     progress[k].status = 'done';
   } catch (e) {
@@ -202,7 +229,8 @@ function loadSet(game, set) {
   if (cache[k]) return cache[k];
   const p = paths(game, set);
   if (!fs.existsSync(p.meta)) return null;
-  cache[k] = { meta: JSON.parse(fs.readFileSync(p.meta)).cards, desc: fs.readFileSync(p.desc), kp: fs.readFileSync(p.kp) };
+  const parsed = JSON.parse(fs.readFileSync(p.meta));
+  cache[k] = { meta: parsed.cards, hashed: !!parsed.hashed, desc: fs.readFileSync(p.desc), kp: fs.readFileSync(p.kp) };
   return cache[k];
 }
 
@@ -315,10 +343,10 @@ function inliers(bf, qDescFull, qKp, refDesc, refKp, count) {
   return inl;
 }
 
-// Verify cards [start, end) of a set against query ORB features. Runs in a worker
-// thread (see scanWorker.js); qDesc is the raw query descriptor bytes (Uint8Array,
-// qRows x DESC_BYTES), qKp the query keypoints. Returns scored[] for the slice.
-function verifySlice(game, set, qDesc, qRows, qKp, start, end) {
+// Verify a given list of card indices against query ORB features. Runs in a
+// worker thread (see scanWorker.js); qDesc is the raw query descriptor bytes
+// (Uint8Array, qRows x DESC_BYTES), qKp the query keypoints. Returns scored[].
+function verifySlice(game, set, qDesc, qRows, qKp, indices) {
   const idx = loadSet(game, set);
   if (!idx) return [];
   const qMat = new cv.Mat(qRows, DESC_BYTES, cv.CV_8U);
@@ -326,8 +354,8 @@ function verifySlice(game, set, qDesc, qRows, qKp, start, end) {
   const bf = new cv.BFMatcher(cv.NORM_HAMMING, false);
   const scored = [];
   try {
-    const lim = Math.min(end, idx.meta.length);
-    for (let i = start; i < lim; i++) {
+    for (const i of indices) {
+      if (i < 0 || i >= idx.meta.length) continue;
       const [name, s, number, offset, count] = idx.meta[i];
       const refDesc = idx.desc.subarray(offset * DESC_BYTES, (offset + count) * DESC_BYTES);
       const refKp = new Float32Array(idx.kp.buffer, idx.kp.byteOffset + offset * 2 * 4, count * 2);
@@ -337,19 +365,41 @@ function verifySlice(game, set, qDesc, qRows, qKp, start, end) {
   return scored;
 }
 
-// Match query ORB features against every card in a set. q = { desc:Mat, kp:Float32Array }.
-// Fans the per-card verify out to the worker pool; falls back to inline if the
-// pool is disabled (SCAN_WORKERS=0) or errors. Result identical either way.
-async function matchSet(q, game, set, topK = 8) {
+// How many top hash-recall candidates to ORB-verify. Sets at or below this
+// verify everything (recall is pointless when it wouldn't shrink the work).
+const RECALL_K = 200;
+
+// Hash-recall shortlist: indices of the RECALL_K cards whose stored dHash is
+// closest to the query's. Returns all indices if the index has no hashes (legacy
+// build) or no query hash was supplied.
+function recallIndices(idx, qHash) {
+  const total = idx.meta.length;
+  if (!idx.hashed || !qHash || total <= RECALL_K) {
+    return Array.from({ length: total }, (_, i) => i);
+  }
+  const scored = new Array(total);
+  for (let i = 0; i < total; i++) {
+    const m = idx.meta[i];
+    scored[i] = [i, hamming(qHash, { hi: m[5] >>> 0, lo: m[6] >>> 0 })];
+  }
+  scored.sort((a, b) => a[1] - b[1]);
+  return scored.slice(0, RECALL_K).map(x => x[0]);
+}
+
+// Match query ORB features against a set. q = { desc:Mat, kp:Float32Array }.
+// A cheap dHash recall shortlists candidates, then the expensive ORB+RANSAC
+// verify runs only on those — fanned out to the worker pool, or inline if the
+// pool is disabled (SCAN_WORKERS=0) / errors. qHash is the query's dHash.
+async function matchSet(q, game, set, topK = 8, qHash = null) {
   const idx = loadSet(game, set);
   if (!idx) return null;
-  const total = idx.meta.length;
+  const indices = recallIndices(idx, qHash);
   // Copy the query descriptors off the cv heap so they survive + are cloneable.
   const qDesc = new Uint8Array(q.desc.data.subarray(0, q.desc.rows * DESC_BYTES));
 
   let scored = null;
   try {
-    scored = await require('./scanPool').verify(game, set, qDesc, q.desc.rows, q.kp, total);
+    scored = await require('./scanPool').verify(game, set, qDesc, q.desc.rows, q.kp, indices);
   } catch (e) {
     console.warn(`setIndex: pool verify failed, running inline: ${e.message}`);
   }
@@ -357,7 +407,8 @@ async function matchSet(q, game, set, topK = 8) {
     scored = [];
     const bf = new cv.BFMatcher(cv.NORM_HAMMING, false);
     try {
-      for (const [name, s, number, offset, count] of idx.meta) {
+      for (const i of indices) {
+        const [name, s, number, offset, count] = idx.meta[i];
         const refDesc = idx.desc.subarray(offset * DESC_BYTES, (offset + count) * DESC_BYTES);
         const refKp = new Float32Array(idx.kp.buffer, idx.kp.byteOffset + offset * 2 * 4, count * 2);
         scored.push({ name, set: s, number, inliers: inliers(bf, q.desc, q.kp, refDesc, refKp, count), score: 0 });
@@ -372,4 +423,4 @@ async function matchSet(q, game, set, topK = 8) {
   return uniq.slice(0, topK);
 }
 
-module.exports = { ensureSet, isReady, matchSet, verifySlice, extractCard, listBuilds, getProgress, setProgress, deleteBuild, previewSet, startBuild };
+module.exports = { ensureSet, isReady, matchSet, verifySlice, extractCard, dhash, listBuilds, getProgress, setProgress, deleteBuild, previewSet, startBuild };
