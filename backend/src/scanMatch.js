@@ -140,18 +140,14 @@ function detectCard(rgbaData, w, h) {
   return out;
 }
 
-// Produce the card image to match on: auto-cropped+deskewed if a valid card outline is
-// found, else use the client's framed image directly.
+// Match on the client's guide-box capture directly: the user frames the card in
+// the on-screen guide box and the client sends exactly that region, so it's
+// already the crop. Server-side contour re-cropping (OTSU + morphology, see
+// detectCard) mis-fired on dark/textured surfaces — it chopped the wrong region
+// or fell back to the full frame, degrading match accuracy. Trust the client crop.
+// ponytail: detectCard left in place (exported) for a future robust deskew;
+// re-enable here only once it's reliable across backgrounds.
 async function preprocessCard(imageBuffer) {
-  try {
-    const { data, info } = await sharp(imageBuffer).resize({ width: 1200, withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    const card = detectCard(new Uint8ClampedArray(data), info.width, info.height);
-    if (card) {
-      return await sharp(card.data, { raw: { width: card.width, height: card.height, channels: 4 } }).png().toBuffer();
-    }
-  } catch (e) {
-    console.warn('preprocessCard failed:', e.message);
-  }
   return await sharp(imageBuffer).png().toBuffer();
 }
 
@@ -328,4 +324,4 @@ function reload(game) {
   delete orbDbs[game];
 }
 
-module.exports = { match, reload };
+module.exports = { match, reload, preprocessCard, detectCard };
